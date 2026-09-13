@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+ardupilot=${1:-"$repo_root/build/ardupilot"}
+
+if [[ ! -x "$ardupilot/waf" ]]; then
+    echo "ArduPilot checkout not found at $ardupilot" >&2
+    echo "Run tests/clone_ardupilot.sh '$ardupilot' first." >&2
+    exit 1
+fi
+
+if [[ -f "$HOME/venv-ardupilot/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/venv-ardupilot/bin/activate"
+fi
+
+make -C "$repo_root/camera_app" tests/test_mavlink
+"$repo_root/camera_app/tests/test_mavlink"
+make -C "$repo_root" sitl
+(
+    cd "$ardupilot"
+    ./waf configure --board sitl
+    ./waf copter
+)
+
+export MAVLINK20=1
+python3 "$repo_root/camera_app/tests/test_mavlink_integration.py" \
+    "$repo_root/build/sitl/camera-app" "$repo_root/sitl/gimbal_sim.py"
+python3 "$repo_root/tests/test_ardupilot_mavlink.py" \
+    "$repo_root/build/sitl/camera-app" \
+    "$repo_root/sitl/gimbal_sim.py" \
+    "$ardupilot/build/sitl/bin/arducopter" \
+    "$repo_root/build/sitl/ardupilot-mavlink-test"

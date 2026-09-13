@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""End-to-end smoke test for an AP_CameraGimbal SITL camera and web UI."""
+
+import argparse
+import base64
+import json
+import os
+import pathlib
+import re
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.parse
+
+
+def crc16(data):
+    value = 0
+    for byte in data:
+        value ^= byte << 8
+        for _ in range(8):
+            value = ((value << 1) ^ 0x1021) & 0xFFFF if value & 0x8000 else (value << 1) & 0xFFFF
+    return value
+
+
+def siyi(sequence, opcode, payload=b""):
+    result = struct.pack("<BBBHHB", 0x55, 0x66, 1, len(payload), sequence, opcode) + payload
+    return result + struct.pack("<H", crc16(result))
+
+
+def request(sock, sequence, opcode, payload=b"", timeout=2.0):
+    sock.send(siyi(sequence, opcode, payload))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        sock.settimeout(deadline - time.monotonic())
+        packet = sock.recv(4096)
+        length = struct.unpack_from("<H", packet, 3)[0]
+        if len(packet) == length + 10 and packet[7] == opcode and crc16(packet[:-2]) == struct.unpack_from("<H", packet, len(packet) - 2)[0]:
+            return packet[8:-2]
+    raise TimeoutError(f"no SIYI opcode 0x{opcode:02x} reply")
+
+
+def reserve_port(socktype):
+    sock = socket.socket(socket.AF_INET, socktype)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def web_request(port, path):
+    request = urllib.request.Request(f"http://127.0.0.1:{port}{path}")
+    credentials = base64.b64encode(b"admin:ardupilot").decode("ascii")
+    request.add_header("Authorization", f"Basic {credentials}")
+    return urllib.request.urlopen(request, timeout=4)
+
+
+def web_form(port, path, csrf, fields, timeout=4):
+    data = urllib.parse.urlencode({"csrf": csrf, **fields}).encode("ascii")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=data, method="POST")
+    credentials = base64.b64encode(b"admin:ardupilot").decode("ascii")
+    request.add_header("Authorization", f"Basic {credentials}")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def terminate(process):
+    if process is None or process.poll() is not None:
+        return
+    process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+
+
+def verify_rtsp_video(port, path, expected_size):
+    uri = f"rtsp://127.0.0.1:{port}/{path}"
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-rtsp_transport", "tcp",
+         "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "json", uri],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+        check=False, text=True)
+    assert result.returncode == 0, f"{uri}: {result.stderr.strip()}"
+    streams = json.loads(result.stdout).get("streams", [])
+    assert len(streams) == 1, (uri, streams)
+    actual_size = (streams[0].get("width"), streams[0].get("height"))
+    assert actual_size == expected_size, (uri, actual_size, expected_size)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("camera_app")
+    parser.add_argument("web")
+    parser.add_argument("gimbal_sim")
+    parser.add_argument("runtime")
+    parser.add_argument("--backend", choices=("mt11", "a8", "zr10"), default="mt11")
+    parser.add_argument("--orientation", choices=("upright", "inverted"),
+                        default="upright")
+    args = parser.parse_args()
+    camera_binary = pathlib.Path(args.camera_app).resolve()
+    web_binary = pathlib.Path(args.web).resolve()
+    gimbal_script = pathlib.Path(args.gimbal_sim).resolve()
+    runtime = pathlib.Path(args.runtime).resolve()
+    build = camera_binary.parent
+    gimbal_port = reserve_port(socket.SOCK_DGRAM)
+    camera_port = reserve_port(socket.SOCK_DGRAM)
+    rtsp_port = reserve_port(socket.SOCK_STREAM)
+    web_port = reserve_port(socket.SOCK_STREAM)
+    ready = runtime / "run/camera-app.ready"
+    gimbal_ready = runtime / "run/test-gimbal.ready"
+    ready.unlink(missing_ok=True)
+    gimbal_ready.unlink(missing_ok=True)
+    expected_captures = [
+        runtime / f"mnt/DCIM/capture/SITL_000001_{suffix}.jpg"
+        for suffix in ("C", "Z", "I")
+    ]
+    for capture in expected_captures:
+        capture.unlink(missing_ok=True)
+    processes = []
+    logs = []
+    try:
+        gimbal_log = open(runtime / "run/test-gimbal.log", "w", encoding="utf-8")
+        logs.append(gimbal_log)
+        gimbal = subprocess.Popen(
+            [sys.executable, str(gimbal_script), "--port", str(gimbal_port),
+             "--backend", args.backend, "--orientation", args.orientation,
+             "--ready-file", str(gimbal_ready)],
+            stdout=gimbal_log, stderr=subprocess.STDOUT)
+        processes.append(gimbal)
+        deadline = time.monotonic() + 5
+        while not gimbal_ready.exists() and time.monotonic() < deadline:
+            if gimbal.poll() is not None:
+                raise AssertionError(f"gimbal simulator exited {gimbal.returncode}")
+            time.sleep(0.02)
+        assert gimbal_ready.exists(), "gimbal simulator did not become ready"
+
+        env = os.environ.copy()
+        if args.backend != "mt11":
+            video1 = build / "main.h264"
+            video2 = build / "sub.h264"
+            expected_sizes = ((1920, 1080), (1280, 720))
+        else:
+            video1 = build / "rgb.h264"
+            video2 = build / "thermal.h264"
+            expected_sizes = ((1920, 1080), (1280, 720))
+        if args.backend == "zr10":
+            expected_sizes = ((1280, 720), (1280, 720))
+        env.update({
+            "CAMERA_APP_BACKEND": args.backend,
+            "CAMERA_APP_UART": f"udp://127.0.0.1:{gimbal_port}",
+            "CAMERA_APP_PORT": str(camera_port),
+            "CAMERA_APP_RTSP_PORT": str(rtsp_port),
+            "CAMERA_APP_MAVLINK_TCP_PORT": "0",
+            "CAMERA_APP_MAVLINK_UDP_PORT": "0",
+            "CAMERA_APP_CONFIG": str(runtime / "app/camera.ini"),
+            "CAMERA_APP_READY_PATH": str(ready),
+            "CAMERA_APP_RECORD_STATE": str(runtime / "run/test-recording.state"),
+            "CAMERA_APP_RECORD_ROOT": str(runtime / "mnt/DCIM/record"),
+            "CAMERA_APP_CAPTURE_ROOT": str(runtime / "mnt/DCIM/capture"),
+            "CAMERA_APP_SITL_VIDEO1": str(video1),
+            "CAMERA_APP_SITL_VIDEO2": str(video2),
+            "CAMERA_APP_SITL_PHOTO": str(build / "photo.jpg"),
+            "MT11_WEB_CAMERA_PORT": str(camera_port),
+            "MT11_WEB_LIVE_PORT": str(rtsp_port + 1),
+        })
+        camera_log = open(runtime / "run/camera_app.log", "w", encoding="utf-8")
+        logs.append(camera_log)
+        camera_command = [str(camera_binary)]
+        if args.backend != "mt11":
+            camera_command.extend(("--backend", args.backend))
+        camera = subprocess.Popen(camera_command, env=env,
+                                  stdout=camera_log, stderr=subprocess.STDOUT)
+        processes.append(camera)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            if camera.poll() is not None:
+                raise AssertionError(f"camera-app exited {camera.returncode}")
+            time.sleep(0.02)
+        assert ready.exists(), "camera-app did not become ready"
+        verify_rtsp_video(rtsp_port, "video1", expected_sizes[0])
+        verify_rtsp_video(rtsp_port, "video2", expected_sizes[1])
+
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client.connect(("127.0.0.1", camera_port))
+        attitude = request(client, 1, 0x0D)
+        assert len(attitude) == 12
+        initial_pitch = struct.unpack_from("<h", attitude, 2)[0] / 10.0
+        initial_yaw = struct.unpack_from("<h", attitude, 0)[0] / 10.0
+        if args.backend != "mt11":
+            # Check vendor wire coordinates independently of the canonical web display.
+            yaw_sign = -1 if args.backend == "zr10" or (args.backend == "a8" and args.orientation == "upright") else 1
+            expected_pitch = -160 if args.orientation == "inverted" else -20
+            assert abs(initial_yaw - yaw_sign * -38.0) < 0.3, initial_yaw
+            assert abs(initial_pitch - expected_pitch) < 0.3, initial_pitch
+            # A positive web/SIYI rate command moves right. Both the reported
+            # yaw and yaw rate must therefore increase in either mounting.
+            client.send(siyi(2, 0x07, bytes((10, 0))))
+            time.sleep(0.25)
+            moved = request(client, 3, 0x0D)
+            moved_yaw, _, _, moved_yaw_rate = struct.unpack_from("<hhhh", moved)
+            moved_yaw /= 10.0
+            moved_yaw_rate /= 10.0
+            assert yaw_sign * (moved_yaw - initial_yaw) > 1.0, (initial_yaw, moved_yaw)
+            assert abs(moved_yaw_rate - yaw_sign * 6.0) < 0.2, moved_yaw_rate
+            client.send(siyi(4, 0x07, b"\x00\x00"))
+        else:
+            request(client, 2, 0x0E, struct.pack("<hh", 100, -50))
+            deadline = time.monotonic() + 2
+            final_pitch = initial_pitch
+            while time.monotonic() < deadline and final_pitch < -6.0:
+                final_pitch = struct.unpack_from(
+                    "<h", request(client, 3, 0x0D), 2)[0] / 10.0
+                time.sleep(0.05)
+            assert final_pitch > initial_pitch + 5.0, (initial_pitch, final_pitch)
+        status = request(client, 4, 0x0A)
+        expected_direction = 2 if args.orientation == "inverted" else 1
+        assert len(status) == 8 and status[5] == expected_direction
+        if args.backend == "mt11":
+            client.send(siyi(5, 0x0C, b"\x00"))
+            feedback = request(client, 6, 0x0B)
+            assert feedback == b"\x00"
+            assert all(path.stat().st_size > 0 for path in expected_captures)
+        client.close()
+
+        web_log = open(runtime / "run/test-web.log", "w", encoding="utf-8")
+        logs.append(web_log)
+        web = subprocess.Popen([str(web_binary), "-p", str(web_port)], env=env,
+                               stdout=web_log, stderr=subprocess.STDOUT)
+        processes.append(web)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                with web_request(web_port, "/") as response:
+                    page = response.read().decode("utf-8")
+                break
+            except OSError:
+                if web.poll() is not None or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        assert "ArduPilot camera app" in page
+        csrf_match = re.search(r'data-csrf="([0-9a-f]{64})"', page)
+        assert csrf_match is not None
+        csrf = csrf_match.group(1)
+        if args.backend == "mt11":
+            with web_request(web_port, "/sensors.json") as response:
+                sensors = json.load(response)
+            assert sensors["lidar_m"] is not None
+            assert sensors["minimum_c"] == 12.0 and sensors["maximum_c"] == 42.0
+            assert sensors["cpu_c"] is not None
+        with web_request(web_port, "/live/attitude.json") as response:
+            live = json.load(response)
+        if args.backend != "mt11":
+            assert live["yaw_deg"] < 0.0, live
+            assert abs(live["pitch_deg"] + 20.0) < 0.3, live
+
+        # Both gimbals accept right-positive rate commands, but the MT11's
+        # raw 0x0D attitude is left-positive. Verify the target-specific web
+        # build displays right motion and right rate as positive in either
+        # mounting orientation.
+        control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        control.connect(("127.0.0.1", camera_port))
+        control.send(siyi(80, 0x07, bytes((10, 0))))
+        time.sleep(0.15)
+        with web_request(web_port, "/live/attitude.json") as response:
+            moving = json.load(response)
+        assert abs(moving["yaw_rate_dps"] - 6.0) < 0.2, moving
+        control.send(siyi(81, 0x07, b"\x00\x00"))
+        control.close()
+        time.sleep(0.15)
+        with web_request(web_port, "/live/attitude.json") as response:
+            pulse_start = json.load(response)
+        with web_form(web_port, "/live/control", csrf,
+                      {"action": "right", "value": "30"}) as response:
+            assert response.status == 200
+        time.sleep(0.15)
+        with web_request(web_port, "/live/attitude.json") as response:
+            moved = json.load(response)
+        assert moved["yaw_deg"] > pulse_start["yaw_deg"] + 3.0, \
+            (pulse_start, moved)
+        time.sleep(0.3)
+        with web_request(web_port, "/live/attitude.json") as response:
+            settled = json.load(response)
+        assert abs(settled["yaw_deg"] - moved["yaw_deg"]) < 0.3, \
+            (moved, settled)
+        with web_request(web_port, "/live/video1.mp4") as response:
+            video = response.read(1024)
+        assert b"ftyp" in video
+    finally:
+        for process in reversed(processes):
+            terminate(process)
+        for log in logs:
+            log.close()
+    print(f"PASS {args.backend.upper()} SITL {args.orientation} camera, "
+          "UDP gimbal, RTSP, web UI and live video")
+
+
+if __name__ == "__main__":
+    main()

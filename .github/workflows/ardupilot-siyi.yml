@@ -1,0 +1,44 @@
+name: ArduPilot camera integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ardupilot-camera-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mt11-sitl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fetch pinned camera build dependencies
+        run: make dependencies
+
+      - name: Clone ArduPilot master
+        run: tests/clone_ardupilot.sh "$RUNNER_TEMP/ardupilot"
+
+      - name: Install ArduPilot SITL prerequisites
+        run: tests/install_ardupilot_prereqs.sh "$RUNNER_TEMP/ardupilot"
+
+      - name: Test ArduPilot SIYI drivers against MT11 SITL
+        run: tests/run_ardupilot_siyi_test.sh "$RUNNER_TEMP/ardupilot"
+
+      - name: Test ArduPilot MAVLink drivers over NET against MT11 SITL
+        run: tests/run_ardupilot_mavlink_test.sh "$RUNNER_TEMP/ardupilot"
+
+      - name: Upload process logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ardupilot-camera-logs
+          path: |
+            build/sitl/ardupilot-test/runtime/run/*.log
+            build/sitl/ardupilot-mavlink-test/*/run/*.log
+          if-no-files-found: ignore

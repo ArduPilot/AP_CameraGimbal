@@ -1,0 +1,30 @@
+name: Camera firmware
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: camera-firmware-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Install compilers, SDKs and build tools
+        run: python3 tools/install_build_environment.py
+      - name: Build all camera release packages
+        run: make -j4 release
+      - name: Check packaging and UUID helpers
+        run: make release-test platform-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AP-CameraGimbal-firmware
+          path: release/
+          if-no-files-found: error

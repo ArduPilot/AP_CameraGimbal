@@ -1,0 +1,80 @@
+name: Windows camera SITL
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-camera-sitl-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Preserve POSIX line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: windows/requirements.txt
+      - name: Install Cygwin build tools
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://cygwin.com/setup-x86_64.exe -OutFile "$env:RUNNER_TEMP\cygwin-setup.exe"
+          $setup = Start-Process "$env:RUNNER_TEMP\cygwin-setup.exe" -Wait -PassThru -ArgumentList @('--quiet-mode', '--no-admin', '--no-shortcuts', '--root', 'C:\cygwin64', '--local-package-dir', "$env:RUNNER_TEMP\cygwin-packages", '--site', 'https://mirrors.kernel.org/sourceware/cygwin/', '--packages', 'gcc-core,gcc-g++,make,python3,python3-lxml,patch,git,curl,tar,xz')
+          if ($setup.ExitCode -ne 0) { throw "Cygwin setup failed: $($setup.ExitCode)" }
+      - name: Build standalone launcher and installer
+        shell: pwsh
+        run: ./windows/build.ps1
+      - name: Test packaged cameras in both orientations
+        shell: pwsh
+        run: |
+          foreach ($orientation in @('upright', 'inverted')) {
+            & ./dist/CameraGimbalSITL/SITLWorker.exe --self-test --orientation $orientation --output "build/windows/test-$orientation"
+            if ($LASTEXITCODE -ne 0) { throw "Packaged camera tests failed: $orientation" }
+          }
+      - name: Check packaged terrain dependencies
+        shell: pwsh
+        run: |
+          & ./dist/CameraGimbalSITL/SITLWorker.exe --terrain --check
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged terrain dependency check failed' }
+      - name: Test installed package
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'Camera SITL Installed'
+          $setup = Start-Process ./windows/Output/CameraGimbalSITL-Setup.exe -ArgumentList @('/verysilent', '/suppressmsgboxes', '/norestart', "/dir=`"$destination`"") -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw 'Camera SITL installation failed' }
+          & "$destination/SITLWorker.exe" --self-test --backend zr10 --output build/windows/test-installed
+          if ($LASTEXITCODE -ne 0) { throw 'Installed camera test failed' }
+      - name: Archive installer and portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CameraGimbalSITL-Windows
+          path: windows/Output/*
+          retention-days: 14
+      - name: Archive validation logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CameraGimbalSITL-Windows-tests
+          path: |
+            build/windows/test-*/**/*.log
+            build/windows/test-*/**/*.png
+            build/camera_sitl/warn-*.txt
+          if-no-files-found: ignore
+      - name: Archive source used for the native services
+        shell: pwsh
+        run: |
+          tar -czf build/windows/native-sources.tar.gz --exclude=.git --exclude=__pycache__ --exclude='*.o' --exclude='*.d' --exclude='*.exe' --exclude='*.dll' --exclude=windows/Output --exclude=web/tests/runtime camera_app web sitl windows tools packaging include tests sitl_launch.py modules/mavlink build/deps/minimp4 build/deps/ss928-mpp/src/rtspserver/src build/windows-xop COPYING.txt Makefile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CameraGimbalSITL-NativeSources
+          path: build/windows/native-sources.tar.gz
+          retention-days: 14

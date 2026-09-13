@@ -1,0 +1,4 @@
+# Exercise AP_Mount_Siyi through SERIAL5 and AP_Camera_Mount through CAM1.
+SERIAL5_PROTOCOL 8
+MNT1_TYPE 8
+CAM1_TYPE 4
