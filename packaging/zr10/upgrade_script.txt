@@ -1,0 +1,25 @@
+# AP_CameraGimbal ZR10 customer-only update; keep kernel and root filesystem.
+# sdstar ignores command errors. One command per variable makes run fail fast.
+# Check partition geometry and the CRC of header + payload before erasing.
+# File Partition: customer
+setenv zr10_probe 'sf probe 0'
+setenv zr10_info 'mxp r.info customer'
+setenv zr10_start 'mw 0x21800008 ${sf_part_start} 1'
+setenv zr10_size 'mw 0x2180000c ${sf_part_size} 1'
+setenv zr10_exstart 'mw 0x21800010 0x950000 1'
+setenv zr10_exsize 'mw 0x21800014 0x6b0000 1'
+setenv zr10_geometry 'cmp.l 0x21800008 0x21800010 2'
+setenv zr10_fill 'mw 0x21000000 0xffffffff 0x1ad000'
+setenv zr10_load 'fatload mmc 0 0x21000000 ${SdUpgradeImage} 0x6b4000 0'
+setenv zr10_clear 'mw 0x21800000 0 2'
+setenv zr10_expected 'fatload mmc 0 0x21800000 ${SdUpgradeImage} 4 0x6b4008'
+setenv zr10_crc 'crc32 0x21000000 0x6b4000 0x21800004'
+setenv zr10_verify 'cmp.l 0x21800000 0x21800004 1'
+setenv zr10_erase 'sf erase ${sf_part_start} ${sf_part_size}'
+setenv zr10_write 'sf write 0x21004000 ${sf_part_start} 0x6b0000'
+setenv zr10_read 'sf read 0x22000000 ${sf_part_start} 0x6b0000'
+setenv zr10_check 'cmp.l 0x21004000 0x22000000 0x1ac000'
+run zr10_probe zr10_info zr10_start zr10_size zr10_exstart zr10_exsize zr10_geometry zr10_fill zr10_load zr10_clear zr10_expected zr10_crc zr10_verify zr10_erase zr10_write zr10_read zr10_check
+# The retained rootfs starts telnet even if the customer update failed.
+run bootcmd
+% <- this is end of script symbol

@@ -1,0 +1,151 @@
+#ifndef APCAM_TARGET_ZR10_H
+#define APCAM_TARGET_ZR10_H
+
+/* Target properties shared by firmware, web UI and generated SITL data.
+ * FOV calibration retains existing measurements/nominal values; see README. */
+#define APCAM_NAME "zr10"
+#define APCAM_PRODUCT_NAME "ZR10"
+#define APCAM_MODEL_NAME "SIYI ZR10"
+#define APCAM_MANUFACTURER "SIYI"
+#define APCAM_NUM_LENSES 1
+#define APCAM_NUM_STREAMS 2
+#define APCAM_STREAM1_LENS_MASK 1
+#define APCAM_STREAM2_LENS_MASK 1
+#define APCAM_HAVE_PHOTO 1
+#define APCAM_HAVE_ZOOM 1
+#define APCAM_NUM_RECORDING_CHANNELS 1
+#define APCAM_VENDOR_PROTOCOL APCAM_PROTOCOL_SIYI
+#define APCAM_HAVE_THERMAL 0
+#define APCAM_HAVE_LIDAR 0
+#define APCAM_ZOOM_NATIVE_RATE 1
+#define APCAM_ZOOM_CONTROL_MAX 10.0f
+#define APCAM_WEB_CONTROL_MAVLINK 0
+#define APCAM_HAVE_GIMBAL_RATES 1
+#define APCAM_WEB_CENTER_COMMAND 1
+#define APCAM_HAVE_OPTICAL_ZOOM 1
+#define APCAM_HAVE_FOCUS 0
+#define APCAM_HAVE_IMAGE_CONTROLS 0
+#define APCAM_HAVE_EXTERNAL_UART 1
+#define APCAM_HAVE_SSH_KEYS 0
+#define APCAM_HAVE_SOC_TEMPERATURE 0
+#define APCAM_VENDOR_PORT 37260
+#define APCAM_WEB_PORT 80
+#define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
+#define APCAM_LENS1_NAME "RGB"
+#define APCAM_LENS1_FOV_H 71.5f
+#define APCAM_LENS1_FOV_H_TELE 6.7f
+#define APCAM_LENS1_FOV_MODEL APCAM_FOV_ENDPOINTS
+#define APCAM_LENS1_OPTICAL_ZOOM_MAX 10
+#define APCAM_LENS1_WIDTH 2560
+#define APCAM_LENS1_HEIGHT 1440
+#define APCAM_ZOOM_MAX 30.0f
+#define APCAM_FRAME_RATE 30
+#define APCAM_THERMAL_FRAME_RATE 0
+#define APCAM_THERMAL_STREAM_WIDTH 0
+#define APCAM_THERMAL_STREAM_HEIGHT 0
+#define APCAM_MAIN_RESOLUTIONS 11
+#define APCAM_SUB_RESOLUTIONS 11
+#define APCAM_RECORDING_RESOLUTIONS 11
+#define APCAM_STREAM_CODECS 3
+#define APCAM_DEFAULT_MAIN_RESOLUTION 0
+#define APCAM_DEFAULT_SUB_RESOLUTION 0
+#define APCAM_DEFAULT_RECORDING_RESOLUTION 0
+#define APCAM_DEFAULT_SYSTEM_ID 0
+#define APCAM_DEFAULT_POSITION_TARGETING 1
+#define APCAM_DEFAULT_ORIENTATION 0
+#define APCAM_DEFAULT_PHOTO_SCOPE 1
+#define APCAM_DEFAULT_TIMEZONE "GMT-10"
+#define APCAM_GIMBAL_PITCH_MIN -90.0f
+#define APCAM_GIMBAL_PITCH_MAX 25.0f
+#define APCAM_GIMBAL_YAW_MIN -135.0f
+#define APCAM_GIMBAL_YAW_MAX 135.0f
+#define APCAM_GIMBAL_RATE_MAX 60.0f
+#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, -1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_FEEDBACK_INVERTED_OFFSET {0, 180, 0}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, -1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_OFFSET {0, 180, 0}
+#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
+#define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_RATE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_RATE_COMMAND_UPRIGHT_OFFSET {0, 0, 0}
+#define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
+
+/* Platform paths are consumed only by the web service. */
+#ifdef APCAM_WEB_BUILD
+#define FIRMWARE_PREFIX "ZR10_FW_"
+#define FIRMWARE_INSTALL_NAME "ZR10_UpgradeSD.bin"
+#ifndef APP_SELECTION_DIR
+#define APP_SELECTION_DIR "/tmp/zr10-config"
+#endif
+#ifndef APP_REQUEST_PATH
+#define APP_REQUEST_PATH "/tmp/camera-app.request"
+#endif
+#ifndef APP_REQUEST_LOCK_PATH
+#define APP_REQUEST_LOCK_PATH "/tmp/camera-app.request.lock"
+#endif
+#ifndef APP_STARTED_PATH
+#define APP_STARTED_PATH "/tmp/camera-app.started"
+#endif
+#ifndef SWITCH_LOCK_PATH
+#define SWITCH_LOCK_PATH "/tmp/zr10-web-switch.lock"
+#endif
+#define APP_STORAGE_PATH APP_DIR
+#define SETTINGS_STORAGE_PATH APP_SELECTION_DIR
+#ifndef APP_DIR
+#define APP_DIR "/tmp/zr10-app"
+#endif
+#ifndef MEDIA_ROOT
+#define MEDIA_ROOT "/mnt"
+#endif
+#ifndef CAPTURE_ROOT
+#define CAPTURE_ROOT MEDIA_ROOT "/DCIM/capture"
+#endif
+#ifndef REPLACEMENT_CONFIG_PATH
+#define REPLACEMENT_CONFIG_PATH "/tmp/zr10-config/camera.ini"
+#endif
+#ifndef REPLACEMENT_CONFIG_BACKUP_PATH
+#define REPLACEMENT_CONFIG_BACKUP_PATH "/tmp/zr10-config/camera.ini.web.bak"
+#endif
+#ifndef PASSWORD_PATH
+#define PASSWORD_PATH "/tmp/zr10-config/web.pass"
+#endif
+#ifndef USER_LOCK_PATH
+#define USER_LOCK_PATH "/tmp/zr10-web-users.lock"
+#endif
+#ifndef UPGRADE_LOCK_PATH
+#define UPGRADE_LOCK_PATH "/tmp/zr10-web-upgrade.lock"
+#endif
+#ifndef TIME_SYNC_TEST_PATH
+#define TIME_SYNC_TEST_PATH "/tmp/zr10-web-time-sync-test"
+#endif
+#ifndef RUNTIME_DIR
+#define RUNTIME_DIR "/tmp"
+#endif
+#ifndef CAMERA_READY_PATH
+#define CAMERA_READY_PATH "/tmp/camera-app.ready"
+#endif
+#ifndef SESSION_PATH
+#define SESSION_PATH "/tmp/zr10-web-sessions"
+#endif
+#ifndef REPLACEMENT_CAMERA_PATH
+#define REPLACEMENT_CAMERA_PATH APP_DIR "/camera-app"
+#endif
+#ifndef WEB_PATH
+#define WEB_PATH APP_DIR "/zr10-web"
+#endif
+#ifndef REPLACEMENT_LOG_PATH
+#define REPLACEMENT_LOG_PATH "/tmp/camera-app.log"
+#endif
+#ifndef REPLACEMENT_LOG_OLD_PATH
+#define REPLACEMENT_LOG_OLD_PATH "/tmp/camera-app.log.1"
+#endif
+#endif
+
+#endif

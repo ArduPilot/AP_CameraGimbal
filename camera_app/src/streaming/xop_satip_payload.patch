@@ -1,0 +1,67 @@
+--- RtpConnection.cpp
++++ RtpConnection.cpp
+@@ -8,6 +8,9 @@
+ using namespace std;
+ using namespace xop;
+
++extern "C" bool ca_rtsp_is_satip_client(const void *client);
++extern "C" void ca_rtsp_unmark_satip_client(const void *client);
++
+ RtpConnection::RtpConnection(std::weak_ptr<TcpConnection> rtsp_connection)
+     : rtsp_connection_(rtsp_connection)
+ {
+@@ -29,6 +33,7 @@
+
+ RtpConnection::~RtpConnection()
+ {
++    ca_rtsp_unmark_satip_client(this);
+     for(int chn=0; chn<MAX_MEDIA_CHANNEL; chn++) {
+         if(rtpfd_[chn] > 0) {
+             SocketUtil::Close(rtpfd_[chn]);
+@@ -222,6 +227,46 @@
+         return -1;
+     }
+
++    /* VLC's SAT>IP module does not perform H.264 RTP depacketisation. For
++     * aggregate-SETUP clients only, turn each RFC 6184 payload back into a
++     * contiguous Annex-B byte stream after VLC strips the RTP headers. */
++    if (ca_rtsp_is_satip_client(this) &&
++        pkt.size > RTP_TCP_HEAD_SIZE + RTP_HEADER_SIZE) {
++        const uint8_t *payload = pkt.data.get() + RTP_TCP_HEAD_SIZE +
++                                 RTP_HEADER_SIZE;
++        size_t payload_size = pkt.size - RTP_TCP_HEAD_SIZE - RTP_HEADER_SIZE;
++        RtpPacket annex_b;
++        uint8_t *output = annex_b.data.get() + RTP_TCP_HEAD_SIZE +
++                          RTP_HEADER_SIZE;
++        size_t output_size = 0;
++        if ((payload[0] & 0x1f) == 28 && payload_size >= 2) {
++            bool start = (payload[1] & 0x80) != 0;
++            if (start) {
++                output[0] = 0;
++                output[1] = 0;
++                output[2] = 0;
++                output[3] = 1;
++                output[4] = (payload[0] & 0xe0) | (payload[1] & 0x1f);
++                output_size = 5;
++            }
++            memcpy(output + output_size, payload + 2, payload_size - 2);
++            output_size += payload_size - 2;
++        }
++        else {
++            output[0] = 0;
++            output[1] = 0;
++            output[2] = 0;
++            output[3] = 1;
++            memcpy(output + 4, payload, payload_size);
++            output_size = payload_size + 4;
++        }
++        annex_b.size = RTP_TCP_HEAD_SIZE + RTP_HEADER_SIZE + output_size;
++        annex_b.timestamp = pkt.timestamp;
++        annex_b.type = pkt.type;
++        annex_b.last = pkt.last;
++        pkt = annex_b;
++    }
++
+     RtspConnection *rtsp_conn = (RtspConnection *)conn.get();
+
+     bool ret = rtsp_conn->task_scheduler_->AddTriggerEvent([this, channel_id, pkt] {

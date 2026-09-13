@@ -1,0 +1,12 @@
+[
+	{
+		"fileName":"sysimg.tar.gz",
+		"deviceType":52,
+		"deviceId":137
+	},
+	{
+		"fileName":"mini4k_mcu_firmware.bin",
+		"deviceType":46,
+		"deviceId":117
+	}
+]

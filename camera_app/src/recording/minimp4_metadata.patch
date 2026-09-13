@@ -1,0 +1,68 @@
+--- minimp4.h
++++ minimp4.h
+@@ -129,7 +129,8 @@
+ {
+     e_audio,
+     e_video,
+-    e_private
++    e_private,
++    e_metadata
+ } track_media_kind_t;
+ 
+ typedef struct
+@@ -1331,6 +1332,10 @@
+                 handler_type = MP4E_HANDLER_TYPE_VIDE;
+                 handler_ascii = "VideoHandler";
+                 break;
++            case e_metadata:
++                handler_type = FOUR_CHAR_INT('m', 'e', 't', 'a');
++                handler_ascii = "CameraTelemetry";
++                break;
+             case e_private:
+                 handler_type = MP4E_HANDLER_TYPE_GESM;
+                 break;
+@@ -1418,6 +1423,11 @@
+                         END_ATOM;
+                     }
+ 
++                    if (tr->info.track_media_kind == e_metadata)
++                    {
++                        ATOM_FULL(FOUR_CHAR_INT('n', 'm', 'h', 'd'), 0);
++                        END_ATOM;
++                    }
+                     ATOM(BOX_dinf);
+                         ATOM_FULL(BOX_dref, 0);
+                         WRITE_4(1); // entry_count
+@@ -1435,6 +1445,16 @@
+                         ATOM_FULL(BOX_stsd, 0);
+                         WRITE_4(1); // entry_count;
+ 
++                        if (tr->info.track_media_kind == e_metadata)
++                        {
++                            const char *mime = "application/json";
++                            ATOM(FOUR_CHAR_INT('m', 'e', 't', 't'));
++                            WRITE_4(0); WRITE_2(0); // reserved[6]
++                            WRITE_2(1); // data_reference_index
++                            WRITE_1(0); // empty content_encoding
++                            do { WRITE_1(*mime); } while (*mime++);
++                            END_ATOM;
++                        }
+                         if (tr->info.track_media_kind == e_audio || tr->info.track_media_kind == e_private)
+                         {
+                             // AudioSampleEntry() assume MP4E_HANDLER_TYPE_SOUN
+@@ -1732,13 +1752,9 @@
+ 
+     if (mux->enable_fragmentation)
+     {
+-        track_t *tr = ((track_t*)mux->tracks.data) + 0;
+-        uint32_t movie_duration = get_duration(tr);
+-
+         ATOM(BOX_mvex);
+-            ATOM_FULL(BOX_mehd, 0);
+-                WRITE_4(movie_duration); // duration
+-            END_ATOM;
++            // Total duration is unknown until recording ends. Omit optional
++            // mehd: a zero value prevents VLC 3 from using fragment durations.
+         for (ntr = 0; ntr < ntracks; ntr++)
+         {
+             ATOM_FULL(BOX_trex, 0);

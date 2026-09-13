@@ -1,0 +1,15 @@
+# AP_CameraGimbal A8 mini application update. Only the customer partition
+# (SIYI application flash) is rewritten; U-Boot, kernel and the vendor root
+# filesystem are left in place.
+# This U-Boot has no conditionals, so the image is loaded before the flash
+# is erased and the load buffer is pre-filled with 0xff: a short read then
+# leaves erased (empty) JFFS2 blocks behind instead of stale memory.
+# File Partition: customer
+mxp r.info customer
+sf probe 0
+mw 0x21000000 0xffffffff 0x180000
+fatload mmc 0 0x21000000 $(SdUpgradeImage) 0x600000 0x4000
+sf erase ${sf_part_start} ${sf_part_size}
+sf write 0x21000000 ${sf_part_start} 0x600000
+run bootcmd
+% <- this is end of script symbol

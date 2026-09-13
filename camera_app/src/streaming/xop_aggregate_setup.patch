@@ -1,0 +1,68 @@
+--- RtspConnection.cpp
++++ RtspConnection.cpp
+@@ -6,6 +6,7 @@
+ #include "MediaSession.h"
+ #include "MediaSource.h"
+ #include "net/SocketUtil.h"
++#include <netinet/tcp.h>
+
+ #define USER_AGENT "-_-"
+ #define RTSP_DEBUG 0
+@@ -13,6 +14,8 @@
+
+ using namespace xop;
+ using namespace std;
++
++extern "C" void ca_rtsp_mark_satip_client(const void *client);
+
+ RtspConnection::RtspConnection(std::shared_ptr<Rtsp> rtsp, TaskScheduler *task_scheduler, SOCKET sockfd)
+     : TcpConnection(task_scheduler, sockfd)
+@@ -22,6 +25,11 @@
+     , rtsp_request_(new RtspRequest)
+     , rtsp_response_(new RtspResponse)
+ {
++    // Do not hold a frame's final RTP fragment for a delayed TCP ACK.
++    // The vendor SetNoDelay helper lacks TCP_NODELAY on Linux and is a no-op.
++    int no_delay = 1;
++    (void)setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
++
+     this->SetReadCallback([this](std::shared_ptr<TcpConnection> conn, xop::BufferReader& buffer) {
+         return this->OnRead(buffer);
+     });
+@@ -290,6 +298,36 @@
+     auto rtsp = rtsp_.lock();
+     if (rtsp) {
+         media_session = rtsp->LookMediaSession(session_id_);
++        /* Some VLC builds use the SAT>IP access module for generic RTSP.
++         * They omit DESCRIBE and issue SETUP against the aggregate session
++         * URL. Resolve and initialise that session here just as DESCRIBE
++         * normally would. */
++        if (!media_session && session_id_ == 0) {
++            std::string suffix = rtsp_request_->GetRtspUrlSuffix();
++            std::size_t track = suffix.rfind("/track");
++            if (track != std::string::npos) {
++                suffix.erase(track);
++            }
++            media_session = rtsp->LookMediaSession(suffix);
++            if (media_session) {
++                if (rtp_conn_ == nullptr) {
++                    rtp_conn_.reset(new RtpConnection(shared_from_this()));
++                }
++                ca_rtsp_mark_satip_client(rtp_conn_.get());
++                session_id_ = media_session->GetMediaSessionId();
++                media_session->AddClient(this->GetSocket(), rtp_conn_);
++                for (int chn = 0; chn < MAX_MEDIA_CHANNEL; chn++) {
++                    MediaSource *source = media_session->GetMediaSource(
++                        (MediaChannelId)chn);
++                    if (source != nullptr) {
++                        rtp_conn_->SetClockRate((MediaChannelId)chn,
++                                                source->GetClockRate());
++                        rtp_conn_->SetPayloadType((MediaChannelId)chn,
++                                                  source->GetPayloadType());
++                    }
++                }
++            }
++        }
+     }
+
+     if(!rtsp || !media_session)  {
