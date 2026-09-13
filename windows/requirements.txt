@@ -1,0 +1,18 @@
+# Python 3.10 x64; tested together on Windows 11.
+PyQt6==6.11.0
+PyQt6-Qt6==6.11.2
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.7
+vtk==9.7.0
+av==17.1.0
+numpy==2.2.6
+opencv-python==5.0.0.93
+matplotlib==3.10.9
+quantized-mesh-tile==0.7.0
+pymavlink==2.4.49
+requests==2.34.2
+scipy==1.15.3
+wxPython==4.3.1
+psutil==7.2.2
+imageio-ffmpeg==0.6.0
+pyserial==3.5

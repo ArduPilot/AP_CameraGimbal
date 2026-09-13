@@ -1,0 +1,6 @@
+# A recent MAVProxy checkout with mavproxy_map3d is required as well.
+vtk>=9.2
+quantized-mesh-tile>=0.7.0
+opencv-python>=4.10
+matplotlib>=3.9
+av>=16
