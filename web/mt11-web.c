@@ -4,6 +4,7 @@
 #endif
 
 #include "build/version.h"
+#include "build/icons.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -5507,7 +5508,8 @@ static void append_head(struct string_buffer *page, const char *title,
                languages[current_language].html_lang,
                extra_head != NULL ? extra_head : "");
     sb_append_html(page, title);
-    sb_append(page, "</title><style>");
+    sb_append(page, "</title><link rel=icon href=/favicon.ico sizes=\"16x16 32x32 48x48\">"
+                    "<link rel=icon href=/favicon.svg type=\"image/svg+xml\" sizes=any><style>");
     sb_append(page, style);
     sb_append(page, "</style></head><body>");
 }
@@ -7993,6 +7995,15 @@ static void handle_request(int fd, const char *peer)
             send_text_errorf(fd, 400, "Bad Request", S_E_MALFORMED);
         }
         return;
+    }
+    /* Branding is public so login pages can display their favicon too. */
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/favicon.svg") == 0) {
+        send_response(fd, 200, "OK", "image/svg+xml", (const char *)favicon_svg, sizeof(favicon_svg), NULL);
+        goto done;
+    }
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/favicon.ico") == 0) {
+        send_response(fd, 200, "OK", "image/vnd.microsoft.icon", (const char *)favicon_ico, sizeof(favicon_ico), NULL);
+        goto done;
     }
     select_language(&request);
     auth = authenticate(&request, session_token);

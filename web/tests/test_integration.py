@@ -293,6 +293,16 @@ def login_form(password, extra=None):
 def test_login_and_languages(csrf):
     session_file = root / "sessions"
 
+    # Favicons must load before authentication, including on the login page.
+    assets = Path(__file__).resolve().parents[2] / "assets"
+    for path, source, mime in (("/favicon.svg", "camera-gimbal.svg", "image/svg+xml"),
+                               ("/favicon.ico", "favicon.ico", "image/vnd.microsoft.icon")):
+        status, body, headers = raw_request("GET", path)
+        assert status == 200 and dict(headers)["Content-Type"] == mime
+        assert body == (assets / source).read_bytes()
+    status, body, _ = raw_request("GET", "/login")
+    assert status == 200 and b"href=/favicon.svg" in body and b"href=/favicon.ico" in body
+
     # browsers are sent to the login form; scripted clients keep Basic
     status, _, headers = raw_request("GET", "/", {"Accept": "text/html,*/*"})
     assert status == 303 and dict(headers)["Location"] == "/login"

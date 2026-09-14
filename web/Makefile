@@ -7,6 +7,7 @@ MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/nul
 MT11_GIT_HASH ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-6)
 export MT11_VERSION MT11_GIT_HASH
 VERSION_HEADER := build/version.h
+ICON_HEADER := build/icons.h
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Wformat-security -Werror -std=c11
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -isystem ../camera_app/build/mavlink/all/include -Wno-address-of-packed-member
@@ -57,24 +58,27 @@ A8_HOST_CHECK := tests/a8-web-host
 $(VERSION_HEADER): FORCE ../tools/write_build_version.py
 	python3 ../tools/write_build_version.py $@
 
+$(ICON_HEADER): ../tools/build_icons.py ../assets/camera-gimbal.svg ../assets/favicon.ico
+	python3 ../tools/build_icons.py --output $@
+
 FORCE:
 
 .DEFAULT_GOAL := all
 
 all: mt11-web
 
-mt11-web: mt11-web.c $(VERSION_HEADER) $(APCAM_HEADERS)
+mt11-web: mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(CC) $(CFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
-a8-web: mt11-web.c $(VERSION_HEADER) $(APCAM_HEADERS)
+a8-web: mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(A8_CROSS_COMPILE)gcc $(CFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(A8_HOST_CHECK): mt11-web.c $(VERSION_HEADER) $(APCAM_HEADERS)
+$(A8_HOST_CHECK): mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(HOST_CC) $(CFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(HOST_TEST): mt11-web.c $(VERSION_HEADER) $(APCAM_HEADERS)
+$(HOST_TEST): mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(HOST_CC) $(CFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST \
 		-DAPP_DIR='"$(TEST_ROOT)/app"' \
 		-DMEDIA_ROOT='"$(TEST_ROOT)/mnt"' \
@@ -97,7 +101,7 @@ $(HOST_TEST): mt11-web.c $(VERSION_HEADER) $(APCAM_HEADERS)
 
 sitl: $(SITL_TARGET)
 
-$(SITL_TARGET): mt11-web.c Makefile $(VERSION_HEADER) $(APCAM_HEADERS)
+$(SITL_TARGET): mt11-web.c Makefile $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
 	$(HOST_CC) $(CFLAGS) $(APCAM_CPPFLAGS) $(SITL_DEFINES) $(SITL_EXTRA_DEFINES) -o $@ $< -lm
 
@@ -110,7 +114,7 @@ clean:
 	rm -rf tests/runtime
 
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
-zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.c ../camera_app/src/compat/zr10_uclibc.c $(VERSION_HEADER) $(APCAM_HEADERS)
+zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.c ../camera_app/src/compat/zr10_uclibc.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(ZR10_CROSS_COMPILE)gcc $(CFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.c,$^)
 
 .PHONY: zr10-test
@@ -123,7 +127,7 @@ build/zr10_upgrade.h: ../tools/zr10_firmware.py ../packaging/zr10/upgrade_script
 
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
-z1mini-web: mt11-web.c z1mini_mavlink.h $(VERSION_HEADER) $(Z1MINI_MAVLINK)/all/mavlink.h
+z1mini-web: mt11-web.c z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(Z1MINI_MAVLINK)/all/mavlink.h
 	$(Z1MINI_CROSS_COMPILE)gcc $(CFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
 
 $(Z1MINI_MAVLINK)/all/mavlink.h:

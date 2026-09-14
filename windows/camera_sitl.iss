@@ -14,6 +14,7 @@ OutputDir=Output
 OutputBaseFilename=CameraGimbalSITL-Setup
 Compression=lzma2
 SolidCompression=yes
+SetupIconFile=..\assets\camera-gimbal.ico
 UninstallDisplayIcon={app}\CameraGimbalSITL.exe
 [Files]
 Source: "..\dist\CameraGimbalSITL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

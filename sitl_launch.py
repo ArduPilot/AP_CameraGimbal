@@ -64,6 +64,7 @@ class Launcher(QtWidgets.QWidget):
         self.log_files = {}
         self.runtime = None
         self.launch_output = ''
+        self.setWindowIcon(QtGui.QIcon(str(REPO / 'assets/camera-gimbal.ico')))
         self.setWindowTitle('Camera / Gimbal SITL')
         self.resize(820, 570)
 
