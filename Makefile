@@ -162,6 +162,7 @@ sitl-test: sitl
 
 sitl-mavlink-test: sitl
 	python3 sitl/test_mavlink_parameters.py --backend mt11 --build $(SITL_BUILD)
+	python3 sitl/test_roi_motion.py --build $(SITL_BUILD)
 
 a8_sitl-mavlink-test: a8_sitl
 	python3 sitl/test_mavlink_parameters.py --backend a8 --build $(A8_SITL_BUILD)

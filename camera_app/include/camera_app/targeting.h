@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Advance a position using NED velocity; callers bound the prediction time. */
+bool ca_targeting_predict_position(int32_t *lat_e7, int32_t *lon_e7, float *alt_m,
+                                   float vn, float ve, float vd, float seconds);
+
 bool ca_targeting_global_angles(int32_t vehicle_lat_e7,
                                 int32_t vehicle_lon_e7,
                                 float vehicle_alt_amsl_m,

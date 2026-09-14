@@ -57,6 +57,37 @@ int main(void)
                                        latitude, longitude, 100.0f,
                                        &pitch, &yaw));
 
+    /* A circling aircraft keeps a centre ROI at a fixed relative bearing.
+     * Position telemetry arrives at 4 Hz while control runs at 20 Hz. */
+    float worst = 0, old_worst = 0;
+    for (unsigned i = 0; i < 400; i++) {
+        double now = i * 0.05, sampled = (i / 5) * 0.25;
+        double phase = sampled * 0.25, current_phase = now * 0.25;
+        double north = 100 * cos(phase), east = 100 * sin(phase);
+        double metres_per_e7 = 6378137.0 * (PI_F / 180.0) * 1.0e-7;
+        int32_t lat = latitude + (int32_t)llround(north / metres_per_e7);
+        int32_t lon = longitude + (int32_t)llround(east / (metres_per_e7 * cos(latitude * 1.0e-7 * PI_F / 180.0)));
+        float alt = 600;
+        assert(ca_targeting_global_angles(lat, lon, alt, latitude, longitude, 500, &pitch, &yaw));
+        old_worst = fmaxf(old_worst, fabsf(remainderf(yaw - current_phase - PI_F, 2 * PI_F)));
+        assert(ca_targeting_predict_position(&lat, &lon, &alt,
+                                             -25 * sin(phase), 25 * cos(phase), 2,
+                                             now - sampled));
+        assert(fabs(alt - (600 - 2 * (now - sampled))) < 0.001);
+        assert(ca_targeting_global_angles(lat, lon, alt, latitude, longitude, 500, &pitch, &yaw));
+        worst = fmaxf(worst, fabsf(remainderf(yaw - current_phase - PI_F, 2 * PI_F)));
+    }
+    assert(degrees(old_worst) > 2.8f);
+    assert(degrees(worst) < 0.03f);
+    int32_t lat = latitude, lon = 1799999990;
+    float alt = 100;
+    assert(ca_targeting_predict_position(&lat, &lon, &alt, 0, 25, 0, 0.25));
+    assert(lon < -1799990000); /* wrap correctly across the date line */
+    assert(!ca_targeting_predict_position(&lat, &lon, &alt, NAN, 0, 0, 0.1));
+    assert(!ca_targeting_predict_position(&lat, &lon, &alt, 0, 0, 0, -1));
+    printf("circling ROI: peak bearing error %.3f -> %.3f degrees\n",
+           degrees(old_worst), degrees(worst));
+
     puts("targeting tests passed");
     return 0;
 }

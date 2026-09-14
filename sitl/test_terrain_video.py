@@ -98,6 +98,28 @@ def prediction():
     pose = video.PosePredictor().pose(future, now=1)
     distance = math.radians(pose[0] - video.camera_pose(future)[0]) * video.terrain.R
     assert abs(distance - 1.25) < 1e-6
+    predictor = video.PosePredictor()
+    poses = []
+    for i in range(40):
+        now, sampled = i * 0.05, (i // 5) * 0.25
+        state = copy.deepcopy(base)
+        state['prediction_ms'] = 150
+        state['velocity'] = {'vn_m_s': 25, 've_m_s': 0, 'vd_m_s': 0}
+        state['position']['lat_e7'] += math.degrees(25 * sampled / video.terrain.R) * 1e7
+        state['vehicle_attitude']['yaw_rad'] = 0.2 * sampled
+        for key in ('position', 'vehicle_attitude', 'gimbal_attitude'):
+            state[key]['age_ms'] = round((now - sampled) * 1000)
+        poses.append(predictor.pose(state, now=100 + now + 0.15))
+    north_steps = np.diff([p[0] for p in poses]) * math.pi / 180 * video.terrain.R
+    np.testing.assert_allclose(north_steps, 1.25, atol=1e-6)
+    np.testing.assert_allclose(np.diff([p[5] for p in poses]), math.degrees(0.01), atol=1e-6)
+    # Still freeze after 250 ms of actual link staleness, plus the render lead.
+    for key in ('position', 'vehicle_attitude', 'gimbal_attitude'):
+        state[key]['age_ms'] = 250
+    frozen = predictor.pose(state, now=102.15)
+    for key in ('position', 'vehicle_attitude', 'gimbal_attitude'):
+        state[key]['age_ms'] = 500
+    np.testing.assert_allclose(predictor.pose(state, now=102.4), frozen)
     print('PASS 4 Hz -> 20 Hz prediction, bounded loss, yaw wrap, jitter correction and presentation lead')
 
 

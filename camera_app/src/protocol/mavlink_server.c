@@ -41,6 +41,7 @@
 #define CA_GIMBAL_COMPONENT_ID MAV_COMP_ID_GIMBAL
 #define VEHICLE_ATTITUDE_TIMEOUT_MS 1000U
 #define VEHICLE_POSITION_TIMEOUT_MS 1500U
+#define VEHICLE_PREDICTION_MS 250U
 #define TARGET_LOCATION_INTERVAL_MS 100U
 #define TELEMETRY_INTERVAL_REQUEST_MS 5000U
 #define PI_F 3.14159265358979323846f
@@ -126,6 +127,7 @@ struct ca_mavlink_server {
     int32_t vehicle_lat_e7;
     int32_t vehicle_lon_e7;
     float vehicle_alt_amsl_m;
+    float vehicle_vn_m_s, vehicle_ve_m_s, vehicle_vd_m_s;
     int32_t target_lat_e7;
     int32_t target_lon_e7;
     float target_alt_amsl_m;
@@ -862,6 +864,7 @@ static bool current_vehicle_attitude(const struct ca_mavlink_server *server,
     }
     float elapsed = (float)(now - server->vehicle_attitude_updated_ms) /
                     1000.0f;
+    elapsed = fminf(elapsed, VEHICLE_PREDICTION_MS * 0.001f);
     if (yaw != NULL) {
         *yaw = wrap_pi_f(server->vehicle_yaw_rad +
                          server->vehicle_yaw_rate_rad_s * elapsed);
@@ -880,9 +883,19 @@ static bool current_vehicle_position(const struct ca_mavlink_server *server,
             VEHICLE_POSITION_TIMEOUT_MS) {
         return false;
     }
-    if (lat_e7 != NULL) *lat_e7 = server->vehicle_lat_e7;
-    if (lon_e7 != NULL) *lon_e7 = server->vehicle_lon_e7;
-    if (alt_amsl_m != NULL) *alt_amsl_m = server->vehicle_alt_amsl_m;
+    int32_t lat = server->vehicle_lat_e7, lon = server->vehicle_lon_e7;
+    float alt = server->vehicle_alt_amsl_m;
+    float elapsed = fminf((float)(now - server->vehicle_position_updated_ms),
+                          VEHICLE_PREDICTION_MS) * 0.001f;
+    /* ROI bearing and vehicle yaw must refer to the same instant. Reusing a
+     * stationary position between packets while extrapolating yaw makes the
+     * gimbal slew backwards, then jump forwards on the next position packet. */
+    if (!ca_targeting_predict_position(&lat, &lon, &alt, server->vehicle_vn_m_s,
+                                       server->vehicle_ve_m_s, server->vehicle_vd_m_s,
+                                       elapsed)) return false;
+    if (lat_e7 != NULL) *lat_e7 = lat;
+    if (lon_e7 != NULL) *lon_e7 = lon;
+    if (alt_amsl_m != NULL) *alt_amsl_m = alt;
     return true;
 }
 
@@ -1405,6 +1418,9 @@ static void handle_global_position_int(
     server->vehicle_lat_e7 = lat_e7;
     server->vehicle_lon_e7 = lon_e7;
     server->vehicle_alt_amsl_m = alt_mm * 0.001f;
+    server->vehicle_vn_m_s = position.vx * 0.01f;
+    server->vehicle_ve_m_s = position.vy * 0.01f;
+    server->vehicle_vd_m_s = position.vz * 0.01f;
     server->vehicle_position_updated_ms = monotonic_ms();
     server->have_vehicle_position = true;
     if (first_position) {

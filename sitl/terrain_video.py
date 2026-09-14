@@ -188,7 +188,9 @@ class PosePredictor:
         self.history = {}
         self.filters = {}
 
-    def angles(self, key, sample, now):
+    def angles(self, key, sample, now, horizon=None):
+        if horizon is None:
+            horizon = self.HORIZON
         angles = np.array([sample[k + '_rad'] for k in ('roll', 'pitch', 'yaw')])
         age = max(0, sample.get('age_ms', 0)) / 1000
         stamp = now - age
@@ -214,9 +216,9 @@ class PosePredictor:
         yaw_rate = sample.get('yaw_rate_rad_s')
         if isinstance(yaw_rate, (int, float)) and math.isfinite(yaw_rate):
             rates[2] = yaw_rate
-        target = angles + rates * min(age, self.HORIZON)
+        target = angles + rates * min(age, horizon)
         observer = self.filters.setdefault(key, MotionFilter([math.pi / 4] * 3, 2 * math.pi))
-        predicted = observer.update(target, rates, now, stamp, self.HORIZON)
+        predicted = observer.update(target, rates, now, stamp, horizon)
         return (predicted + math.pi) % (2 * math.pi) - math.pi
 
     def pose(self, record, now=None):
@@ -234,6 +236,10 @@ class PosePredictor:
         # The producer renders ahead of its scheduled presentation time.
         # Extend source ages, without changing the raw recorded telemetry.
         lead = max(0, min(self.HORIZON * 1000, record.get('prediction_ms', 0)))
+        # The freshness allowance applies at request time. Rendering ahead
+        # must not consume it: a 150 ms lead otherwise freezes 4 Hz position
+        # prediction halfway between updates despite the link being healthy.
+        horizon = self.HORIZON + lead / 1000
         record = dict(record)
         for key in ('position', 'vehicle_attitude', 'gimbal_attitude'):
             record[key] = dict(record[key], age_ms=record[key].get('age_ms', 0) + lead)
@@ -243,7 +249,7 @@ class PosePredictor:
         speeds = [velocity.get(k) for k in ('vn_m_s', 've_m_s', 'vd_m_s')]
         if (all(isinstance(v, (int, float)) and math.isfinite(v) for v in speeds) and
                 0 <= velocity.get('age_ms', 0) <= 10000):
-            dt = min(max(0, position.get('age_ms', 0)) / 1000, self.HORIZON)
+            dt = min(max(0, position.get('age_ms', 0)) / 1000, horizon)
             north, east, down = speeds
             rates = [math.degrees(north / terrain.R),
                      math.degrees(east / (terrain.R * max(0.01, math.cos(math.radians(pose[0]))))),
@@ -255,11 +261,11 @@ class PosePredictor:
             alt -= down * dt
             observer = self.filters.setdefault('position', MotionFilter([0.001, 0.001, 100]))
             lat, lon, alt = observer.update([lat, lon, alt], rates, now,
-                                            now - position.get('age_ms', 0) / 1000, self.HORIZON)
+                                            now - position.get('age_ms', 0) / 1000, horizon)
         else:
             self.filters.pop('position', None)
-        vehicle = self.angles('vehicle', record['vehicle_attitude'], now)
-        gimbal = self.angles('gimbal', record['gimbal_attitude'], now)
+        vehicle = self.angles('vehicle', record['vehicle_attitude'], now, horizon)
+        gimbal = self.angles('gimbal', record['gimbal_attitude'], now, horizon)
         return (lat, lon, alt, math.degrees(gimbal[0]), math.degrees(gimbal[1]),
                 math.degrees(gimbal[2] + vehicle[2]) % 360)
 
