@@ -20,6 +20,4 @@ typedef void (*ca_z1_native_frame_fn)(void *, const uint8_t *, size_t, uint64_t,
 typedef int (*ca_z1_native_run_fn)(const atomic_bool *, ca_z1_native_frame_fn, void *);
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                          ca_z1_native_frame_fn publish, void *opaque);
-struct ca_media;
-bool ca_z1_media_ready(const struct ca_media *media);
 #endif

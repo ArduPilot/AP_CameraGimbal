@@ -3,6 +3,8 @@
 #include "apcam/target.h"
 
 #include "camera_app/backend.h"
+#include "camera_app/camera_definition.h"
+#include "camera_app/camera_ftp.h"
 #include "camera_app/siyi.h"
 #include "camera_app/external_uart.h"
 #include "camera_app/log.h"
@@ -57,6 +59,13 @@ struct route {
     socklen_t address_length;
 };
 
+struct ext_parameter_list {
+    bool active;
+    uint8_t system, component;
+    struct route route;
+    size_t next;
+};
+
 struct ca_mavlink_server {
     struct ca_support_mavlink *support;
     struct route flight_controller_route;
@@ -77,6 +86,10 @@ struct ca_mavlink_server {
     struct ca_media *media;
     struct ca_config settings;
     struct ca_config parameters;
+    char *definition_xml;
+    size_t definition_length;
+    struct ca_camera_ftp ftp;
+    struct ext_parameter_list ext_lists[CA_MAVLINK_CLIENTS];
     char *config_path;
     uint8_t system_id;
     size_t next_parameter;
@@ -116,6 +129,8 @@ struct ca_mavlink_server {
     int32_t target_lat_e7;
     int32_t target_lon_e7;
     float target_alt_amsl_m;
+    bool have_vehicle_armed;
+    bool vehicle_armed;
     bool have_vehicle_attitude;
     bool have_vehicle_position;
     bool gimbal_information_announced;
@@ -487,6 +502,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
     mavlink_message_t message;
     mavlink_camera_information_t info = {
         .time_boot_ms = boot_ms(server),
+        .cam_definition_version = CA_CAMERA_DEFINITION_VERSION,
         .firmware_version = 1U, /* app protocol version 1.0.0.0 */
         .focal_length = NAN,
         .sensor_size_h = NAN,
@@ -511,6 +527,8 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
+    put_text(info.cam_definition_uri, sizeof(info.cam_definition_uri),
+             "mftp://[;comp=100]" CA_CAMERA_DEFINITION_PATH);
     unsigned width, height;
     ca_video_resolution_size(server->settings.main_resolution, &width, &height);
     info.resolution_h = (uint16_t)width;
@@ -1074,7 +1092,7 @@ static void send_protocol_capabilities(struct ca_mavlink_server *server,
     mavlink_message_t message;
     mavlink_autopilot_version_t version = {
         .capabilities = MAV_PROTOCOL_CAPABILITY_PARAM_ENCODE_C_CAST |
-                        MAV_PROTOCOL_CAPABILITY_MAVLINK2,
+                        MAV_PROTOCOL_CAPABILITY_MAVLINK2 | MAV_PROTOCOL_CAPABILITY_FTP,
     };
     (void)mavlink_msg_autopilot_version_encode_status(server->system_id,
         CA_CAMERA_COMPONENT_ID, &server->encode_status, &message, &version);
@@ -1129,7 +1147,8 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
                                      (unsigned)params[0])
                    ? MAV_RESULT_ACCEPTED : MAV_RESULT_DENIED;
     case MAV_CMD_SET_CAMERA_MODE:
-        if ((unsigned)params[1] > 1U) return MAV_RESULT_UNSUPPORTED;
+        if (!isfinite(params[1]) || (params[1] != 0 && params[1] != 1) ||
+            (!APCAM_HAVE_PHOTO && params[1] == 0)) return MAV_RESULT_UNSUPPORTED;
         server->camera_mode = (uint8_t)params[1];
         send_camera_settings(server, route);
         return MAV_RESULT_ACCEPTED;
@@ -1506,7 +1525,7 @@ static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
 
 /* The camera component owns the shared camera/gimbal configuration. Values
  * are C-cast INT32 (all ranges fit exactly in a float), as used by ArduPilot.
- * Keep the running settings separate: writes take effect after restart. */
+ * Keep running and saved settings separate for restart-only configuration. */
 static void refresh_parameters(struct ca_mavlink_server *server)
 {
     struct ca_config parameters;
@@ -1541,6 +1560,56 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
     (void)mavlink_msg_statustext_encode_status(server->system_id,
         CA_CAMERA_COMPONENT_ID, &server->encode_status, &message, &status);
     broadcast_message(server, &message);
+}
+
+/* Camera-definition configuration has a runtime implementation. Other app
+ * configuration (network identity, transports, etc.) remains save-only. */
+static bool live_config_parameter(size_t index)
+{
+    int camera_index = ca_camera_param_find(ca_config_param_name(index));
+    struct ca_camera_parameter p;
+    return camera_index >= 0 && ca_camera_param_info((size_t)camera_index, &p) &&
+        p.operation == CA_CAMERA_CONFIG;
+}
+
+static int apply_camera_config(struct ca_mavlink_server *server, size_t index, float value)
+{
+    struct ca_config previous = server->settings, next = previous;
+    if (ca_config_param_assign(&next, index, value) < 0) return -1;
+    bool was_recording = ca_media_recording(server->media);
+    if (ca_media_configure(server->media, &next) < 0) {
+        parameter_status(server, errno == EBUSY ?
+            "Stop recording before changing video format" : "Camera could not apply parameter");
+        return -1;
+    }
+    bool record = was_recording;
+    if (next.autorecord != previous.autorecord) {
+        record = next.autorecord == CA_AUTORECORD_ENABLED ||
+            (next.autorecord == CA_AUTORECORD_WHILE_ARMED &&
+             server->have_vehicle_armed && server->vehicle_armed);
+    }
+    if ((record != was_recording && ca_media_set_recording(server->media, record) < 0) ||
+        ca_config_param_save(&server->parameters, server->config_path, index, value) < 0) {
+        int saved_errno = errno;
+        bool restored = true;
+        if (ca_media_recording(server->media) != was_recording &&
+            ca_media_set_recording(server->media, was_recording) < 0) {
+            ca_log("recording policy rollback failed");
+            restored = false;
+        }
+        if (ca_media_configure(server->media, &previous) < 0) {
+            ca_log("parameter runtime rollback failed");
+            restored = false;
+        }
+        errno = saved_errno;
+        parameter_status(server, restored ? "Parameter failed; previous setting restored" :
+                                           "Parameter failed; runtime rollback also failed");
+        return -1;
+    }
+    server->settings = next;
+    server->photo_scope = next.photo_scope;
+    parameter_status(server, "Parameter applied and saved");
+    return 0;
 }
 
 static void handle_parameter(struct ca_mavlink_server *server,
@@ -1584,14 +1653,203 @@ static void handle_parameter(struct ca_mavlink_server *server,
          * the numeric value without truncating fractional or non-finite input. */
         if ((set.param_type != MAV_PARAM_TYPE_INT32 &&
              set.param_type != MAV_PARAM_TYPE_REAL32) ||
-            ca_config_param_save(&server->parameters, server->config_path,
-                                 (size_t)index, set.param_value) < 0) {
+            (live_config_parameter((size_t)index) ?
+                apply_camera_config(server, (size_t)index, set.param_value) :
+                ca_config_param_save(&server->parameters, server->config_path,
+                                     (size_t)index, set.param_value)) < 0) {
             parameter_status(server, "Parameter write rejected; value unchanged");
-        } else {
+        } else if (!live_config_parameter((size_t)index)) {
             parameter_status(server, "Parameter saved; restart camera-app to apply");
         }
     }
     send_parameter(server, (size_t)index);
+}
+
+/* Camera definition settings use binary little-endian PARAM_EXT values,
+ * independently of the original C-cast PARAM_* configuration service. */
+static void ext_encode(char output[128], unsigned type, float value)
+{
+    uint32_t bits;
+    if (type == MAV_PARAM_EXT_TYPE_REAL32) memcpy(&bits, &value, sizeof(bits));
+    else bits = (uint32_t)(int32_t)value;
+    memset(output, 0, 128);
+    for (unsigned i = 0; i < 4; i++) output[i] = (char)(bits >> (8 * i));
+}
+
+static float ext_decode(const char input[128], unsigned type)
+{
+    uint32_t bits = 0;
+    for (unsigned i = 0; i < 4; i++) bits |= (uint32_t)(uint8_t)input[i] << (8 * i);
+    if (type == MAV_PARAM_EXT_TYPE_REAL32) {
+        float value;
+        memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+    int32_t value;
+    memcpy(&value, &bits, sizeof(value));
+    return (float)value;
+}
+
+static bool camera_parameter_get(struct ca_mavlink_server *server,
+                                  const struct ca_camera_parameter *p, float *value)
+{
+    uint8_t thermal;
+    switch (p->operation) {
+    case CA_CAMERA_CONFIG:
+        *value = (float)ca_config_param_get(&server->settings, (size_t)p->config_index);
+        return true;
+    case CA_CAMERA_MODE: *value = server->camera_mode; return true;
+    case CA_CAMERA_ZOOM: *value = zoom_percent(server); return true;
+    case CA_CAMERA_AUTOFOCUS: *value = 0; return true;
+    case CA_CAMERA_LENS: *value = (float)ca_media_lens(server->media); return true;
+    case CA_CAMERA_SOURCE: *value = ca_media_thermal_main(server->media) ? 1 : 0; return true;
+    case CA_CAMERA_PALETTE:
+        if (ca_media_get_thermal_palette(server->media, &thermal) < 0) return false;
+        *value = thermal;
+        return true;
+    case CA_CAMERA_GAIN:
+        if (ca_media_get_thermal_gain(server->media, &thermal) < 0) return false;
+        *value = thermal;
+        return true;
+    }
+    return false;
+}
+
+static int camera_parameter_set(struct ca_mavlink_server *server,
+                                 const struct ca_camera_parameter *p, float value)
+{
+    switch (p->operation) {
+    case CA_CAMERA_CONFIG:
+        return apply_camera_config(server, (size_t)p->config_index, value);
+    case CA_CAMERA_MODE: server->camera_mode = (uint8_t)value; return 0;
+    case CA_CAMERA_ZOOM: return set_zoom(server, 2, value) == MAV_RESULT_ACCEPTED ? 0 : -1;
+    case CA_CAMERA_AUTOFOCUS:
+        return value == 0 || set_focus(server, FOCUS_TYPE_AUTO, 0) == MAV_RESULT_ACCEPTED ? 0 : -1;
+    case CA_CAMERA_LENS:
+        return ca_media_set_lens(server->media, (enum ca_media_lens)(int)value);
+    case CA_CAMERA_SOURCE: return ca_media_set_thermal_main(server->media, value != 0);
+    case CA_CAMERA_PALETTE: return ca_media_set_thermal_palette(server->media, (uint8_t)value);
+    case CA_CAMERA_GAIN: return ca_media_set_thermal_gain(server->media, (uint8_t)value);
+    }
+    return -1;
+}
+
+static void send_ext_parameter(struct ca_mavlink_server *server,
+                                 const struct route *route, size_t index)
+{
+    struct ca_camera_parameter p;
+    float current;
+    if (!ca_camera_param_info(index, &p) || !camera_parameter_get(server, &p, &current)) return;
+    mavlink_param_ext_value_t value = {
+        .param_count = (uint16_t)ca_camera_param_count(), .param_index = (uint16_t)index,
+        .param_type = (uint8_t)p.type,
+    };
+    memcpy(value.param_id, p.name, strlen(p.name));
+    ext_encode(value.param_value, p.type, current);
+    mavlink_message_t response;
+    mavlink_msg_param_ext_value_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+        &server->encode_status, &response, &value);
+    (void)send_message(server, route, &response);
+}
+
+static void handle_ext_parameter(struct ca_mavlink_server *server,
+                                   const struct route *route, const mavlink_message_t *message)
+{
+    uint8_t system, component;
+    int index = -1;
+    char name[17] = {0};
+    mavlink_param_ext_set_t set = {0};
+    if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
+        mavlink_param_ext_request_list_t request;
+        mavlink_msg_param_ext_request_list_decode(message, &request);
+        system = request.target_system;
+        component = request.target_component;
+    } else if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ) {
+        mavlink_param_ext_request_read_t request;
+        mavlink_msg_param_ext_request_read_decode(message, &request);
+        system = request.target_system;
+        component = request.target_component;
+        memcpy(name, request.param_id, 16);
+        index = request.param_index == -1 ? ca_camera_param_find(name) : request.param_index;
+    } else {
+        mavlink_msg_param_ext_set_decode(message, &set);
+        system = set.target_system;
+        component = set.target_component;
+        memcpy(name, set.param_id, 16);
+        index = ca_camera_param_find(name);
+    }
+    if (!target_matches(server, system, component, CA_CAMERA_COMPONENT_ID)) return;
+    refresh_parameters(server);
+    if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
+        struct ext_parameter_list *list = NULL;
+        for (unsigned i = 0; i < CA_MAVLINK_CLIENTS; i++) {
+            struct ext_parameter_list *candidate = &server->ext_lists[i];
+            if (candidate->active && candidate->system == message->sysid && candidate->component == message->compid) {
+                list = candidate;
+                break;
+            }
+            if (!candidate->active && !list) list = candidate;
+        }
+        if (list) *list = (struct ext_parameter_list){
+            .active = true, .route = *route, .system = message->sysid, .component = message->compid};
+        return;
+    }
+    struct ca_camera_parameter p;
+    bool found = index >= 0 && ca_camera_param_info((size_t)index, &p);
+    if (message->msgid != MAVLINK_MSG_ID_PARAM_EXT_SET) {
+        if (found) send_ext_parameter(server, route, (size_t)index);
+        return;
+    }
+    mavlink_param_ext_ack_t ack = {.param_result = PARAM_ACK_VALUE_UNSUPPORTED};
+    memcpy(ack.param_id, set.param_id, 16);
+    ack.param_type = found ? (uint8_t)p.type : set.param_type;
+    float current = 0;
+    if (found) {
+        (void)camera_parameter_get(server, &p, &current);
+        float requested = ext_decode(set.param_value, set.param_type);
+        if (set.param_type == p.type && ca_camera_param_valid(&p, requested)) {
+            if (p.operation == CA_CAMERA_CONFIG) {
+                /* Pipeline reconfiguration can outlast the normal set timeout. */
+                mavlink_message_t progress;
+                ack.param_result = PARAM_ACK_IN_PROGRESS;
+                ext_encode(ack.param_value, p.type, current);
+                mavlink_msg_param_ext_ack_encode_status(server->system_id,
+                    CA_CAMERA_COMPONENT_ID, &server->encode_status, &progress, &ack);
+                (void)send_message(server, route, &progress);
+            }
+            if (camera_parameter_set(server, &p, requested) == 0) {
+                ack.param_result = PARAM_ACK_ACCEPTED;
+                /* ACK reports the accepted command value. Subsequent reads
+                 * return actual state (including action reset/readback). */
+                current = requested;
+            } else ack.param_result = PARAM_ACK_FAILED;
+        }
+    }
+    if (found) ext_encode(ack.param_value, p.type, current);
+    mavlink_message_t response;
+    mavlink_msg_param_ext_ack_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+        &server->encode_status, &response, &ack);
+    (void)send_message(server, route, &response);
+    if (found && ack.param_result == PARAM_ACK_ACCEPTED && p.operation != CA_CAMERA_CONFIG) {
+        send_camera_settings(server, route);
+    }
+}
+
+static void handle_camera_ftp(struct ca_mavlink_server *server,
+                               const struct route *route, const mavlink_message_t *message)
+{
+    mavlink_file_transfer_protocol_t request, reply = {0};
+    mavlink_msg_file_transfer_protocol_decode(message, &request);
+    if (request.target_network != 0 ||
+        !target_matches(server, request.target_system, request.target_component, CA_CAMERA_COMPONENT_ID)) return;
+    reply.target_system = message->sysid;
+    reply.target_component = message->compid;
+    ca_camera_ftp_reply(&server->ftp, server->definition_xml, server->definition_length,
+                        message->sysid, message->compid, monotonic_ms(), request.payload, reply.payload);
+    mavlink_message_t response;
+    mavlink_msg_file_transfer_protocol_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+        &server->encode_status, &response, &reply);
+    (void)send_message(server, route, &response);
 }
 
 static void process_message(struct ca_mavlink_server *server,
@@ -1613,15 +1871,17 @@ static void process_message(struct ca_mavlink_server *server,
         broadcast_heartbeats(server);
     }
     if (server->system_id == 0U) return;
-    if (server->settings.autorecord == CA_AUTORECORD_WHILE_ARMED &&
-        message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 7U &&
+    if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 7U &&
         message->sysid == server->system_id &&
         message->compid == MAV_COMP_ID_AUTOPILOT1) {
         bool armed = (mavlink_msg_heartbeat_get_base_mode(message) &
                       MAV_MODE_FLAG_SAFETY_ARMED) != 0U;
+        server->have_vehicle_armed = true;
+        server->vehicle_armed = armed;
         /* Reconcile on each matching heartbeat, including the first heartbeat
          * after a restart while airborne. Link loss is not a disarm event. */
-        if (ca_media_recording(server->media) != armed) {
+        if (server->settings.autorecord == CA_AUTORECORD_WHILE_ARMED &&
+            ca_media_recording(server->media) != armed) {
             if (ca_media_set_recording(server->media, armed) < 0) {
                 ca_log("armed-state recording could not %s: %s",
                        armed ? "start" : "stop", strerror(errno));
@@ -1630,6 +1890,16 @@ static void process_message(struct ca_mavlink_server *server,
                        server->system_id, armed ? "armed" : "disarmed");
             }
         }
+    }
+    if (message->msgid == MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL) {
+        handle_camera_ftp(server, route, message);
+        return;
+    }
+    if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST ||
+        message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ ||
+        message->msgid == MAVLINK_MSG_ID_PARAM_EXT_SET) {
+        handle_ext_parameter(server, route, message);
+        return;
     }
     if (message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_LIST ||
         message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_READ ||
@@ -1693,6 +1963,10 @@ static void feed(struct ca_mavlink_server *server,
 static void close_client(struct ca_mavlink_server *server, unsigned slot)
 {
     if (slot >= CA_MAVLINK_CLIENTS || server->clients[slot].fd < 0) return;
+    for (unsigned i = 0; i < CA_MAVLINK_CLIENTS; i++) {
+        if (server->ext_lists[i].route.kind == ROUTE_TCP &&
+            server->ext_lists[i].route.client == slot) server->ext_lists[i].active = false;
+    }
     if (server->have_flight_controller_route && server->flight_controller_route.kind == ROUTE_TCP &&
         server->flight_controller_route.client == slot) server->have_flight_controller_route = false;
     (void)ca_poll_change(server->pollset, CA_POLL_DEL,
@@ -1836,6 +2110,9 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->parameters = config->settings;
     server->config_path = strdup(config->config_path);
     if (server->config_path == NULL) goto fail;
+    server->definition_xml = ca_camera_definition(&server->definition_length);
+    if (server->definition_xml == NULL) goto fail;
+    server->camera_mode = APCAM_HAVE_PHOTO ? 0 : 1;
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = true;
     server->next_image_index = 1;
     server->focus_percent = NAN;
@@ -1961,6 +2238,12 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
             server->parameter_list_active = false;
         }
     }
+    for (unsigned i = 0; i < CA_MAVLINK_CLIENTS; i++) {
+        struct ext_parameter_list *list = &server->ext_lists[i];
+        if (!list->active) continue;
+        send_ext_parameter(server, &list->route, list->next++);
+        if (list->next >= ca_camera_param_count()) list->active = false;
+    }
     update_target_location(server, now);
     if (server->zoom_rate != 0.0f && elapsed > 0.0f) {
         float zoom = ca_media_zoom(server->media) + server->zoom_rate * 2.0f * elapsed;
@@ -2013,6 +2296,7 @@ void ca_mavlink_server_close(struct ca_mavlink_server *server)
     if (server->udp_fd >= 0) close(server->udp_fd);
     if (server->uart_fd >= 0) close(server->uart_fd);
     ca_poll_close(server->pollset);
+    free(server->definition_xml);
     free(server->config_path);
     free(server);
 }

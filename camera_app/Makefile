@@ -86,9 +86,9 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.c) src/main.c \
 	src/config.c \
 	src/log.c \
-	src/media/autofocus.c \
+	src/media/autofocus.c src/media/media.c \
 	src/protocol/mavlink.c \
-	src/protocol/mavlink_server.c \
+	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
 	src/protocol/support_mavlink.c \
 	src/protocol/support_network.c \
 	src/streaming/support_video.c \

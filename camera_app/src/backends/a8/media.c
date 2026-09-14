@@ -4,7 +4,7 @@
 
 #include "camera_app/live_video_server.h"
 #include "camera_app/log.h"
-#include "camera_app/media.h"
+#include "camera_app/media_impl.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/mp4.h"
 #include "camera_app/rtsp.h"
@@ -29,7 +29,7 @@
  * loading it earlier blocks inside the vendor library */
 #define CA_A8_ISP_BIN_AFTER_FRAMES 10U
 
-struct ca_media {
+struct ca_media_impl {
     struct ca_media_config config;
     struct ca_a8_pipeline_config pipeline;
     pthread_t thread;
@@ -87,12 +87,12 @@ static unsigned stream_bitrate(unsigned width, unsigned height)
     return 2048U;
 }
 
-static void consume_frame(struct ca_media *media, unsigned channel,
+static void consume_frame(struct ca_media_impl *media, unsigned channel,
                           uint8_t *data, size_t length, uint64_t pts)
 {
     enum ca_video_codec codec = media->pipeline.streams[channel].codec;
     bool key_frame = video_key_frame(codec, data, length);
-    float hfov_deg = ca_media_hfov(media, false);
+    float hfov_deg = ca_media_impl_hfov(media, false);
 
     if (!atomic_exchange(&media->encoded_frame_logged[channel], true)) {
         ca_log("VENC channel %u first encoded frame bytes=%zu key=%u", channel,
@@ -106,11 +106,13 @@ static void consume_frame(struct ca_media *media, unsigned channel,
                                             length, pts, key_frame, hfov_deg);
         if (channel == CA_A8_MAIN_VENC && !media->isp_bin_loaded &&
             ++media->main_frames >= CA_A8_ISP_BIN_AFTER_FRAMES) {
+            pthread_mutex_lock(&media->lock);
             media->isp_bin_loaded = true;
             if (ca_a8_load_isp_bin(CA_A8_ISP_BIN) == 0) {
                 ca_log("ISP tuning loaded from %s", CA_A8_ISP_BIN);
             }
             (void)ca_a8_apply_isp_config(&media->config.settings);
+            pthread_mutex_unlock(&media->lock);
         }
         return;
     }
@@ -132,7 +134,7 @@ static void consume_frame(struct ca_media *media, unsigned channel,
 
 static void *capture_thread(void *opaque)
 {
-    struct ca_media *media = opaque;
+    struct ca_media_impl *media = opaque;
     struct pollfd items[CA_A8_VENC_COUNT];
 
     for (unsigned channel = 0; channel < CA_A8_VENC_COUNT; channel++) {
@@ -160,7 +162,7 @@ static void *capture_thread(void *opaque)
     return NULL;
 }
 
-static int make_recording_path(struct ca_media *media)
+static int make_recording_path(struct ca_media_impl *media)
 {
     time_t now = time(NULL);
     struct tm local;
@@ -194,7 +196,7 @@ static int make_recording_path(struct ca_media *media)
     return -1;
 }
 
-static void media_cleanup(struct ca_media *media)
+static void media_cleanup(struct ca_media_impl *media)
 {
     if (media->thread_started) {
         atomic_store(&media->stop, true);
@@ -215,9 +217,9 @@ static void media_cleanup(struct ca_media *media)
     }
 }
 
-int ca_media_open(struct ca_media **result, const struct ca_media_config *config)
+int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_config *config)
 {
-    struct ca_media *media;
+    struct ca_media_impl *media;
     struct ca_a8_stream *streams;
     const char *stage = "argument validation";
 
@@ -259,7 +261,7 @@ int ca_media_open(struct ca_media **result, const struct ca_media_config *config
     media->pipeline_open = true;
     if (config->settings.orientation == CA_MOUNT_INVERTED) {
         stage = "inverted output configuration";
-        if (ca_media_set_inverted(media, true) < 0) goto fail;
+        if (ca_media_impl_set_inverted(media, true) < 0) goto fail;
     }
     stage = "RTSP startup";
     if (ca_rtsp_open(&media->rtsp, config->rtsp_port, "video1",
@@ -311,7 +313,7 @@ fail:
     return -1;
 }
 
-int ca_media_set_recording(struct ca_media *media, bool active)
+int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
 {
     int result = 0;
 
@@ -348,17 +350,17 @@ int ca_media_set_recording(struct ca_media *media, bool active)
     return result;
 }
 
-bool ca_media_recording(const struct ca_media *media)
+bool ca_media_impl_recording(const struct ca_media_impl *media)
 {
     return media != NULL && atomic_load(&media->recording);
 }
 
-const char *ca_media_recording_path(const struct ca_media *media)
+const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
 {
     return media != NULL ? media->recording_path : "";
 }
 
-int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
+int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
 {
     uint8_t *jpeg = NULL;
     size_t length = 0;
@@ -393,7 +395,7 @@ int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
     return result;
 }
 
-int ca_media_set_zoom(struct ca_media *media, float zoom)
+int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
 {
     if (media == NULL || zoom < 1.0f || zoom > CA_A8_MAX_ZOOM) {
         errno = EINVAL;
@@ -410,17 +412,17 @@ int ca_media_set_zoom(struct ca_media *media, float zoom)
     return 0;
 }
 
-float ca_media_hfov(const struct ca_media *media, bool thermal)
+float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
 {
     return media != NULL && !thermal ? atomic_load(&media->visible_hfov_deg) : 0.0f;
 }
 
-float ca_media_zoom(const struct ca_media *media)
+float ca_media_impl_zoom(const struct ca_media_impl *media)
 {
     return media != NULL ? media->zoom : 1.0f;
 }
 
-int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
+int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
 {
     /* one lens; the SIYI image-slot commands still need to succeed */
     if (media == NULL || (lens != CA_MEDIA_LENS_WIDE &&
@@ -431,13 +433,13 @@ int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
     return 0;
 }
 
-enum ca_media_lens ca_media_lens(const struct ca_media *media)
+enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *media)
 {
     (void)media;
     return CA_MEDIA_LENS_WIDE;
 }
 
-int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
+int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_main)
 {
     if (media == NULL) {
         errno = EINVAL;
@@ -450,13 +452,13 @@ int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
     return 0;
 }
 
-bool ca_media_thermal_main(const struct ca_media *media)
+bool ca_media_impl_thermal_main(const struct ca_media_impl *media)
 {
     (void)media;
     return false;
 }
 
-int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y)
+int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
 {
     (void)x;
     (void)y;
@@ -468,7 +470,7 @@ int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y)
     return 0;
 }
 
-int ca_media_manual_focus(struct ca_media *media, int direction)
+int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
 {
     if (media == NULL || direction < -1 || direction > 1) {
         errno = EINVAL;
@@ -477,7 +479,7 @@ int ca_media_manual_focus(struct ca_media *media, int direction)
     return 0;
 }
 
-int ca_media_set_focus_percent(struct ca_media *media, float percent)
+int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
 {
     if (media == NULL || percent < 0.0f || percent > 100.0f) {
         errno = EINVAL;
@@ -486,7 +488,7 @@ int ca_media_set_focus_percent(struct ca_media *media, float percent)
     return 0;
 }
 
-bool ca_media_thermal_range(struct ca_media *media,
+bool ca_media_impl_thermal_range(struct ca_media_impl *media,
                             struct ca_thermal_range *range)
 {
     (void)media;
@@ -494,7 +496,7 @@ bool ca_media_thermal_range(struct ca_media *media,
     return false;
 }
 
-int ca_media_get_thermal_gain(struct ca_media *media, uint8_t *gain)
+int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
 {
     if (media == NULL || gain == NULL) {
         errno = EINVAL;
@@ -504,7 +506,7 @@ int ca_media_get_thermal_gain(struct ca_media *media, uint8_t *gain)
     return 0;
 }
 
-int ca_media_set_thermal_gain(struct ca_media *media, uint8_t gain)
+int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
 {
     if (media == NULL || gain > 1U) {
         errno = EINVAL;
@@ -514,7 +516,7 @@ int ca_media_set_thermal_gain(struct ca_media *media, uint8_t gain)
     return 0;
 }
 
-int ca_media_get_thermal_palette(struct ca_media *media, uint8_t *palette)
+int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *palette)
 {
     if (media == NULL || palette == NULL) {
         errno = EINVAL;
@@ -524,7 +526,7 @@ int ca_media_get_thermal_palette(struct ca_media *media, uint8_t *palette)
     return 0;
 }
 
-int ca_media_set_thermal_palette(struct ca_media *media, uint8_t palette)
+int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palette)
 {
     if (media == NULL || palette > 11U || palette == 1U) {
         errno = EINVAL;
@@ -534,7 +536,7 @@ int ca_media_set_thermal_palette(struct ca_media *media, uint8_t palette)
     return 0;
 }
 
-int ca_media_set_inverted(struct ca_media *media, bool inverted)
+int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
 {
     if (media == NULL) {
         errno = EINVAL;
@@ -553,7 +555,7 @@ int ca_media_set_inverted(struct ca_media *media, bool inverted)
     return 0;
 }
 
-void ca_media_close(struct ca_media *media)
+void ca_media_impl_close(struct ca_media_impl *media)
 {
     if (media == NULL) return;
     media_cleanup(media);
@@ -562,8 +564,21 @@ void ca_media_close(struct ca_media *media)
     free(media);
 }
 
-unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)
+unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal)
 {
     (void)media;
     return thermal ? APCAM_THERMAL_FRAME_RATE : APCAM_FRAME_RATE;
 }
+
+int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
+{
+    pthread_mutex_lock(&media->lock);
+    if (!media->isp_bin_loaded) { pthread_mutex_unlock(&media->lock); errno = EAGAIN; return -1; }
+    int result = ca_a8_apply_isp_config(settings);
+    if (result == 0) ca_config_copy_image(&media->config.settings, settings);
+    pthread_mutex_unlock(&media->lock);
+    if (result != 0) { errno = EIO; return -1; }
+    return 0;
+}
+
+bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }

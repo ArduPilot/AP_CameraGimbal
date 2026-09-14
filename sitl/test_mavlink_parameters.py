@@ -133,7 +133,7 @@ def mavproxy_checks(endpoint, directory, observer):
             cli.sendline("param fetch IMG_BRIGHTNESS")
             cli.expect(r"IMG_BRIGHTNESS\s+=\s+50(?:\.0+)?")
             cli.sendline("param set IMG_BRIGHTNESS 63")
-            cli.expect("Parameter saved; restart camera-app to apply")
+            cli.expect("Parameter applied and saved")
             cli.sendline("param fetch IMG_BRIGHTNESS")
             cli.expect(r"IMG_BRIGHTNESS\s+=\s+63(?:\.0+)?")
             assert read(observer, "IMG_BRIGHTNESS").param_value == 63

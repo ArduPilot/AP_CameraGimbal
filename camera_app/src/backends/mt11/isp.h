@@ -4,6 +4,6 @@
 #include "camera_app/config.h"
 #include "sample_comm.h"
 
-td_s32 ca_mt11_apply_isp_config(const struct ca_config *config);
+td_s32 ca_mt11_apply_isp_config(const struct ca_config *config, bool live);
 
 #endif

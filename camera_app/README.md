@@ -182,8 +182,8 @@ Automatic system-ID selection still uses the first flight-controller heartbeat.
 An already-armed first heartbeat starts recording, including after an app restart.
 Missing heartbeats do not stop recording. Each matching heartbeat reconciles
 recording with armed state, so a manual recording change in While Armed mode
-lasts only until the next matching heartbeat. Save and restart the app to apply
-a changed mode, as with other recording settings.
+lasts only until the next matching heartbeat. Web UI changes require a restart;
+MAVLink recording-policy changes apply immediately.
 Recording transitions also broadcast MAVLink `CAMERA_CAPTURE_STATUS`; its elapsed
 timer covers automatic and web-triggered recording as well as MAVLink commands.
 
@@ -414,14 +414,13 @@ through the web UI/INI. The six additional proxy parameters are listed in
 | `IMG_METERING` | `image.metering` | 0 average, 1 center, 2 spot |
 | `IMG_WHITE_BAL` | `image.white_balance` | 0 auto, 1 daylight, 2 cloudy, 3 fluorescent, 4 incandescent |
 
-Writes validate ranges and enum choices, persist atomically to the same INI
-file as the web UI, and return the stored value. Invalid writes return the
-unchanged value and a status message. **Restart camera-app to apply saved
-settings**, as with the web UI's Save action; this includes `MAV_SYSID` and
-transport changes, so the acknowledgment still arrives on the original link
-and system ID. Parameter reads reflect saved configuration, including web
-edits. Launcher environment overrides for TCP/UDP ports still take precedence
-on restart. Backend-specific limitations described above still apply.
+Writes validate ranges and enum choices and persist atomically to the same INI
+file as the web UI. Camera-definition settings described below also apply
+immediately through ordinary `PARAM_SET`. Other settings, including `MAV_SYSID`
+and transports, require a restart, preserving the original acknowledgment link
+and system ID. Parameter reads reflect saved configuration, including web edits;
+`PARAM_EXT` reads report running camera state. Launcher environment overrides
+for TCP/UDP ports take precedence on restart.
 
 For a camera using system ID 42, connect MAVProxy to component 100:
 
@@ -438,7 +437,7 @@ param fetch IMG_BRIGHTNESS
 ```
 
 `param fetch NAME` performs a wire read; `param show NAME` displays MAVProxy's
-cached value. Use the web UI to restart camera-app after saving changes. In
+cached value. Restart the app for settings reported as requiring a restart. In
 automatic mode, a flight controller must send its heartbeat first.
 
 Implemented camera protocol coverage includes discovery and camera
@@ -854,3 +853,83 @@ package name must retain the `MT11_FW_*.bin` form for the camera's update
 scanner. As with a vendor update, loss of power while kernel or rootfs is being
 erased remains a recovery risk; the builder does not install or reboot the
 camera.
+
+## Camera definition files
+
+The camera advertises `mftp://[;comp=100]/camera.xml` in
+`CAMERA_INFORMATION.cam_definition_uri`. The XML is available directly over
+MAVLink FTP, including TCP, UDP, UART and SupportProxy links. It needs no web
+login, internet connection or separately hosted definition file. The FTP service
+only serves this immutable definition; it does not expose the camera filesystem.
+Directory listings show `camera.xml` and its byte size at `/`, supporting both
+standard listings and MAVProxy's listing-with-time extension (unknown time).
+In MAVProxy, use `set target_component 100` followed by `ftp list` to discover
+the exported files; `camera select` alone does not change the FTP module's target.
+When connecting through an autopilot, forwarding must be enabled on its camera
+link (`MAVn_OPTIONS` must not have the `NO_FORWARD` bit set).
+
+`make camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
+for inspection or loading into a GCS. `make release` also generates these files.
+The exporter and firmware use the same C metadata in
+`src/protocol/camera_definition.c`, with resolution/codec options from the
+configuration validator and capability flags from `include/apcam/target_*.h`.
+There are no independently maintained XML copies to become inconsistent with a
+camera or its simulator. Increment `CA_CAMERA_DEFINITION_VERSION` when changing
+the definition metadata so ground stations invalidate cached definitions.
+
+The camera component implements binary little-endian `PARAM_EXT_REQUEST_LIST`,
+`PARAM_EXT_REQUEST_READ`, `PARAM_EXT_VALUE`, `PARAM_EXT_SET` and `PARAM_EXT_ACK`.
+Names, types and permitted values match the XML. Lists are paced, reads accept
+names or indices, and writes reject unsupported types, out-of-range values and
+non-finite floats. The original `PARAM_*` service remains available separately.
+
+Live controls include camera mode, absolute zoom on MT11/A8, MT11 RGB lens and
+video-source selection, thermal palette/gain and autofocus. Live controls report
+running state and are not persisted. Autofocus is an action that returns to Idle
+when read. ZR10 has native rate zoom without reliable absolute readback, so its
+XML does not advertise absolute zoom. A8 has a fixed-focus lens; focus commands
+are compatibility no-ops and are not advertised. Z1-Mini advertises video mode
+only, its available recording/stream profiles, and automatic recording.
+
+Recording policy, photo scope and supported image settings apply immediately
+and are persisted. Selecting While Armed uses the latest selected-system,
+component-1 heartbeat, including when the vehicle was already armed before the
+setting changed. Selecting Enabled starts recording; selecting Disabled stops it.
+
+Stream/recording resolution and codec changes reopen the media pipeline without
+restarting camera-app or disconnecting MAVLink. Video clients may need to
+reconnect. Stop recording before changing these settings: changes during a
+recording are rejected. Failed application or persistence returns a failed ACK
+and attempts to restore the previous configuration. Image controls are available
+on MT11/A8; thermal controls and photo scope are available only on MT11. SITL
+simple streams support codec changes; the 3D terrain renderer supports H.264
+only and rejects H.265 rather than reporting an unapplied setting.
+
+With a MAVProxy version supporting camera definitions:
+
+```text
+module load ftp
+module load camera
+camera select 42:100
+camera definition
+camera params
+camera custom
+camera param REC_AUTOSTART 2
+camera param CAM_ZOOM 25
+```
+
+Replace `42` with the selected vehicle system ID. Definition discovery and
+parameter fetch are automatic once camera information is received. `camera
+custom` opens the settings dialog; the CLI commands exercise the same controls.
+`camera definition build/camera-definitions/mt11.xml` can load a generated local
+copy instead of downloading it.
+
+Run `make camera-definition-test` for XML capability and FTP protocol checks.
+After building the four SITL targets, `python3 sitl/test_camera_definition.py`
+checks downloads, get/list/set, live state and persistent settings using both
+pymavlink and the installed MAVProxy CLI. It uses isolated ports and runtime
+files, with transcripts under `build/camera-definition-test/`.
+
+The format and transport follow the [MAVLink camera definition specification](https://mavlink.io/en/services/camera_def.html),
+[extended parameter protocol](https://mavlink.io/en/services/parameter_ext.html)
+and [FTP protocol](https://mavlink.io/en/services/ftp.html).

@@ -35,7 +35,8 @@ static td_s32 set_exposure(ot_vi_pipe pipe, const struct ca_config *config)
     td_s32 result = ss_mpi_isp_get_exposure_attr(pipe, &attr);
     if (result != TD_SUCCESS) return result;
 
-    attr.op_type = OT_OP_MODE_MANUAL;
+    attr.op_type = config->iso == CA_ISO_AUTO && config->shutter == CA_SHUTTER_AUTO
+        ? OT_OP_MODE_AUTO : OT_OP_MODE_MANUAL;
     attr.auto_attr.ev_bias = ev_bias(config->exposure_compensation);
     if (config->iso == CA_ISO_AUTO) {
         attr.manual_attr.a_gain_op_type = OT_OP_MODE_AUTO;
@@ -99,7 +100,7 @@ static td_s32 set_white_balance(ot_vi_pipe pipe, enum ca_white_balance mode)
     return ss_mpi_isp_set_wb_attr(pipe, &attr);
 }
 
-td_s32 ca_mt11_apply_isp_config(const struct ca_config *config)
+td_s32 ca_mt11_apply_isp_config(const struct ca_config *config, bool live)
 {
     if (config == NULL) return TD_FAILURE;
     for (ot_vi_pipe pipe = CA_MT11_ZOOM_PIPE;
@@ -109,7 +110,7 @@ td_s32 ca_mt11_apply_isp_config(const struct ca_config *config)
                                config->iso != CA_ISO_AUTO ||
                                config->shutter != CA_SHUTTER_AUTO;
         if ((result = set_csc(pipe, config)) != TD_SUCCESS ||
-            (custom_exposure &&
+            ((custom_exposure || live) &&
              (result = set_exposure(pipe, config)) != TD_SUCCESS) ||
             (result = set_metering(pipe, config->metering)) != TD_SUCCESS ||
             (result = set_white_balance(pipe, config->white_balance)) !=

@@ -26,46 +26,41 @@ enum config_value_kind {
     CONFIG_UINT,
 };
 
-struct config_option {
-    const char *name;
-    int value;
-};
-
 struct config_field {
     const char *section;
     const char *key;
     enum config_value_kind kind;
     size_t offset;
     size_t size;
-    const struct config_option *options;
+    const struct ca_config_option *options;
     size_t option_count;
     int minimum;
     int maximum;
     const char *param_name;
 };
 
-static const struct config_option photo_scope_options[] = {
+static const struct ca_config_option photo_scope_options[] = {
     {"thermal", CA_PHOTO_SCOPE_THERMAL},
     {"all", CA_PHOTO_SCOPE_ALL},
 };
 
-static const struct config_option autorecord_options[] = {
+static const struct ca_config_option autorecord_options[] = {
     {"false", CA_AUTORECORD_DISABLED}, {"true", CA_AUTORECORD_ENABLED},
     {"while_armed", CA_AUTORECORD_WHILE_ARMED},
 };
 
-static const struct config_option orientation_options[] = {
+static const struct ca_config_option orientation_options[] = {
     {"auto", CA_MOUNT_AUTO}, {"upright", CA_MOUNT_UPRIGHT},
     {"inverted", CA_MOUNT_INVERTED},
 };
-static const struct config_option uart_protocol_options[] = {
+static const struct ca_config_option uart_protocol_options[] = {
     {"none", CA_UART_NONE},
 #if APCAM_HAVE_EXTERNAL_UART
     {"siyi", CA_UART_SIYI},
 #endif
     {"mavlink", CA_UART_MAVLINK},
 };
-static const struct config_option main_resolution_options[] = {
+static const struct ca_config_option main_resolution_options[] = {
 #if APCAM_MAIN_RESOLUTIONS & APCAM_RES_MASK_720P
     {"1280x720", CA_VIDEO_720P},
 #endif
@@ -79,7 +74,7 @@ static const struct config_option main_resolution_options[] = {
     {"3840x2160", CA_VIDEO_2160P},
 #endif
 };
-static const struct config_option sub_resolution_options[] = {
+static const struct ca_config_option sub_resolution_options[] = {
 #if APCAM_SUB_RESOLUTIONS & APCAM_RES_MASK_720P
     {"1280x720", CA_VIDEO_720P},
 #endif
@@ -93,7 +88,7 @@ static const struct config_option sub_resolution_options[] = {
     {"3840x2160", CA_VIDEO_2160P},
 #endif
 };
-static const struct config_option recording_resolution_options[] = {
+static const struct ca_config_option recording_resolution_options[] = {
 #if APCAM_RECORDING_RESOLUTIONS & APCAM_RES_MASK_720P
     {"1280x720", CA_VIDEO_720P},
 #endif
@@ -107,13 +102,13 @@ static const struct config_option recording_resolution_options[] = {
     {"3840x2160", CA_VIDEO_2160P},
 #endif
 };
-static const struct config_option codec_options[] = {
+static const struct ca_config_option codec_options[] = {
     { "h264", CA_VIDEO_H264 },
 #if APCAM_STREAM_CODECS & 2
     { "h265", CA_VIDEO_H265 },
 #endif
 };
-static const struct config_option palette_options[] = {
+static const struct ca_config_option palette_options[] = {
     {"white_hot", CA_PALETTE_WHITE_HOT}, {"sepia", CA_PALETTE_SEPIA},
     {"ironbow", CA_PALETTE_IRONBOW}, {"rainbow", CA_PALETTE_RAINBOW},
     {"night", CA_PALETTE_NIGHT}, {"aurora", CA_PALETTE_AURORA},
@@ -121,23 +116,23 @@ static const struct config_option palette_options[] = {
     {"medical", CA_PALETTE_MEDICAL}, {"black_hot", CA_PALETTE_BLACK_HOT},
     {"glory_hot", CA_PALETTE_GLORY_HOT},
 };
-static const struct config_option iso_options[] = {
+static const struct ca_config_option iso_options[] = {
     {"auto", CA_ISO_AUTO}, {"100", CA_ISO_100}, {"200", CA_ISO_200},
     {"400", CA_ISO_400}, {"800", CA_ISO_800}, {"1600", CA_ISO_1600},
     {"3200", CA_ISO_3200},
 };
-static const struct config_option shutter_options[] = {
+static const struct ca_config_option shutter_options[] = {
     {"auto", CA_SHUTTER_AUTO}, {"1/30", CA_SHUTTER_1_30},
     {"1/50", CA_SHUTTER_1_50}, {"1/100", CA_SHUTTER_1_100},
     {"1/250", CA_SHUTTER_1_250}, {"1/500", CA_SHUTTER_1_500},
     {"1/750", CA_SHUTTER_1_750}, {"1/1000", CA_SHUTTER_1_1000},
     {"1/2000", CA_SHUTTER_1_2000},
 };
-static const struct config_option metering_options[] = {
+static const struct ca_config_option metering_options[] = {
     {"average", CA_METERING_AVERAGE}, {"center", CA_METERING_CENTER},
     {"spot", CA_METERING_SPOT},
 };
-static const struct config_option wb_options[] = {
+static const struct ca_config_option wb_options[] = {
     {"auto", CA_WB_AUTO}, {"daylight", CA_WB_DAYLIGHT},
     {"cloudy", CA_WB_CLOUDY}, {"fluorescent", CA_WB_FLUORESCENT},
     {"incandescent", CA_WB_INCANDESCENT},
@@ -600,6 +595,16 @@ int ca_config_param_find(const char *name)
     return -1;
 }
 
+size_t ca_config_param_options(size_t index, const struct ca_config_option **options,
+                                int *minimum, int *maximum)
+{
+    const struct config_field *field = param_field(index);
+    *options = field ? field->options : NULL;
+    *minimum = field ? field->minimum : 0;
+    *maximum = field ? (field->kind == CONFIG_BOOL ? 1 : field->maximum) : 0;
+    return field ? field->option_count : 0;
+}
+
 int ca_config_param_get(const struct ca_config *config, size_t index)
 {
     const struct config_field *field = param_field(index);
@@ -745,6 +750,52 @@ int ca_config_param_save(struct ca_config *config, const char *path,
         return -1;
     }
     if (save_field(path, field, text) < 0) return -1;
+    *config = updated;
+    return 0;
+}
+
+#define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
+    X(iso) X(shutter) X(metering) X(white_balance)
+
+bool ca_config_image_equal(const struct ca_config *a, const struct ca_config *b)
+{
+#define SAME(field) if (a->field != b->field) return false;
+    IMAGE_FIELDS(SAME)
+#undef SAME
+    return true;
+}
+
+void ca_config_copy_image(struct ca_config *destination, const struct ca_config *source)
+{
+#define COPY(field) destination->field = source->field;
+    IMAGE_FIELDS(COPY)
+#undef COPY
+}
+
+int ca_config_param_assign(struct ca_config *config, size_t index, float value)
+{
+    const struct config_field *field = param_field(index);
+    if (!field || !isfinite(value) || value < -65535 || value > 65535 || value != truncf(value)) {
+        errno = EINVAL;
+        return -1;
+    }
+    int selected = (int)value;
+    char number[32];
+    snprintf(number, sizeof(number), "%d", selected);
+    const char *text = number;
+    if (field->kind == CONFIG_ENUM) {
+        text = NULL;
+        for (size_t i = 0; i < field->option_count; i++) {
+            if (field->options[i].value == selected) text = field->options[i].name;
+        }
+    } else if (field->kind == CONFIG_BOOL) {
+        text = selected == 0 ? "false" : selected == 1 ? "true" : NULL;
+    }
+    struct ca_config updated = *config;
+    if (!text || set_field(&updated, field, text) < 0 || !support_valid(&updated.support)) {
+        errno = EINVAL;
+        return -1;
+    }
     *config = updated;
     return 0;
 }

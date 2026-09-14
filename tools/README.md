@@ -1,5 +1,9 @@
 # Tools
 
+- `build_camera_definitions.py` exports each target's built-in camera definition
+  XML using the host compiler. `make camera-definitions` writes these to
+  `build/camera-definitions/`; the firmware serves the same XML over MAVFTP.
+
 - `install_build_environment.py` installs x86_64 Debian/Ubuntu hardware-build
   prerequisites and fetches pinned A8/ZR10/Z1-Mini compilers and SDKs. It creates
   an isolated Python environment and `build/environment.mk` for top-level Make.

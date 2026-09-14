@@ -136,12 +136,23 @@ struct ca_config {
     unsigned mavlink_udp_port;
 };
 
+bool ca_config_image_equal(const struct ca_config *a, const struct ca_config *b);
+void ca_config_copy_image(struct ca_config *destination, const struct ca_config *source);
+/* Validate and update a copy of the configuration without writing the INI. */
+int ca_config_param_assign(struct ca_config *config, size_t index, float value);
 void ca_config_defaults(struct ca_config *config);
 int ca_config_load(struct ca_config *config, const char *path,
                    char *error, size_t error_size);
 /* Numeric configuration values use stable MAVLink names and enum ordinals.
- * Writes persist to the INI; all settings take effect on application restart. */
+ * Writes persist to the INI; the caller applies supported runtime settings. */
 size_t ca_config_param_count(void);
+struct ca_config_option {
+    const char *name;
+    int value;
+};
+/* Metadata from the same table used to validate persistent parameter writes. */
+size_t ca_config_param_options(size_t index, const struct ca_config_option **options,
+                                int *minimum, int *maximum);
 const char *ca_config_param_name(size_t index);
 int ca_config_param_find(const char *name);
 int ca_config_param_get(const struct ca_config *config, size_t index);

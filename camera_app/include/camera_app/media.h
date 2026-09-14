@@ -27,6 +27,11 @@ struct ca_media_config {
     struct ca_config settings;
 };
 
+/* These calls run on the app/control thread. The handle stays valid across
+ * pipeline rebuilds, including all backend callback opaque pointers. */
+int ca_media_configure(struct ca_media *media, const struct ca_config *settings);
+const struct ca_config *ca_media_settings(const struct ca_media *media);
+bool ca_media_ready(const struct ca_media *media);
 int ca_media_open(struct ca_media **media, const struct ca_media_config *config);
 int ca_media_set_recording(struct ca_media *media, bool active);
 bool ca_media_recording(const struct ca_media *media);

@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 #include "pipeline.h"
 #include "native.h"
-#include "camera_app/media.h"
+#include "camera_app/media_impl.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/mp4.h"
@@ -21,7 +21,7 @@
 #include "apcam/target.h"
 #define Z1_HFOV_DEG APCAM_LENS1_FOV_H
 
-struct ca_media {
+struct ca_media_impl {
     struct ca_media_config config;
     atomic_bool stop, ready, recording;
     pthread_t thread;
@@ -42,7 +42,7 @@ static uint64_t monotonic_us(void)
 }
 static void consume_native(void *opaque, const uint8_t *data, size_t n, uint64_t pts, bool key, unsigned stream)
 {
-    struct ca_media *m = opaque;
+    struct ca_media_impl *m = opaque;
     if (!m->have_pts) { m->pts_offset = monotonic_us() - pts; m->have_pts = true; }
     pts += m->pts_offset;
     if (stream > 1) return;
@@ -74,7 +74,7 @@ static void consume(void *opaque, const uint8_t *data, size_t n, uint64_t pts, b
 }
 static void *receiver(void *opaque)
 {
-    struct ca_media *m = opaque;
+    struct ca_media_impl *m = opaque;
     /* Explicit opt-in during AX bring-up. Keep SDK global state and callbacks
      * in an exclusive child process, separate from the direct MCU controller. */
     const char *native_path = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
@@ -102,7 +102,7 @@ static void *receiver(void *opaque)
     }
     return NULL;
 }
-int ca_media_open(struct ca_media **out, const struct ca_media_config *c)
+int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config *c)
 {
     if (!out || !c || !c->backend || strcmp(c->backend, "z1mini") ||
         !c->record_root || !c->capture_root) { errno = EINVAL; return -1; }
@@ -115,7 +115,7 @@ int ca_media_open(struct ca_media **out, const struct ca_media_config *c)
          !(native && c->settings.recording_resolution == CA_VIDEO_2160P)) ||
         c->settings.main_codec != CA_VIDEO_H264 || c->settings.sub_codec != CA_VIDEO_H264 ||
         c->settings.orientation == CA_MOUNT_INVERTED) { errno = ENOTSUP; return -1; }
-    struct ca_media *m = calloc(1, sizeof(*m));
+    struct ca_media_impl *m = calloc(1, sizeof(*m));
     if (!m) return -1;
     m->config = *c;
     pthread_mutex_init(&m->lock, NULL);
@@ -136,9 +136,9 @@ int ca_media_open(struct ca_media **out, const struct ca_media_config *c)
            c->settings.recording_resolution == CA_VIDEO_2160P ? "4K" : "1080p");
     *out = m; return 0;
 fail:;
-    int saved = errno; ca_media_close(m); errno = saved; return -1;
+    int saved = errno; ca_media_impl_close(m); errno = saved; return -1;
 }
-int ca_media_set_recording(struct ca_media *m, bool active)
+int ca_media_impl_set_recording(struct ca_media_impl *m, bool active)
 {
     if (!m) { errno = EINVAL; return -1; }
     pthread_mutex_lock(&m->lock);
@@ -180,28 +180,28 @@ int ca_media_set_recording(struct ca_media *m, bool active)
 done:
     pthread_mutex_unlock(&m->lock); return result;
 }
-bool ca_z1_media_ready(const struct ca_media *m) { return m && atomic_load(&m->ready); }
-bool ca_media_recording(const struct ca_media *m) { return m && atomic_load(&m->recording); }
-const char *ca_media_recording_path(const struct ca_media *m) { return m ? m->path : ""; }
+bool ca_media_impl_ready(const struct ca_media_impl *m) { return m && atomic_load(&m->ready); }
+bool ca_media_impl_recording(const struct ca_media_impl *m) { return m && atomic_load(&m->recording); }
+const char *ca_media_impl_recording_path(const struct ca_media_impl *m) { return m ? m->path : ""; }
 static int unsupported(void) { errno = ENOTSUP; return -1; }
-int ca_media_set_zoom(struct ca_media *m, float z) { (void)m; return z == 1 ? 0 : unsupported(); }
-float ca_media_zoom(const struct ca_media *m) { (void)m; return 1; }
-float ca_media_hfov(const struct ca_media *m, bool thermal) { (void)m; return thermal ? NAN : Z1_HFOV_DEG; }
-int ca_media_set_lens(struct ca_media *m, enum ca_media_lens l) { (void)m; return l == CA_MEDIA_LENS_WIDE ? 0 : unsupported(); }
-enum ca_media_lens ca_media_lens(const struct ca_media *m) { (void)m; return CA_MEDIA_LENS_WIDE; }
-int ca_media_set_thermal_main(struct ca_media *m, bool t) { (void)m; return t ? unsupported() : 0; }
-bool ca_media_thermal_main(const struct ca_media *m) { (void)m; return false; }
-int ca_media_autofocus(struct ca_media *m, uint16_t x, uint16_t y) { (void)m; (void)x; (void)y; return unsupported(); }
-int ca_media_manual_focus(struct ca_media *m, int d) { (void)m; (void)d; return unsupported(); }
-int ca_media_set_focus_percent(struct ca_media *m, float p) { (void)m; (void)p; return unsupported(); }
-bool ca_media_thermal_range(struct ca_media *m, struct ca_thermal_range *r) { (void)m; (void)r; return false; }
-int ca_media_capture_photo(struct ca_media *m, enum ca_photo_scope s) { (void)m; (void)s; return unsupported(); }
-int ca_media_get_thermal_gain(struct ca_media *m, uint8_t *g) { (void)m; (void)g; return unsupported(); }
-int ca_media_set_thermal_gain(struct ca_media *m, uint8_t g) { (void)m; (void)g; return unsupported(); }
-int ca_media_get_thermal_palette(struct ca_media *m, uint8_t *p) { (void)m; (void)p; return unsupported(); }
-int ca_media_set_thermal_palette(struct ca_media *m, uint8_t p) { (void)m; (void)p; return unsupported(); }
-int ca_media_set_inverted(struct ca_media *m, bool i) { (void)m; return i ? unsupported() : 0; }
-void ca_media_close(struct ca_media *m)
+int ca_media_impl_set_zoom(struct ca_media_impl *m, float z) { (void)m; return z == 1 ? 0 : unsupported(); }
+float ca_media_impl_zoom(const struct ca_media_impl *m) { (void)m; return 1; }
+float ca_media_impl_hfov(const struct ca_media_impl *m, bool thermal) { (void)m; return thermal ? NAN : Z1_HFOV_DEG; }
+int ca_media_impl_set_lens(struct ca_media_impl *m, enum ca_media_lens l) { (void)m; return l == CA_MEDIA_LENS_WIDE ? 0 : unsupported(); }
+enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *m) { (void)m; return CA_MEDIA_LENS_WIDE; }
+int ca_media_impl_set_thermal_main(struct ca_media_impl *m, bool t) { (void)m; return t ? unsupported() : 0; }
+bool ca_media_impl_thermal_main(const struct ca_media_impl *m) { (void)m; return false; }
+int ca_media_impl_autofocus(struct ca_media_impl *m, uint16_t x, uint16_t y) { (void)m; (void)x; (void)y; return unsupported(); }
+int ca_media_impl_manual_focus(struct ca_media_impl *m, int d) { (void)m; (void)d; return unsupported(); }
+int ca_media_impl_set_focus_percent(struct ca_media_impl *m, float p) { (void)m; (void)p; return unsupported(); }
+bool ca_media_impl_thermal_range(struct ca_media_impl *m, struct ca_thermal_range *r) { (void)m; (void)r; return false; }
+int ca_media_impl_capture_photo(struct ca_media_impl *m, enum ca_photo_scope s) { (void)m; (void)s; return unsupported(); }
+int ca_media_impl_get_thermal_gain(struct ca_media_impl *m, uint8_t *g) { (void)m; (void)g; return unsupported(); }
+int ca_media_impl_set_thermal_gain(struct ca_media_impl *m, uint8_t g) { (void)m; (void)g; return unsupported(); }
+int ca_media_impl_get_thermal_palette(struct ca_media_impl *m, uint8_t *p) { (void)m; (void)p; return unsupported(); }
+int ca_media_impl_set_thermal_palette(struct ca_media_impl *m, uint8_t p) { (void)m; (void)p; return unsupported(); }
+int ca_media_impl_set_inverted(struct ca_media_impl *m, bool i) { (void)m; return i ? unsupported() : 0; }
+void ca_media_impl_close(struct ca_media_impl *m)
 {
     if (!m) return;
     atomic_store(&m->stop, true);
@@ -211,8 +211,14 @@ void ca_media_close(struct ca_media *m)
     pthread_mutex_destroy(&m->lock); free(m);
 }
 
-unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)
+unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal)
 {
     (void)media;
     return thermal ? APCAM_THERMAL_FRAME_RATE : APCAM_FRAME_RATE;
+}
+
+int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
+{
+    (void)media; (void)settings;
+    errno = ENOTSUP; return -1;
 }

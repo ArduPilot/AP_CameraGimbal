@@ -23,7 +23,8 @@
 #define APCAM_HAVE_GIMBAL_RATES 1
 #define APCAM_WEB_CENTER_COMMAND 3
 #define APCAM_HAVE_OPTICAL_ZOOM 0
-#define APCAM_HAVE_FOCUS 1
+/* Fixed-focus lens: the vendor-compatible focus commands are no-ops. */
+#define APCAM_HAVE_FOCUS 0
 #define APCAM_HAVE_IMAGE_CONTROLS 1
 #define APCAM_HAVE_EXTERNAL_UART 1
 #define APCAM_HAVE_SSH_KEYS 0

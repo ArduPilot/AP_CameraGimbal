@@ -207,7 +207,8 @@ def main():
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={fps}",
                     "-t", "1", *params, "-y", str(fixture)], check=True)
     config = directory / "camera.ini"
-    config.write_text("[stream.main]\nresolution = 1920x1080\n[stream.sub]\nresolution = 1280x720\n[mavlink]\nsystem_id = 0\n")
+    codec = "h265" if args.codec == "hevc" else "h264"
+    config.write_text(f"[stream.main]\nresolution = 1920x1080\ncodec = {codec}\n[stream.sub]\nresolution = 1280x720\ncodec = {codec}\n[mavlink]\nsystem_id = 0\n")
     gimbal_port, mav_port, rtsp_port = port(socket.SOCK_DGRAM), port(), port()
     camera_ready, gimbal_ready = directory / "camera.ready", directory / "gimbal.ready"
     camera_ready.unlink(missing_ok=True)

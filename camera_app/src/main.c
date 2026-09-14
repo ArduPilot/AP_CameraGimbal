@@ -127,13 +127,12 @@ static bool get_thermal_range(void *opaque, struct ca_thermal_range *range)
 
 struct photo_context {
     struct ca_media *media;
-    enum ca_photo_scope scope;
 };
 
 static int capture_photo(void *opaque)
 {
     struct photo_context *context = opaque;
-    return ca_media_capture_photo(context->media, context->scope);
+    return ca_media_capture_photo(context->media, ca_media_settings(context->media)->photo_scope);
 }
 
 static int get_thermal_gain(void *opaque, uint8_t *gain)
@@ -440,7 +439,6 @@ int main(int argc, char **argv)
     config.thermal_range = get_thermal_range;
     config.thermal_opaque = media;
     photo_context.media = media;
-    photo_context.scope = app_config.photo_scope;
     config.photo_capture = capture_photo;
     config.photo_capture_opaque = &photo_context;
     config.thermal_gain_get = get_thermal_gain;
@@ -509,7 +507,7 @@ int main(int argc, char **argv)
     while (!stop_requested) {
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI && !defined(CAMERA_APP_SITL)
         const char *native_helper = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
-        if (native_helper && *native_helper && !ca_z1_media_ready(media)) {
+        if (native_helper && *native_helper && !ca_media_ready(media)) {
             ca_log("Z1 native capture stopped; exiting for supervisor recovery");
             goto done;
         }

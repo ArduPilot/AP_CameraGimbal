@@ -77,7 +77,14 @@ all: build-dependencies
 	$(MAKE) -C web
 
 .PHONY: release release-test
-release:
+.PHONY: camera-definitions camera-definition-test
+camera-definitions:
+	python3 tools/build_camera_definitions.py
+
+camera-definition-test: camera-definitions
+	python3 tests/test_camera_definition.py
+
+release: camera-definitions
 	+python3 tools/build_release.py --make '$(MAKE)' --version '$(MT11_VERSION)' \
 		--output '$(RELEASE_ROOT)' --targets $(RELEASE_TARGETS)
 
