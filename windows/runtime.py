@@ -125,13 +125,14 @@ def main():
             env[target] = os.environ[key]
     env['MT11_WEB_CAMERA_PORT'] = env['CAMERA_APP_PORT']
     env['MT11_WEB_LIVE_PORT'] = str(int(env['CAMERA_APP_RTSP_PORT']) + 1)
+    if getattr(sys, 'frozen', False):
+        env['CAMERA_GIMBAL_SITL_PYTHON'] = str(Path(sys.executable).with_name('SITLWorker.exe'))
+        env['CAMERA_APP_SITL_RENDERER'] = '--terrain'
+    else:
+        env['CAMERA_GIMBAL_SITL_PYTHON'] = sys.executable
+        env['CAMERA_APP_SITL_RENDERER'] = str(REPO / 'sitl/terrain_video.py')
     if os.environ.get('CAMERA_GIMBAL_SITL_VIDEO', 'simple') == 'terrain':
-        if getattr(sys, 'frozen', False):
-            env['CAMERA_GIMBAL_SITL_PYTHON'] = str(Path(sys.executable).with_name('SITLWorker.exe'))
-            env['CAMERA_APP_SITL_TERRAIN'] = '--terrain'
-        else:
-            env['CAMERA_GIMBAL_SITL_PYTHON'] = sys.executable
-            env['CAMERA_APP_SITL_TERRAIN'] = str(REPO / 'sitl/terrain_video.py')
+        env['CAMERA_APP_SITL_TERRAIN'] = env['CAMERA_APP_SITL_RENDERER']
     else:
         env.pop('CAMERA_APP_SITL_TERRAIN', None)
     children, logs = [], []

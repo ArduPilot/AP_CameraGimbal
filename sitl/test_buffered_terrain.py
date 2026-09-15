@@ -16,6 +16,7 @@ RENDERER = '''import argparse, json, os, socket, struct, time
 p=argparse.ArgumentParser();p.add_argument('--fd',type=int);a,_=p.parse_known_args()
 data=open(os.environ['TEST_TERRAIN_FRAME'],'rb').read()
 with socket.socket(fileno=a.fd) as s, s.makefile('rb') as requests:
+    s.sendall(b'R')
     for i,line in enumerate(requests):
         request=json.loads(line)
         print(json.dumps({'frame':i,'lead':request['prediction_ms']}),flush=True)

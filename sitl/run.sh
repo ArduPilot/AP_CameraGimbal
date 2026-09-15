@@ -79,8 +79,17 @@ camera_pid=
 web_pid=
 
 # Inherited by both camera-app and the web service's camera restart child.
+if [ -z "${CAMERA_GIMBAL_SITL_PYTHON:-}" ] && [ -x "$repo/build/terrain-venv/bin/python" ]; then
+    CAMERA_GIMBAL_SITL_PYTHON="$repo/build/terrain-venv/bin/python"
+    export CAMERA_GIMBAL_SITL_PYTHON
+fi
+CAMERA_APP_SITL_RENDERER="$repo/sitl/terrain_video.py"
+export CAMERA_APP_SITL_RENDERER
 case "${CAMERA_GIMBAL_SITL_VIDEO:-simple}" in
-    simple) unset CAMERA_APP_SITL_TERRAIN ;;
+    simple)
+        unset CAMERA_APP_SITL_TERRAIN
+        "${CAMERA_GIMBAL_SITL_PYTHON:-python3}" "$CAMERA_APP_SITL_RENDERER" --check --simple
+        ;;
     terrain)
         CAMERA_APP_SITL_TERRAIN="$repo/sitl/terrain_video.py"
         export CAMERA_APP_SITL_TERRAIN

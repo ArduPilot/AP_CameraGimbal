@@ -22,6 +22,8 @@ MT11_UPDATE_CONFIG ?= packaging/mt11/base/config.json
 MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/null | awk '/^v[0-9]+\.[0-9]+$$/ { print; exit }')
 MT11_GIT_HASH ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-6)
 export MT11_VERSION MT11_GIT_HASH
+SITL_VIDEO_PYTHON ?= $(if $(wildcard $(CURDIR)/build/terrain-venv/bin/python),$(CURDIR)/build/terrain-venv/bin/python,python3)
+export CAMERA_GIMBAL_SITL_PYTHON ?= $(SITL_VIDEO_PYTHON)
 # Versioned, user-facing packages. Build cameras serially because their
 # native builds share generated MAVLink headers and some intermediate files.
 RELEASE_ROOT ?= release
@@ -176,7 +178,14 @@ sitl-buffering-test: sitl
 	python3 sitl/test_buffered_terrain.py --build $(SITL_BUILD)
 
 .PHONY: sitl-terrain-test a8_sitl-terrain-test
-SITL_TERRAIN_PYTHON ?= python3
+SITL_TERRAIN_PYTHON ?= $(SITL_VIDEO_PYTHON)
+
+.PHONY: sitl-image-controls-test
+sitl-image-controls-test: sitl a8_sitl zr10_sitl z1mini_sitl
+	$(SITL_VIDEO_PYTHON) sitl/test_image_controls.py --backend mt11
+	$(SITL_VIDEO_PYTHON) sitl/test_image_controls.py --backend a8
+	$(SITL_VIDEO_PYTHON) sitl/test_image_controls.py --backend zr10
+	$(SITL_VIDEO_PYTHON) sitl/test_image_controls.py --backend z1mini
 sitl-terrain-test: sitl
 	$(SITL_TERRAIN_PYTHON) sitl/test_terrain_video.py
 	$(SITL_TERRAIN_PYTHON) sitl/test_video_telemetry.py --backend mt11 --build $(SITL_BUILD) --terrain

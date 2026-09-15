@@ -88,10 +88,10 @@ the configured stream resolutions: 1920x1080 main and 1280x720 sub by default.
 A8 shows the same visible scene in both encodings. MT11 thermal video stays at
 1280x720, matching the real camera; selecting thermal as main sends visible
 video at the configured substream size. A separate visible encoding keeps its
-recording dimensions stable during that swap. Simple fixtures are resized and
-encoded once at startup, so saved resolution changes also apply after a web
-restart. The MT11 thermal stream is grayscale; its Sensors tab receives changing simulated LiDAR ranges and
-fixed thermal extrema, and shutter captures create test JPEGs.
+recording dimensions stable during that swap. Simple fixtures loop through the
+same live image-processing and encoding stage as terrain video. The MT11 thermal
+stream uses the selected palette; its Sensors tab receives changing simulated
+LiDAR ranges and fixed thermal extrema. Shutter captures save processed JPEGs.
 Rate, centre and absolute-angle commands update the simulator's bounded gimbal
 state and are observable through SIYI attitude queries.
 
@@ -99,8 +99,21 @@ state and are observable through SIYI attitude queries.
 
 Set `CAMERA_GIMBAL_SITL_VIDEO=terrain` for satellite imagery draped over the
 same ArduPilot quantized meshes used by MAVProxy's map3d module. The default
-remains `simple`, with the existing generated test streams and no additional
-Python dependencies. Both MT11 and A8 support the terrain option.
+remains `simple`, with generated test streams. All four targets support terrain.
+Both sources apply camera image controls before encoding live video and recordings.
+
+Simple video needs NumPy, OpenCV and PyAV, without VTK or map3d. The Windows
+package includes them. On Linux, the build-environment installer installs the
+system packages, or use a virtual environment:
+
+```sh
+python3 -m venv --system-site-packages build/terrain-venv
+build/terrain-venv/bin/pip install -r sitl/requirements-video.txt
+```
+
+The launcher, `make` and `sitl/run.sh` automatically use this environment when
+present; `CAMERA_GIMBAL_SITL_PYTHON` overrides it. Direct camera-app invocations
+should set that variable when the dependencies are not in the system Python.
 
 Install a recent MAVProxy with `mavproxy_map3d`, plus the optional renderer
 dependencies. A virtual environment can reuse an already installed MAVProxy:
@@ -132,10 +145,11 @@ simulated gimbal's level-referenced roll/pitch and vehicle-relative yaw.
 Missing or stale telemetry produces a waiting screen. Gimbal controls and
 optical/digital zoom alter the rendered view and its advertised FOV. A8's two
 streams encode the same visible scene at their configured resolutions; MT11's
-thermal view is a grayscale simulation with the thermal sensor's FOV, **not a
-temperature model**. Still photographs continue to use the test JPEG fixture.
+thermal view uses synthetic temperature and the selected palette with the
+thermal sensor's FOV, **not calibrated temperatures**. Still photographs capture
+the processed scene for each requested lens.
 
-The resulting H.264 runs through the ordinary RTSP, web Live, recording and
+The encoded video runs through the ordinary RTSP, web Live, recording and
 SupportProxy paths, including per-frame telemetry. The renderer is a separate
 child of camera-app and is stopped with it. Web-triggered camera restarts
 inherit the selected video mode. Renderer logs report the most recent ten
@@ -302,10 +316,10 @@ directory; `sitl/test_video_telemetry.py --output PATH` chooses its location.
 
 SITL recording now writes real MP4 files from its video fixtures (both MT11
 streams; the main A8 stream). The first recorded frame is a keyframe.
-Recordings use the visible main-stream dimensions and, on MT11, 1280x720 thermal.
-The separate hardware recording-resolution setting is not simulated. Sources
-ending in `.h265` or `.hevc` are accepted for RTSP testing; recording those
-fixtures is disabled because SITL has no separate H.264 recording encoder.
+Recordings use the configured recording resolution and, on MT11, 1280x720 thermal.
+A separate H.264 encoder is enabled when the RGB stream resolution or codec
+differs from recording. H.265 fixtures and H.265 RGB streams can be recorded
+through this encoder as H.264, with the same current image adjustments.
 Hardware continues to use its dedicated H.264 recording channels.
 
 `make recording-recovery-test` runs the real MP4 writer and Files HTTP endpoint
@@ -369,3 +383,44 @@ stalls and verifies that stopping a full render queue cleans up promptly.
 ## Shared camera properties
 
 The launcher and MCU simulators read the compiler export of the [target headers](../include/apcam/README.md). MT11, A8, ZR10 and Z1-Mini have their own lens and protocol properties. Build Z1-Mini with `make z1mini_sitl` and start it with `make z1mini_sitl-run`, or select it in the PyQt launcher. Live and recording resolutions are independent, including 1080p live plus 4K recording on Z1-Mini.
+
+## Camera definition controls in SITL
+
+The simulator uses the target's real `camera.xml` and the same MAVLink parameter
+handlers as hardware. MAVProxy's custom settings sliders update subsequent
+frames without restarting the camera or interrupting a recording. The bounded
+render queue contributes up to three frames of delay; the viewer adds its own.
+
+- MT11 and A8: brightness, saturation, contrast, exposure compensation, ISO,
+  shutter speed, exposure metering and white balance affect RGB pixels.
+- MT11: all eleven thermal palettes and both gain modes affect thermal pixels;
+  RGB/thermal source selection and wide/zoom lens selection also affect the view.
+- Zoom changes terrain FOV and crops simple fixture video using the same target
+  lens calibration. MT11 manual focus defocuses RGB; autofocus restores sharpness.
+- Recording policy, recording resolution and stream resolutions/codecs use the
+  existing live configuration path. Resolution/codec changes rebuild the media
+  pipeline; clients reconnect, and changes remain rejected while recording.
+  Both software sources support H.264 and H.265 RGB streams, with H.264 recording.
+  Thermal stays H.264. Swapping RGB and thermal also reconnects RTSP clients
+  when the two sources use different codecs, so the advertised codec stays correct.
+- Still captures use the current processed scene at stream resolution, including
+  each requested MT11 lens and thermal palette. Photo scope selects thermal only
+  or all lenses. Single-lens cameras produce one JPEG; Z1-Mini has no photo control.
+
+Image controls approximate an ISP: brightness adds an offset, contrast scales
+around mid-gray, saturation scales chroma, exposure uses one-third-stop steps,
+manual ISO scales gain, and manual shutter scales exposure relative to 1/100 s.
+Center/spot metering adjusts exposure from the selected region when either ISO
+or shutter is automatic. White-balance presets apply RGB gains. Thermal imagery
+uses scene luminance as synthetic temperature, with approximate named palettes;
+low gain compresses contrast. Focus is a bounded blur, with zero percent sharp.
+These models do not reproduce vendor sensor calibration, thermal measurements,
+noise, exposure motion blur, focus motors or automatic exposure dynamics. Controls
+absent from a target's XML remain absent in its simulator.
+
+Run pixel-level tests of all four cameras (including MAVLink updates, thermal
+palette/source changes, autofocus, still captures and recording) with:
+
+```sh
+make sitl-image-controls-test
+```

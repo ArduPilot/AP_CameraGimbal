@@ -403,7 +403,7 @@ $(SITL_TARGET): $(SITL_C_OBJECTS) $(SITL_CPP_OBJECTS) Makefile
 $(SITL_OBJDIR)/c/%.o: %.c $(MINIMP4_HEADER)
 	mkdir -p $(dir $@)
 	$(HOST_CC) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -Ibuild $(CFLAGS) -Wno-error \
-		-DCAMERA_APP_SITL -c $< -o $@
+		-DCAMERA_APP_SITL -DCA_SITL_VIDEO_SCRIPT='"$(abspath ../sitl/terrain_video.py)"' -c $< -o $@
 
 $(SITL_OBJDIR)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p $(dir $@)

@@ -32,9 +32,6 @@ extern char **environ;
 #ifdef CAMERA_APP_SITL
 struct sitl_video {
     enum ca_video_codec codec;
-    uint8_t *data;
-    size_t length;
-    size_t offset;
 };
 #endif
 
@@ -48,13 +45,16 @@ struct ca_media_impl {
     enum ca_media_lens lens;
     _Atomic bool thermal_main;
     unsigned thermal_captures;
-    uint8_t thermal_gain;
-    uint8_t thermal_palette;
+    _Atomic uint8_t thermal_gain;
+    _Atomic uint8_t thermal_palette;
+    _Atomic float defocus;
     bool inverted;
     char *capture_root;
 #ifdef CAMERA_APP_SITL
     struct ca_live_video_server *live_video;
     struct ca_rtsp *rtsp;
+    unsigned rtsp_port;
+    struct ca_support_config support;
     unsigned secondary_rtsp_stream;
     unsigned sitl_frame_rate;
     struct sitl_video videos[4];
@@ -63,6 +63,15 @@ struct ca_media_impl {
     bool video_thread_started;
     atomic_bool video_stop;
     pthread_mutex_t record_lock;
+    pthread_mutex_t image_lock;
+    struct ca_config image_settings;
+    pthread_cond_t capture_changed;
+    unsigned capture_mask;
+    unsigned capture_generation;
+    float capture_fov[3];
+    uint8_t *photos[3];
+    size_t photo_length[3];
+    bool capture_done;
     atomic_bool sitl_recording;
     struct ca_mp4 *mp4[2];
     bool wait_keyframe[2];
@@ -92,133 +101,6 @@ static int write_file_all(int fd, const uint8_t *data, size_t length)
 }
 
 #ifdef CAMERA_APP_SITL
-static size_t annex_b_start(const uint8_t *data, size_t length, size_t offset)
-{
-    while (offset + 3U <= length) {
-        if (data[offset] == 0U && data[offset + 1U] == 0U &&
-            (data[offset + 2U] == 1U ||
-             (offset + 4U <= length && data[offset + 2U] == 0U &&
-              data[offset + 3U] == 1U))) return offset;
-        offset++;
-    }
-    return length;
-}
-
-static size_t annex_b_code_length(const uint8_t *data, size_t length,
-                                  size_t offset)
-{
-    if (offset + 3U <= length && data[offset + 2U] == 1U) return 3U;
-    if (offset + 4U <= length && data[offset + 2U] == 0U &&
-        data[offset + 3U] == 1U) return 4U;
-    return 0U;
-}
-
-/* Fixtures are decoded once at startup so saved stream resolutions also apply
- * to the simple video source and to restarts requested from the web UI. */
-static int load_video(struct sitl_video *video, const char *path,
-                       unsigned width, unsigned height, unsigned fps, enum ca_video_codec codec)
-{
-    bool hevc = codec == CA_VIDEO_H265;
-    char scale[64], rate[16], params[128];
-    snprintf(scale, sizeof(scale), "scale=%u:%u", width, height);
-    snprintf(rate, sizeof(rate), "%u", fps);
-    snprintf(params, sizeof(params), "aud=1:bframes=0:repeat-headers=1:scenecut=0:keyint=%u%s",
-             fps, hevc ? ":pools=1:frame-threads=1:log-level=error" : "");
-    char *argv[] = {"ffmpeg", "-nostdin", "-v", "error", "-i", (char *)path,
-        "-vf", scale, "-r", rate, "-an", "-c:v", hevc ? "libx265" : "libx264",
-        "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "2",
-        "-pix_fmt", "yuv420p", hevc ? "-x265-params" : "-x264-params", params,
-        "-f", hevc ? "hevc" : "h264", "pipe:1", NULL};
-    int output[2];
-    if (pipe2(output, O_CLOEXEC) < 0) return -1;
-    posix_spawn_file_actions_t actions;
-    int error = posix_spawn_file_actions_init(&actions);
-    pid_t child = -1;
-    if (!error) {
-        error = posix_spawn_file_actions_addclose(&actions, output[0]);
-        if (!error) error = posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO);
-        if (!error && output[1] != STDOUT_FILENO)
-            error = posix_spawn_file_actions_addclose(&actions, output[1]);
-        if (!error) error = posix_spawnp(&child, "ffmpeg", &actions, NULL, argv, environ);
-        posix_spawn_file_actions_destroy(&actions);
-    }
-    close(output[1]);
-    if (error) {
-        close(output[0]);
-        ca_log("cannot launch fixture decoder: %s", strerror(error));
-        errno = error; return -1;
-    }
-    size_t allocated = 0, used = 0;
-    for (;;) {
-        if (used == allocated) {
-            size_t next = allocated ? allocated * 2 : 65536;
-            if (next > 64U * 1024U * 1024U) { error = EFBIG; break; }
-            void *data = realloc(video->data, next);
-            if (!data) { error = ENOMEM; break; }
-            video->data = data; allocated = next;
-        }
-        ssize_t got = read(output[0], video->data + used, allocated - used);
-        if (got > 0) used += (size_t)got;
-        else if (!got) break;
-        else if (errno != EINTR) { error = errno; break; }
-    }
-    close(output[0]);
-    if (error) kill(child, SIGTERM);
-    int status = 0;
-    while (waitpid(child, &status, 0) < 0) {
-        if (errno == EINTR) continue;
-        error = errno; break;
-    }
-    if (error || !WIFEXITED(status) || WEXITSTATUS(status) || !used) {
-        ca_log("fixture decoder failed for %s: status=%d bytes=%zu error=%d", path, status, used, error);
-        free(video->data); memset(video, 0, sizeof(*video));
-        errno = error ? error : EINVAL; return -1;
-    }
-    video->codec = hevc ? CA_VIDEO_H265 : CA_VIDEO_H264;
-    video->length = used;
-    video->offset = annex_b_start(video->data, video->length, 0U);
-    return video->offset < video->length ? 0 : -1;
-}
-
-static bool next_access_unit(struct sitl_video *video, const uint8_t **data,
-                             size_t *length, bool *key_frame)
-{
-    size_t start;
-    size_t next;
-    size_t scan;
-
-    if (video->data == NULL || video->length == 0U) return false;
-    if (video->offset >= video->length) video->offset = 0U;
-    start = annex_b_start(video->data, video->length, video->offset);
-    if (start >= video->length) {
-        video->offset = 0U;
-        start = annex_b_start(video->data, video->length, 0U);
-    }
-    next = video->length;
-    *key_frame = false;
-    scan = start;
-    while ((scan = annex_b_start(video->data, video->length, scan)) <
-           video->length) {
-        size_t code = annex_b_code_length(video->data, video->length, scan);
-        uint8_t type;
-        if (code == 0U || scan + code >= video->length) break;
-        type = video->codec == CA_VIDEO_H265
-            ? (video->data[scan + code] >> 1U) & 63U
-            : video->data[scan + code] & 31U;
-        if (scan != start && type == (video->codec == CA_VIDEO_H265 ? 35U : 9U)) {
-            next = scan;
-            break;
-        }
-        if (video->codec == CA_VIDEO_H265 ? type >= 16U && type <= 21U
-                                         : type == 5U) *key_frame = true;
-        scan += code + 1U;
-    }
-    *data = video->data + start;
-    *length = next - start;
-    video->offset = next < video->length ? next : video->length;
-    return *length != 0U;
-}
-
 static int close_sitl_recording(struct ca_media_impl *media)
 {
     int result = 0;
@@ -301,11 +183,38 @@ static void *render_terrain_frames(void *opaque)
         frame->thermal_main = media->thermal_main;
         frame->fov[0] = ca_media_impl_hfov(media, false);
         frame->fov[1] = ca_media_impl_hfov(media, media->has_thermal);
-        if (ca_sitl_terrain_frame(media->terrain, frame->pts,
+        struct ca_sitl_image image = {0};
+        pthread_mutex_lock(&media->image_lock);
+        ca_config_copy_image(&image.settings, &media->image_settings);
+        image.capture_mask = media->capture_mask;
+        image.capture_generation = media->capture_generation;
+        memcpy(image.capture_fov, media->capture_fov, sizeof(image.capture_fov));
+        media->capture_mask = 0;
+        pthread_mutex_unlock(&media->image_lock);
+        image.thermal_gain = media->thermal_gain;
+        image.thermal_palette = media->thermal_palette;
+        image.defocus = media->defocus;
+        uint8_t *photos[3] = {0};
+        size_t photo_length[3] = {0};
+        int result = ca_sitl_terrain_frame(media->terrain, frame->pts,
                 (uint64_t)due.tv_sec * 1000U + (uint64_t)due.tv_nsec / 1000000U,
                 frame->fov, frame->thermal_main, media->has_thermal,
                 media->rgb_record_source == 3U && atomic_load(&media->sitl_recording),
-                frame->data, frame->length, frame->key) < 0) {
+                &image, frame->data, frame->length, frame->key, photos, photo_length);
+        if (image.capture_mask) {
+            pthread_mutex_lock(&media->image_lock);
+            for (unsigned i = 0; i < 3; i++) {
+                if (image.capture_generation == media->capture_generation) {
+                    free(media->photos[i]);
+                    media->photos[i] = photos[i];
+                    media->photo_length[i] = result < 0 ? 0 : photo_length[i];
+                } else free(photos[i]);
+            }
+            if (image.capture_generation == media->capture_generation) media->capture_done = true;
+            pthread_cond_signal(&media->capture_changed);
+            pthread_mutex_unlock(&media->image_lock);
+        }
+        if (result < 0) {
             if (!atomic_load(&media->video_stop))
                 ca_log("SITL terrain renderer failed: %s", strerror(errno));
             free_terrain_frame(frame);
@@ -386,10 +295,6 @@ static void *video_thread(void *opaque)
 {
     struct ca_media_impl *media = opaque;
     uint64_t pts = 0U;
-    const struct timespec interval = {
-        .tv_sec = 0,
-        .tv_nsec = 1000000000L / (long)media->sitl_frame_rate,
-    };
 
     struct terrain_queue *queue = media->terrain ? start_terrain_queue(media) : NULL;
     if (media->terrain && !queue) {
@@ -397,6 +302,7 @@ static void *video_thread(void *opaque)
         return NULL;
     }
     bool previous_source = false;
+    enum ca_video_codec rtsp_codecs[2] = {media->videos[0].codec, media->videos[1].codec};
     while (!atomic_load(&media->video_stop)) {
         uint8_t *rendered[4] = {0};
         size_t rendered_length[4];
@@ -422,14 +328,28 @@ static void *video_thread(void *opaque)
         }
         if (media->has_thermal && thermal_main != previous_source) {
             unsigned indices[2] = {thermal_main ? 1U : 0U, thermal_main ? 2U : 1U};
+            enum ca_video_codec codecs[2] = {media->videos[indices[0]].codec, media->videos[indices[1]].codec};
+            if (codecs[0] != rtsp_codecs[0] || codecs[1] != rtsp_codecs[1]) {
+                /* SDP and RTP packetisation must match the newly routed lens.
+                 * A codec change requires RTSP clients to reconnect. */
+                ca_rtsp_close(media->rtsp);
+                media->rtsp = NULL;
+                if (ca_rtsp_open(&media->rtsp, media->rtsp_port, "video1", codecs[0], media->sitl_frame_rate) < 0 ||
+                    ca_rtsp_add_video(media->rtsp, "video2", codecs[1], media->sitl_frame_rate,
+                                       &media->secondary_rtsp_stream) < 0) {
+                    ca_log("cannot reconfigure SITL RTSP after source codec change");
+                    for (unsigned i = 0; i < 4; i++) free(rendered[i]);
+                    break;
+                }
+                if (ca_rtsp_support_proxy(media->rtsp, &media->support) < 0)
+                    ca_log("SupportProxy video restart failed: %s", strerror(errno));
+                memcpy(rtsp_codecs, codecs, sizeof(codecs));
+            }
             for (unsigned i = 0; i < 2; i++) {
                 unsigned source = indices[i];
                 (void)ca_live_video_server_configure(media->live_video, i,
                     media->video_width[source], media->video_height[source],
                     media->sitl_frame_rate, media->videos[source].codec == CA_VIDEO_H264);
-            }
-            if (!media->terrain) {
-                for (unsigned i = 0; i < 3; i++) media->videos[i].offset = 0;
             }
             previous_source = thermal_main;
         }
@@ -441,7 +361,7 @@ static void *video_thread(void *opaque)
             if (media->terrain) {
                 data = rendered[stream]; length = rendered_length[stream];
                 key_frame = rendered_key[stream]; have_frame = length != 0;
-            } else have_frame = next_access_unit(&media->videos[stream], &data, &length, &key_frame);
+            } else break;
             if (have_frame) {
                 float record_hfov = ca_media_impl_hfov(media, media->has_thermal && stream == 1U);
                 float hfov_deg = record_hfov;
@@ -473,7 +393,6 @@ static void *video_thread(void *opaque)
             free(rendered[stream]);
         }
         pts += 90000U / media->sitl_frame_rate;
-        if (!media->terrain) (void)nanosleep(&interval, NULL);
     }
     stop_terrain_queue(queue);
     return NULL;
@@ -484,7 +403,6 @@ static int open_sitl_video(struct ca_media_impl *media,
 {
     const char *video1 = getenv("CAMERA_APP_SITL_VIDEO1");
     const char *video2 = getenv("CAMERA_APP_SITL_VIDEO2");
-    const char *video3 = getenv("CAMERA_APP_SITL_VIDEO3");
     const char *terrain = getenv("CAMERA_APP_SITL_TERRAIN");
     unsigned width1, height1, width2, height2, width3, height3, width4, height4;
     unsigned frame_rate = APCAM_FRAME_RATE;
@@ -499,10 +417,8 @@ static int open_sitl_video(struct ca_media_impl *media,
         width2 = APCAM_THERMAL_STREAM_WIDTH;
         height2 = APCAM_THERMAL_STREAM_HEIGHT;
     }
-    if (terrain) {
-        /* The terrain renderer currently emits H.264 only. */
-        if (config->settings.main_codec != CA_VIDEO_H264 || config->settings.sub_codec != CA_VIDEO_H264) { errno = ENOTSUP; return -1; }
-        frame_rate = 20U;
+    {
+        if (terrain) frame_rate = 20U;
         const char *rate = getenv("CAMERA_GIMBAL_SITL_FPS");
         if (rate) {
             char *end;
@@ -511,13 +427,17 @@ static int open_sitl_video(struct ca_media_impl *media,
             frame_rate = (unsigned)value;
         }
         const unsigned widths[4] = {width1, width2, width3, width4}, heights[4] = {height1, height2, height3, height4};
-        media->videos[0].codec = media->videos[1].codec = media->videos[2].codec = media->videos[3].codec = CA_VIDEO_H264;
-        if (ca_sitl_terrain_open(&media->terrain, terrain, widths, heights, frame_rate) < 0) return -1;
-    } else if (video1 == NULL || video2 == NULL ||
-               load_video(&media->videos[0], video1, width1, height1, frame_rate, config->settings.main_codec) < 0 || load_video(&media->videos[1], video2, width2, height2, frame_rate, media->has_thermal ? CA_VIDEO_H264 : config->settings.sub_codec) < 0 ||
-               (media->has_thermal && load_video(&media->videos[2], video3 ? video3 : video1, width3, height3, frame_rate, config->settings.sub_codec) < 0) ||
-               (media->rgb_record_source == 3U && load_video(&media->videos[3], video1, width4, height4, frame_rate, CA_VIDEO_H264) < 0)) return -1;
+        const enum ca_video_codec codecs[4] = {config->settings.main_codec,
+            media->has_thermal ? CA_VIDEO_H264 : config->settings.sub_codec,
+            config->settings.sub_codec, CA_VIDEO_H264};
+        for (unsigned i = 0; i < 4; i++) media->videos[i].codec = codecs[i];
+        const char *renderer = terrain ? terrain : getenv("CAMERA_APP_SITL_RENDERER");
+        if (!renderer || !*renderer) renderer = CA_SITL_VIDEO_SCRIPT;
+        if (ca_sitl_terrain_open(&media->terrain, renderer, widths, heights, frame_rate, codecs) < 0) return -1;
+    }
     if (config->rtsp_port == UINT16_MAX) { errno = EINVAL; return -1; }
+    media->rtsp_port = config->rtsp_port;
+    media->support = config->settings.support;
     if (ca_rtsp_open(&media->rtsp, config->rtsp_port, "video1",
                      media->videos[0].codec, frame_rate) < 0) {
         ca_log("cannot start SITL RTSP on port %u: %s", config->rtsp_port, strerror(errno));
@@ -550,7 +470,7 @@ static int open_sitl_video(struct ca_media_impl *media,
     media->video_thread_started = true;
     ca_log("SITL video sources video1=%s (%ux%u) video2=%s (%ux%u) at %u fps",
            terrain ? "3D terrain" : video1, width1, height1,
-           terrain ? "3D terrain" : video2, width2, height2, frame_rate, media->has_thermal ? CA_VIDEO_H264 : config->settings.sub_codec);
+           terrain ? "3D terrain" : video2, width2, height2, frame_rate);
     return 0;
 }
 #endif
@@ -573,6 +493,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
                  ca_lens1_hfov(media->zoom));
     media->lens = CA_MEDIA_LENS_WIDE;
     media->thermal_gain = 1U;
+    media->thermal_palette = config->settings.thermal_palette;
     media->capture_root = strdup(config->capture_root);
     if (media->capture_root == NULL) {
         ca_recorder_close(&media->recorder);
@@ -581,6 +502,9 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     }
 #ifdef CAMERA_APP_SITL
     pthread_mutex_init(&media->record_lock, NULL);
+    pthread_mutex_init(&media->image_lock, NULL);
+    pthread_cond_init(&media->capture_changed, NULL);
+    ca_config_copy_image(&media->image_settings, &config->settings);
     media->record_root = strdup(config->record_root);
     if (media->record_root == NULL || open_sitl_video(media, config) < 0) {
         int saved_errno = errno;
@@ -700,6 +624,7 @@ int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
         errno = EINVAL;
         return -1;
     }
+    media->defocus = 0;
     return 0;
 }
 
@@ -709,15 +634,17 @@ int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
         errno = EINVAL;
         return -1;
     }
+    media->defocus = fmaxf(0, fminf(1, media->defocus + direction * 0.1f));
     return 0;
 }
 
 int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
 {
-    if (media == NULL || percent < 0.0f || percent > 100.0f) {
+    if (media == NULL || !isfinite(percent) || percent < 0.0f || percent > 100.0f) {
         errno = EINVAL;
         return -1;
     }
+    media->defocus = percent * 0.01f;
     return 0;
 }
 
@@ -738,8 +665,56 @@ bool ca_media_impl_thermal_range(struct ca_media_impl *media,
     return true;
 }
 
+#ifdef CAMERA_APP_SITL
+static int capture_sitl_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
+{
+    unsigned mask = media->has_thermal && scope == CA_PHOTO_SCOPE_THERMAL ? 4U :
+                    (1U | (APCAM_HAVE_ZOOM_LENS ? 2U : 0U) | (media->has_thermal ? 4U : 0U));
+    if (mkdir(media->capture_root, 0755) < 0 && errno != EEXIST) return -1;
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 5;
+    pthread_mutex_lock(&media->image_lock);
+    media->capture_done = false;
+    media->capture_generation++;
+    media->capture_mask = mask;
+    media->capture_fov[0] = ca_lens1_hfov(APCAM_HAVE_ZOOM_LENS ? media->digital_ratio[0] : media->zoom);
+#if APCAM_HAVE_ZOOM_LENS
+    media->capture_fov[1] = ca_zoom_lens_hfov(media->optical_ratio, media->digital_ratio[1]);
+#endif
+    media->capture_fov[2] = ca_media_impl_hfov(media, true);
+    int error = 0;
+    while (!media->capture_done && !error)
+        error = pthread_cond_timedwait(&media->capture_changed, &media->image_lock, &deadline);
+    if (error) {
+        media->capture_mask = 0;
+        media->capture_generation++; /* discard any late response */
+    }
+    const char *suffix[] = {"_C.jpg", "_Z.jpg", "_I.jpg"};
+    for (unsigned i = 0; i < 3 && !error; i++) {
+        if (!(mask & (1U << i))) continue;
+        if (!media->photo_length[i]) { error = EIO; break; }
+        char path[4096];
+        int n = snprintf(path, sizeof(path), "%s/SITL_XXXXXX%s", media->capture_root, suffix[i]);
+        if (n < 0 || (size_t)n >= sizeof(path)) { error = ENAMETOOLONG; break; }
+        int fd = mkstemps(path, 6);
+        if (fd < 0) { error = errno; break; }
+        int written = write_file_all(fd, media->photos[i], media->photo_length[i]);
+        if (written < 0) error = errno;
+        if (close(fd) < 0 && !error) error = errno;
+        if (error) unlink(path);
+    }
+    pthread_mutex_unlock(&media->image_lock);
+    if (error) { errno = error; return -1; }
+    return 0;
+}
+#endif
+
 int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
 {
+#ifdef CAMERA_APP_SITL
+    if (media && media->terrain) return capture_sitl_photo(media, scope);
+#endif
     const char *source;
     const char *suffixes[3] = {"_C.jpg", "_Z.jpg", "_I.jpg"};
     unsigned first;
@@ -882,10 +857,12 @@ void ca_media_impl_close(struct ca_media_impl *media)
     ca_sitl_terrain_close(media->terrain);
     (void)close_sitl_recording(media);
     pthread_mutex_destroy(&media->record_lock);
+    pthread_mutex_destroy(&media->image_lock);
+    pthread_cond_destroy(&media->capture_changed);
+    for (unsigned i = 0; i < 3; i++) free(media->photos[i]);
     free(media->record_root);
     ca_live_video_server_close(media->live_video);
     ca_rtsp_close(media->rtsp);
-    for (unsigned i = 0U; i < 4U; i++) free(media->videos[i].data);
 #endif
     ca_recorder_close(&media->recorder);
     free(media->capture_root);
@@ -904,7 +881,12 @@ unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool therma
 
 int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
 {
-    (void)media; (void)settings;
+    if (!media || !settings) { errno = EINVAL; return -1; }
+#ifdef CAMERA_APP_SITL
+    pthread_mutex_lock(&media->image_lock);
+    ca_config_copy_image(&media->image_settings, settings);
+    pthread_mutex_unlock(&media->image_lock);
+#endif
     return 0;
 }
 

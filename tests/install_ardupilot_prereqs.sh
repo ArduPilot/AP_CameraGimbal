@@ -31,3 +31,4 @@ if [[ -f "$HOME/venv-ardupilot/bin/activate" ]]; then
 fi
 MDEF="$repo_root/modules/mavlink/message_definitions" PYMAVLINK_FAST_INDEX=0 \
     python3 -m pip install --no-deps --force-reinstall "$repo_root/modules/mavlink/pymavlink"
+python3 -m pip install -r "$repo_root/sitl/requirements-video.txt"

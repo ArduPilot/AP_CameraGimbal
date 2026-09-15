@@ -1,0 +1,4 @@
+# Software video processing, without the optional VTK/map3d renderer.
+numpy>=1.24
+opencv-python>=4.10
+av>=16

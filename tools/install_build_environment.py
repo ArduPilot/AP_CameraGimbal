@@ -104,7 +104,8 @@ def main():
             'g++-aarch64-linux-gnu', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
             'autoconf', 'automake', 'libtool', 'pkg-config', 'bison', 'flex', 'gawk',
             'mtd-utils', 'fakeroot', 'zlib1g-dev', 'liblzo2-dev', 'libzstd-dev', 'liblzma-dev',
-            'openssl', 'patch', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs')
+            'openssl', 'patch', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
+            'python3-av', 'python3-opencv')
     BUILD.mkdir(exist_ok=True)
     env = BUILD / 'environment'
     if not (env / 'bin/python3').exists():

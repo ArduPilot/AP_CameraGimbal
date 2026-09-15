@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Offscreen map3d terrain renderer for camera-app's optional SITL video source.
+"""Live camera image processing for simple fixtures and optional map3d terrain.
 
-The private socket carries one JSON pose request followed by three length/keyframe
-headers (network-order uint32 pairs) and Annex-B H.264 access units. The third
-unit is empty unless MT11 needs a visible substream encoding. There is only one
-request outstanding; image fetching never blocks on this socket.
+The private socket carries one JSON pose/control request followed by four
+length/keyframe headers (network-order uint32 pairs) and Annex-B access units.
+Optional encodings have zero length when unused. Requested still images follow
+as length-prefixed JPEGs. Only one request is outstanding at a time.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -37,11 +37,19 @@ def env_int(name, default, minimum, maximum):
     return value
 
 
-def dependencies():
+def dependencies(terrain_mode=True):
     # Optional imports stay out of the ordinary SITL build and launcher.
-    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose
+    global av, np, vtk, numpy_support, terrain, mp_tile, camera_pose, ImageControls
     import av
     import numpy as np
+    import cv2
+    if __package__:
+        from .image_controls import ImageControls
+    else:
+        from image_controls import ImageControls
+    cv2.setNumThreads(1)  # encoders already run in parallel; avoid CPU oversubscription
+    if not terrain_mode:
+        return
     import vtk
     from vtkmodules.util import numpy_support
     from MAVProxy.modules.mavproxy_map3d import terrain
@@ -273,6 +281,7 @@ class PosePredictor:
 class Scene:
     def __init__(self, sizes, downloads=16, radius=2):
         self.predictor = PosePredictor()
+        self.controls = ImageControls()
         self.sizes = sizes
         self.radius = radius
         self.ren = vtk.vtkRenderer()
@@ -398,10 +407,7 @@ class Scene:
         self.capture.Update()
         image = numpy_support.vtk_to_numpy(self.capture.GetOutput().GetPointData().GetScalars())
         image = np.ascontiguousarray(image.reshape(height, width, 3)[::-1])
-        if record['thermal'][stream]:
-            import cv2
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            image = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        image = self.controls.apply(image, record.get('image', {}), thermal)
         self.rendered[hfov, thermal] = (width, height, image)
         return image
 
@@ -411,16 +417,104 @@ class Scene:
         self.window.Finalize()
 
 
+class Fixture:
+    """Loop a source video at its original rate, retaining only the current frame."""
+    def __init__(self, path):
+        self.path = path
+        self.container = None
+        self.index = -1
+        self.open()
+
+    def open(self):
+        if self.container:
+            self.container.close()
+        self.container = av.open(self.path)
+        stream = self.container.streams.video[0]
+        stream.thread_count = 2
+        self.rate = float(stream.average_rate or stream.guessed_rate or 10)
+        self.frames = iter(self.container.decode(video=0))
+
+    def at(self, seconds):
+        target = int(seconds * self.rate)
+        while self.index < target:
+            frame = next(self.frames, None)
+            if frame is None:
+                self.open()
+                frame = next(self.frames, None)
+                if frame is None:
+                    raise ValueError(f'Empty video fixture: {self.path}')
+            self.image = frame.to_ndarray(format='rgb24')
+            self.index += 1
+        return self.image
+
+    def close(self):
+        self.container.close()
+
+
+class FixtureScene:
+    def __init__(self, sizes):
+        self.sizes = sizes
+        self.controls = ImageControls()
+        self.manager = None
+        self.tiles = SimpleNamespace(tiles_pending=lambda: 0)
+        first = os.environ.get('CAMERA_APP_SITL_VIDEO1')
+        second = os.environ.get('CAMERA_APP_SITL_VIDEO2') or first
+        third = os.environ.get('CAMERA_APP_SITL_VIDEO3') or first
+        if not first:
+            raise ValueError('Simple video requires CAMERA_APP_SITL_VIDEO1')
+        self.sources = {path: Fixture(path) for path in set((first, second, third))}
+        self.paths = [first, second, third, first]
+        self.started = None
+
+    def update(self, record):
+        pts = record['pts90k'] / 90000
+        if self.started is None:
+            self.started = pts
+        self.images = {path: source.at(pts - self.started) for path, source in self.sources.items()}
+        self.rendered = {}
+        return True
+
+    def render(self, stream, record, valid):
+        import cv2
+        width, height = self.sizes[stream]
+        thermal = record['thermal'][stream]
+        path = self.paths[stream]
+        fov = record['fov'][stream]
+        key = path, thermal, fov
+        cached = self.rendered.get(key)
+        if cached is not None and cached.shape[1] >= width and cached.shape[0] >= height:
+            return cv2.resize(cached, (width, height), interpolation=cv2.INTER_AREA)
+        image = self.images[path]
+        if not thermal:
+            ratio = max(1, math.tan(math.radians(record.get('base_fov', fov)) / 2) /
+                        math.tan(math.radians(fov) / 2))
+            h, w = image.shape[:2]
+            cw, ch = max(1, round(w / ratio)), max(1, round(h / ratio))
+            x, y = (w - cw) // 2, (h - ch) // 2
+            image = image[y:y + ch, x:x + cw]
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
+        image = self.controls.apply(image, record.get('image', {}), thermal)
+        self.rendered[key] = image
+        return image
+
+    def close(self):
+        for source in self.sources.values():
+            source.close()
+
+
 class Encoder:
-    def __init__(self, size, fps):
-        self.codec = av.CodecContext.create('libx264', 'w')
+    def __init__(self, size, fps, codec='h264'):
+        hevc = codec == 'h265'
+        self.codec = av.CodecContext.create('libx265' if hevc else 'libx264', 'w')
         self.codec.width, self.codec.height = size
         self.codec.pix_fmt = 'yuv420p'
         self.codec.time_base = Fraction(1, 90000)
         self.codec.framerate = Fraction(fps)
         self.codec.thread_count = 2
         self.codec.options = {'preset': 'ultrafast', 'tune': 'zerolatency', 'crf': '23',
-                              'x264-params': f'aud=1:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0'}
+                              'x265-params' if hevc else 'x264-params':
+                                  f'aud=1:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0' +
+                                  (':pools=none:frame-threads=1:log-level=error' if hevc else '')}
         self.codec.open()
 
     def encode(self, image, pts, force_key=False):
@@ -431,7 +525,7 @@ class Encoder:
             frame.pict_type = av.video.frame.PictureType.I
         packets = self.codec.encode(frame)
         if not packets:
-            raise RuntimeError('H.264 encoder buffered a frame despite zerolatency')
+            raise RuntimeError('Video encoder buffered a frame despite zerolatency')
         data = b''.join(bytes(p) for p in packets)
         return struct.pack('!II', len(data), int(any(p.is_keyframe for p in packets))) + data
 
@@ -439,21 +533,24 @@ class Encoder:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='check optional Python dependencies')
+    parser.add_argument('--simple', action='store_true', help='check only software video dependencies')
     parser.add_argument('--fd', type=int)
     parser.add_argument('--connect', type=int, help='private loopback connection from Windows camera service')
     parser.add_argument('--token', default='')
     for stream in (1, 2, 3, 4):
         parser.add_argument(f'--width{stream}', type=int, default=640)
         parser.add_argument(f'--height{stream}', type=int, default=360)
+        parser.add_argument(f'--codec{stream}', choices=('h264', 'h265'), default='h264')
     parser.add_argument('--fps', type=int, default=20)
     args = parser.parse_args()
-    dependencies()
+    terrain_mode = not args.simple and (args.check or bool(os.environ.get('CAMERA_APP_SITL_TERRAIN')))
+    dependencies(terrain_mode)
     socket.setdefaulttimeout(10)  # also bounds mp_tile's background HTTP requests
     downloads = env_int('CAMERA_GIMBAL_SITL_TILE_THREADS', 16, 1, 64)
     radius = env_int('CAMERA_GIMBAL_SITL_PREFETCH_RADIUS', 2, 1, 4)
     env_int('CAMERA_GIMBAL_SITL_FPS', args.fps, 1, 60)
     if args.check:
-        print('SITL terrain dependencies available')
+        print('SITL video dependencies available' + (' (including terrain)' if terrain_mode else ''))
         return
     if (args.fd is None) == (args.connect is None):
         parser.error('exactly one of --fd and --connect is required')
@@ -461,12 +558,13 @@ def main():
         parser.error('invalid private connection')
     sizes = [(args.width1, args.height1), (args.width2, args.height2),
              (args.width3, args.height3), (args.width4, args.height4)]
-    scene = Scene(sizes, downloads, radius)
-    encoders = [Encoder(size, args.fps) for size in sizes]
+    scene = Scene(sizes, downloads, radius) if terrain_mode else FixtureScene(sizes)
+    encoders = [Encoder(size, args.fps, getattr(args, f'codec{i+1}')) for i, size in enumerate(sizes)]
     try:
         connection = socket.create_connection(('127.0.0.1', args.connect)) if args.connect else socket.socket(fileno=args.fd)
         if args.connect:
             connection.sendall(args.token.encode('ascii'))
+        connection.sendall(b'R')  # source and codec setup succeeded
         with connection as sock, sock.makefile('rb') as requests, \
                 ThreadPoolExecutor(max_workers=4, thread_name_prefix='video-encode') as pool:
             count, started = 0, time.monotonic()
@@ -495,6 +593,20 @@ def main():
                            for i in range(4)]
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
+                # Still images use the same current scene and image controls.
+                # Render each requested lens without changing the live selection.
+                for lens in range(3):
+                    if not record.get('capture', 0) & (1 << lens):
+                        continue
+                    import cv2
+                    stream = 1 if lens == 2 else 0
+                    photo_record = dict(record, fov=list(record['fov']))
+                    photo_record['fov'][stream] = record['capture_fov'][lens]
+                    pixels = scene.render(stream, photo_record, valid)
+                    ok, jpeg = cv2.imencode('.jpg', cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
+                    if not ok:
+                        raise RuntimeError('SITL photo encoding failed')
+                    sock.sendall(struct.pack('!I', jpeg.size) + jpeg.tobytes())
                 previous_recording = active[3]
                 timings.append((time.monotonic() - frame_started) * 1000)
                 count += 1
@@ -515,4 +627,5 @@ if __name__ == '__main__':
     try:
         main()
     except (ImportError, ValueError, RuntimeError) as error:
-        sys.exit(f'SITL terrain: {error}. See sitl/requirements-terrain.txt and sitl/README.md')
+        sys.exit(f'SITL video: {error}. See sitl/requirements-video.txt '
+                 '(plus requirements-terrain.txt for 3D imagery) and sitl/README.md')

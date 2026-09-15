@@ -199,6 +199,18 @@ def synthetic():
             assert scene.window.GetSize() == (320, 180)
             assert rgb.std() > 10
             np.testing.assert_array_equal(ir[:, :, 0], ir[:, :, 1])
+            # Controls are applied to terrain pixels as well as fixture video.
+            state['image'] = {'brightness': 80, 'thermal_palette': 3}
+            scene.update(state)
+            brighter = scene.render(0, state, True)
+            assert brighter.mean() > rgb.mean() + 30
+            iron = scene.render(1, state, True)
+            assert np.abs(iron[:, :, 0].astype(float) - iron[:, :, 2]).mean() > 10
+            state['image'] = {'saturation': 0}
+            scene.update(state)
+            gray = scene.render(0, state, True)
+            np.testing.assert_array_equal(gray[:, :, 0], gray[:, :, 2])
+            state.pop('image')
             before = rgb.copy()
             state['gimbal_attitude']['yaw_rad'] = math.pi / 2
             scene.update(state)
@@ -220,7 +232,7 @@ def synthetic():
                 frames.extend(decoder.decode(video.av.Packet(data[8:])))
             assert len(frames) == 5
             print(f'PASS terrain loading ({peak} workers), camera motion, grayscale, '
-                  'stale telemetry, H.264 and forced source-switch keyframes')
+                  'image controls, stale telemetry, H.264 and forced source-switch keyframes')
         finally:
             scene.close()
             for worker in scene.manager.workers:
