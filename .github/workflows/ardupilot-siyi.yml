@@ -33,6 +33,9 @@ jobs:
       - name: Test ArduPilot MAVLink drivers over NET against MT11 SITL
         run: tests/run_ardupilot_mavlink_test.sh "$RUNNER_TEMP/ardupilot"
 
+      - name: Test RC joystick rate control against A8 and MT11 SITL (issue 3)
+        run: tests/run_ardupilot_rc_mount_test.sh "$RUNNER_TEMP/ardupilot"
+
       - name: Upload process logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -41,4 +44,7 @@ jobs:
           path: |
             build/sitl/ardupilot-test/runtime/run/*.log
             build/sitl/ardupilot-mavlink-test/*/run/*.log
+            build/rc-mount-test/**/*.log
+            build/rc-mount-test/**/*.json
+            build/rc-mount-test/**/*.BIN
           if-no-files-found: ignore
