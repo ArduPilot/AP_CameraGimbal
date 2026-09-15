@@ -40,7 +40,7 @@ MAVLINK_DEPS := $(APCAM_HEADERS) $(MAVLINK_HEADER) $(MAVLINK_STAMP) include/came
 MAVLINK_CPPFLAGS := -I$(MAVLINK_GEN_DIR) -DCA_MAVLINK_DIALECT=$(MAVLINK_DIALECT)
 
 BACKEND_DIR := src/backends/$(CAMERA_BACKEND)
-CPPFLAGS = $(APCAM_CPPFLAGS) -Iinclude -I$(BACKEND_DIR) $(MAVLINK_CPPFLAGS)
+CPPFLAGS = -Ibuild $(APCAM_CPPFLAGS) -Iinclude -I$(BACKEND_DIR) $(MAVLINK_CPPFLAGS)
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Werror -std=c11
 ifeq ($(CAMERA_BACKEND),zr10)
 CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
@@ -85,7 +85,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.c) src/main.c \
 	src/config.c \
-	src/log.c \
+	src/log.c src/recording/binlog.c \
 	src/media/autofocus.c src/media/media.c \
 	src/protocol/mavlink.c \
 	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
@@ -168,6 +168,12 @@ WEB_PORT ?= 80
 .PHONY: all clean host sitl test install install-app install-web install-init FORCE
 
 all: $(TARGET)
+
+build/binlog_version.h: FORCE
+	$(PYTHON) ../tools/write_build_version.py $@
+
+src/recording/binlog.c: build/binlog_version.h
+
 
 ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
 A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,\
@@ -508,7 +514,7 @@ test: tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(
 	python3 ../tests/test_targets.py
 	python3 ../tests/test_a8_service.py
 	./$(VIDEO_METADATA_TEST_TARGET)
-	./$(CONFIG_TEST_TARGET)
+	./$(CONFIG_TEST_TARGET) camera.ini
 	./$(TARGETING_TEST_TARGET)
 	./$(E5739_TEST_TARGET)
 	./$(THERMAL_TEST_TARGET)
@@ -559,7 +565,7 @@ install-init: $(APP_INIT) $(APP_SELECTION) $(TIMESYNC)
 	$(SSH) $(SSH_HOST) 'set -eu; chmod 0755 $(REMOTE_TIMESYNC).new $(REMOTE_APP_SELECTION).new $(REMOTE_APP_INIT).new; /bin/fsync $(REMOTE_TIMESYNC).new; /bin/fsync $(REMOTE_APP_SELECTION).new; /bin/fsync $(REMOTE_APP_INIT).new; mv $(REMOTE_TIMESYNC).new $(REMOTE_TIMESYNC); /bin/fsync /app/bin; test -x $(REMOTE_TIMESYNC); mv $(REMOTE_APP_SELECTION).new $(REMOTE_APP_SELECTION); /bin/fsync /app; test -x $(REMOTE_APP_SELECTION); mv $(REMOTE_APP_INIT).new $(REMOTE_APP_INIT); /bin/fsync /app; test -x $(REMOTE_APP_INIT); sha256sum $(REMOTE_TIMESYNC) $(REMOTE_APP_SELECTION) $(REMOTE_APP_INIT)'
 
 clean:
-	rm -f tests/test_support_mavlink $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
+	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
 	rm -f $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \
 		tests/test.ffprobe.err tests/test.fragmented.ffprobe.err
@@ -617,3 +623,10 @@ build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/backends/z1mini/ax
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)
 	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< -o $@ -ldl -pthread
+
+.PHONY: thermal-monitor-test
+thermal-monitor-test: tests/test_thermal_monitor
+	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_thermal_monitor"], check=True, timeout=10)'
+
+tests/test_thermal_monitor: tests/test_thermal_monitor.c src/media/media.c include/camera_app/media.h include/camera_app/binlog.h
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.c src/media/media.c -lpthread -lm

@@ -58,9 +58,24 @@
 #define APCAM_DEFAULT_TIMEZONE "GMT-10"
 #define APCAM_GIMBAL_PITCH_MIN -90.0f
 #define APCAM_GIMBAL_PITCH_MAX 30.0f
+#define APCAM_GIMBAL_YAW_CONTINUOUS 1
 #define APCAM_GIMBAL_YAW_MIN -180.0f
 #define APCAM_GIMBAL_YAW_MAX 180.0f
 #define APCAM_GIMBAL_RATE_MAX 60.0f
+/* MT11 bench BIN: normalized yaw speed 100 is approximately 100 deg/s. */
+#define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
+#define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f
+/* Isolated upright bench sweeps, 2026-09-15: both axes hold still at
+ * +/-1..5; above the threshold motion is approximately 1 deg/s per command
+ * unit. Pitch measured through +/-100, yaw has more noise and asymmetry.
+ * These are physical responses, separate from requested-rate conversion.
+ * Inverted operation and hysteresis still need independent verification. */
+#define APCAM_SIM_PITCH_RATE_CURVE {-100, -100, -6, -6, -5, 0, 0, 0, 5, 0, 6, 6, 100, 100}
+#define APCAM_SIM_YAW_RATE_CURVE {-100, -100, -6, -6, -5, 0, 0, 0, 5, 0, 6, 6, 100, 100}
+/* Approximate command/actuator lag from onset and stopping motion; includes
+ * unseparated transport/feedback latency. See docs/mt11-rate-calibration.md. */
+#define APCAM_SIM_RATE_TIME_CONSTANT 0.04f
+
 #define APCAM_LENS2_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS2_NAME "Zoom RGB"
 #define APCAM_LENS2_FOV_H 31.3613561f

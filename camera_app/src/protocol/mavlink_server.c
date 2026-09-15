@@ -9,6 +9,7 @@
 #include "camera_app/siyi.h"
 #include "camera_app/external_uart.h"
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
 #include "camera_app/mavlink.h"
 #include "camera_app/support_proxy.h"
 #include "camera_app/media.h"
@@ -149,7 +150,16 @@ struct ca_mavlink_server {
     char config_last_status[512];
     bool yaw_lock;
     bool reported_recording;
+    uint32_t flight_mode;
+    uint64_t log_retry_ms, log_snapshot_ms, log_status_ms;
+    bool log_snapshot_valid;
+    int logged_saved[128], logged_applied[128];
+    float logged_camera[128];
+    struct ca_log_mode logged_mode;
 };
+
+static void update_binlog(struct ca_mavlink_server *server, bool allow_stop);
+
 
 static uint64_t monotonic_ms(void)
 {
@@ -414,6 +424,8 @@ static void send_ack(struct ca_mavlink_server *server, const struct route *route
                      const mavlink_message_t *request)
 {
     mavlink_message_t message;
+    CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=command,.system=request->sysid,
+        .component=request->compid,.result=result);
     mavlink_command_ack_t ack = {
         .command = command,
         .result = result,
@@ -944,6 +956,7 @@ static void stop_tracking_rate(struct ca_mavlink_server *server)
 {
     if (server->tracking_rate_active)
         (void)ca_backend_set_gimbal_rates(server->backend, 0, 0);
+    if (server->tracking_rate_active) ca_binlog_message("Tracking rate stopped");
     server->tracking_rate_active = false;
     memset(server->tracking_error, 0, sizeof(server->tracking_error));
     memset(server->tracking_rate, 0, sizeof(server->tracking_rate));
@@ -1008,21 +1021,29 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     for (unsigned i = 0; i < 2; i++) {
         if (desired[i] < minimum[i] || desired[i] > maximum[i]) feed_forward[i] = 0;
         desired[i] = fminf(maximum[i], fmaxf(minimum[i], desired[i]));
-        /* Predict the delayed feedback with our last output. Filter and give
-         * the error a small deadband to avoid chasing 0.1-degree IMU noise.
-         * Joint yaw is bounded: do not take a shortcut through a hard stop. */
+        /* MT11 yaw rotates through +/-180: the seam is a coordinate wrap,
+         * not a 360-degree pointing error. Limited-travel targets must still
+         * traverse their allowed joint range rather than cross a hard stop. */
         float measured = feedback[i] + server->tracking_rate[i] *
             fminf((now - attitude.timestamp_ms) * .001f, .2f);
         float error = desired[i] - measured;
-        float alpha = dt / (.2f + dt);
+        bool circular = i == 1 && APCAM_GIMBAL_YAW_CONTINUOUS;
+        if (circular) error = wrap_pi_f(error);
+        float alpha = dt / (.05f + dt);
         server->tracking_error[i] += alpha * (error - server->tracking_error[i]);
         float correction = copysignf(fmaxf(0, fabsf(server->tracking_error[i]) - .2f * radians),
                                      server->tracking_error[i]);
-        float requested = bounded(feed_forward[i] + 2.0f * correction, APCAM_GIMBAL_RATE_MAX * radians);
+        float requested = bounded(feed_forward[i] + 1.2f * correction, APCAM_GIMBAL_RATE_MAX * radians);
         output[i] = server->tracking_rate[i] + bounded(requested - server->tracking_rate[i],
                                                        APCAM_GIMBAL_RATE_MAX * radians * dt);
-        if ((feedback[i] <= minimum[i] && output[i] < 0) ||
-            (feedback[i] >= maximum[i] && output[i] > 0)) output[i] = 0;
+        if (!circular && ((feedback[i] <= minimum[i] && output[i] < 0) ||
+            (feedback[i] >= maximum[i] && output[i] > 0))) output[i] = 0;
+        CA_BINLOG(i ? CA_LOG_PIDY : CA_LOG_PIDP, ca_log_pid,
+            .target=desired[i]/radians, .actual=feedback[i]/radians,
+            .rate=(i ? attitude.yaw_rate_rad_s : attitude.pitch_rate_rad_s)/radians,
+            .ff=feed_forward[i]/radians, .error=error/radians,
+            .p=1.2f*correction/radians, .i=0, .d=0, .output=output[i]/radians,
+            .dt=dt, .age=(now-attitude.timestamp_ms)*.001f);
     }
     if (ca_backend_set_gimbal_rates(server->backend, output[0], output[1]) == 0) {
         server->tracking_rate_active = true;
@@ -1400,6 +1421,9 @@ static void handle_autopilot_state_for_gimbal(
     if (!isfinite(yaw_rate)) yaw_rate = 0.0f;
     ca_metadata_set_vehicle_attitude_motion(roll, pitch, yaw, yaw_rate);
     ca_metadata_set_velocity(state.vx, state.vy, state.vz);
+    CA_BINLOG(CA_LOG_ATT, ca_log_att, .boot_ms=(uint32_t)(state.time_boot_us/1000),
+        .source=1, .roll=roll*57.295779513f,.pitch=pitch*57.295779513f,
+        .yaw=yaw*57.295779513f,.rollrate=NAN,.pitchrate=NAN,.yawrate=yaw_rate*57.295779513f);
     server->vehicle_yaw_rad = yaw;
     server->vehicle_yaw_rate_rad_s = yaw_rate;
     server->vehicle_attitude_updated_ms = monotonic_ms();
@@ -1411,8 +1435,6 @@ static void handle_attitude(struct ca_mavlink_server *server,
 {
     /* Metadata fallback only: never overwrite a fresh gimbal-state quaternion
      * with the independently scheduled ATTITUDE stream. */
-    if (server->have_vehicle_attitude &&
-        monotonic_ms() - server->vehicle_attitude_updated_ms < VEHICLE_ATTITUDE_TIMEOUT_MS) return;
     mavlink_attitude_t attitude;
     if (message->sysid != server->autopilot_system_id ||
         message->compid != server->autopilot_component_id) {
@@ -1423,6 +1445,12 @@ static void handle_attitude(struct ca_mavlink_server *server,
         !isfinite(attitude.yaw)) {
         return;
     }
+    CA_BINLOG(CA_LOG_ATT, ca_log_att, .boot_ms=attitude.time_boot_ms, .source=2,
+        .roll=attitude.roll*57.295779513f,.pitch=attitude.pitch*57.295779513f,
+        .yaw=attitude.yaw*57.295779513f,.rollrate=attitude.rollspeed*57.295779513f,
+        .pitchrate=attitude.pitchspeed*57.295779513f,.yawrate=attitude.yawspeed*57.295779513f);
+    if (server->have_vehicle_attitude &&
+        monotonic_ms() - server->vehicle_attitude_updated_ms < VEHICLE_ATTITUDE_TIMEOUT_MS) return;
     /* ATTITUDE rates are body rates; convert to Euler yaw rate. */
     float cp = cosf(attitude.pitch);
     float yaw_rate = fabsf(cp) > 0.01f ?
@@ -1488,6 +1516,9 @@ static void handle_global_position_int(
                                  : heading_cdeg * 0.01f * (float)(M_PI / 180.0));
     ca_metadata_set_velocity(position.vx * 0.01f, position.vy * 0.01f,
                               position.vz * 0.01f);
+    CA_BINLOG(CA_LOG_POS, ca_log_pos, .boot_ms=position.time_boot_ms,
+        .lat=lat_e7,.lon=lon_e7,.alt=alt_mm*.001f,.relalt=relative_alt_mm*.001f,
+        .vn=position.vx*.01f,.ve=position.vy*.01f,.vd=position.vz*.01f);
     bool first_position = !server->have_vehicle_position;
     server->vehicle_lat_e7 = lat_e7;
     server->vehicle_lon_e7 = lon_e7;
@@ -1645,6 +1676,7 @@ static void send_parameter(struct ca_mavlink_server *server, size_t index)
 
 static void parameter_status(struct ca_mavlink_server *server, const char *text)
 {
+    ca_binlog_message(text);
     mavlink_message_t message;
     mavlink_statustext_t status = {.severity = MAV_SEVERITY_INFO};
     snprintf(status.text, sizeof(status.text), "%s", text);
@@ -1703,6 +1735,11 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
         server->last_target_location_ms = 0;
     }
     if (!next->position_targeting) server->target_location_active = false;
+    for (size_t i=0;i<ca_config_param_count();i++) {
+        int value=ca_config_param_get(next,i);
+        if (value!=ca_config_param_get(&previous,i))
+            ca_binlog_parameter(ca_config_param_name(i),value,true);
+    }
     server->settings = *next;
     server->photo_scope = next->photo_scope;
     if (next->position_targeting != previous.position_targeting) send_gimbal_information(server, NULL);
@@ -1731,6 +1768,7 @@ static int apply_camera_config(struct ca_mavlink_server *server, size_t index, f
         parameter_status(server, "Parameter could not be saved");
         return -1;
     }
+    ca_binlog_parameter(ca_config_param_name(index),value,false);
     parameter_status(server, "Parameter applied and saved");
     return 0;
 }
@@ -1780,6 +1818,11 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     if (loaded < 0) {
         config_status(server, hash, "error", error[0] ? error : "Could not read configuration");
         return;
+    }
+    for (size_t i=0;i<ca_config_param_count();i++) {
+        int value=ca_config_param_get(&desired,i);
+        if (value!=ca_config_param_get(&server->parameters,i))
+            ca_binlog_parameter(ca_config_param_name(i),value,false);
     }
     server->parameters = desired;
     /* Apply inexpensive settings even if a format change must wait for a
@@ -1871,6 +1914,7 @@ static void handle_parameter(struct ca_mavlink_server *server,
                                      (size_t)index, set.param_value)) < 0) {
             parameter_status(server, "Parameter write rejected; value unchanged");
         } else if (!live_config_parameter((size_t)index)) {
+            ca_binlog_parameter(ca_config_param_name((size_t)index),set.param_value,false);
             parameter_status(server, "Parameter saved; restart camera-app to apply");
         }
     }
@@ -1925,6 +1969,72 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
         return true;
     }
     return false;
+}
+
+/* Preserve saved parameters and separately report the effective runtime values.
+ * Polling also observes vendor/UI controls which bypass PARAM_EXT_SET. */
+static void update_binlog(struct ca_mavlink_server *server, bool allow_stop)
+{
+    uint64_t now=monotonic_ms();
+    bool wanted=server->vehicle_armed || server->settings.log_disarmed;
+    bool started=false;
+    if (wanted && !ca_binlog_active() && (!server->log_retry_ms || now-server->log_retry_ms>=10000)) {
+        server->log_retry_ms=now;
+        started=ca_binlog_start(&server->parameters);
+        if (started) {
+            server->log_snapshot_valid=false;
+            for (size_t i=0;i<128;i++) server->logged_camera[i]=NAN;
+            server->log_status_ms=0;
+            struct ca_log_vid video={.time_us=ca_binlog_time_us(),.active=ca_media_recording(server->media)};
+            const char *path=ca_media_recording_path(server->media);
+            if (path) snprintf(video.path,sizeof(video.path),"%s",path);
+            ca_binlog_emit(CA_LOG_VID,&video,sizeof(video));
+        }
+    }
+    if (!ca_binlog_active()) return;
+    if (!server->log_snapshot_valid || now-server->log_snapshot_ms>=100) {
+        server->log_snapshot_ms=now;
+        for (size_t i=0;i<ca_config_param_count() && i<128;i++) {
+            int saved=ca_config_param_get(&server->parameters,i);
+            int applied=ca_config_param_get(&server->settings,i);
+            if (!server->log_snapshot_valid || server->logged_saved[i]!=saved)
+                ca_binlog_parameter(ca_config_param_name(i),saved,false);
+            if (!server->log_snapshot_valid || server->logged_applied[i]!=applied)
+                ca_binlog_parameter(ca_config_param_name(i),applied,true);
+            server->logged_saved[i]=saved; server->logged_applied[i]=applied;
+        }
+        for (size_t i=0;i<ca_camera_param_count() && i<128;i++) {
+            struct ca_camera_parameter p;
+            float value;
+            if (!ca_camera_param_info(i,&p) || p.operation==CA_CAMERA_CONFIG) continue;
+            if (p.operation==CA_CAMERA_GAIN || p.operation==CA_CAMERA_PALETTE) {
+                uint8_t gain,palette;
+                if (!ca_media_cached_thermal_controls(server->media,&gain,&palette)) continue;
+                value=p.operation==CA_CAMERA_GAIN ? gain : palette;
+            } else if (!camera_parameter_get(server,&p,&value)) continue;
+            if (!server->log_snapshot_valid || value!=server->logged_camera[i]) ca_binlog_parameter(p.name,value,false);
+            server->logged_camera[i]=value;
+        }
+        server->log_snapshot_valid=true;
+    }
+    struct ca_log_mode mode={.flight_mode=server->flight_mode,.armed=server->vehicle_armed,
+        .mode=server->target_location_active ? 1 : 0,.method=server->settings.tracking_method,
+        .yawlock=server->yaw_lock,.recording=ca_media_recording(server->media),.system=server->system_id};
+    if (started || now-server->log_status_ms>=1000 || memcmp(&mode,&server->logged_mode,sizeof(mode))) {
+        server->logged_mode=mode;
+        mode.time_us=ca_binlog_time_us();
+        ca_binlog_emit(CA_LOG_MODE,&mode,sizeof(mode));
+        CA_BINLOG(CA_LOG_ROI,ca_log_roi,.lat=server->target_lat_e7,.lon=server->target_lon_e7,
+            .alt=server->target_alt_amsl_m,.active=server->target_location_active);
+        CA_BINLOG(CA_LOG_TIME,ca_log_time,.utc_us=realtime_us());
+        ca_binlog_stats();
+        server->log_status_ms=now;
+    }
+    if (!wanted && allow_stop) {
+        ca_binlog_message("Logging stopped: disarmed");
+        ca_binlog_stop();
+        server->log_retry_ms=0;
+    }
 }
 
 static int camera_parameter_set(struct ca_mavlink_server *server,
@@ -2043,6 +2153,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
         &server->encode_status, &response, &ack);
     (void)send_message(server, route, &response);
     if (found && ack.param_result == PARAM_ACK_ACCEPTED && p.operation != CA_CAMERA_CONFIG) {
+        ca_binlog_parameter(p.name,current,false);
         send_camera_settings(server, route);
     }
 }
@@ -2083,6 +2194,19 @@ static void process_message(struct ca_mavlink_server *server,
         broadcast_heartbeats(server);
     }
     if (server->system_id == 0U) return;
+    if (message->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
+        mavlink_command_long_t c;
+        mavlink_msg_command_long_decode(message,&c);
+        CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=c.command,.system=message->sysid,
+            .component=message->compid,.result=255,.p1=c.param1,.p2=c.param2,.p3=c.param3,
+            .p4=c.param4,.p5=c.param5,.p6=c.param6,.p7=c.param7);
+    } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_INT) {
+        mavlink_command_int_t c;
+        mavlink_msg_command_int_decode(message,&c);
+        CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=c.command,.system=message->sysid,
+            .component=message->compid,.result=255,.p1=c.param1,.p2=c.param2,.p3=c.param3,
+            .p4=c.param4,.p5=c.x*1.e-7f,.p6=c.y*1.e-7f,.p7=c.z);
+    }
     if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 7U &&
         message->sysid == server->system_id &&
         message->compid == MAV_COMP_ID_AUTOPILOT1) {
@@ -2090,6 +2214,8 @@ static void process_message(struct ca_mavlink_server *server,
                       MAV_MODE_FLAG_SAFETY_ARMED) != 0U;
         server->have_vehicle_armed = true;
         server->vehicle_armed = armed;
+        server->flight_mode = mavlink_msg_heartbeat_get_custom_mode(message);
+        update_binlog(server, false);
         /* Reconcile on each matching heartbeat, including the first heartbeat
          * after a restart while airborne. Link loss is not a disarm event. */
         if (server->settings.autorecord == CA_AUTORECORD_WHILE_ARMED &&
@@ -2103,6 +2229,7 @@ static void process_message(struct ca_mavlink_server *server,
             }
         }
     }
+    if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT) update_binlog(server, true);
     if (message->msgid == MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL) {
         handle_camera_ftp(server, route, message);
         return;
@@ -2438,6 +2565,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
     uint64_t now = monotonic_ms();
     reload_config(server, now);
+    update_binlog(server, true);
     bool recording = ca_media_recording(server->media);
     if (recording != server->reported_recording) {
         server->reported_recording = recording;

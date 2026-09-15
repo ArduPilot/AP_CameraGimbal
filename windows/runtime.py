@@ -108,7 +108,7 @@ def main():
     env['CAMERA_GIMBAL_SITL_CAMERA_EXE'] = posix_path(camera_exe)
     env['CAMERA_GIMBAL_SITL_WEB_EXE'] = posix_path(web_exe)
     paths = {'CAMERA_APP_CONFIG': 'app/camera.ini', 'CAMERA_APP_READY_PATH': 'run/camera-app.ready',
-             'CAMERA_APP_RECORD_STATE': 'run/recording.state', 'CAMERA_APP_RECORD_ROOT': 'mnt/DCIM/record',
+             'CAMERA_APP_LOG_ROOT': 'mnt/logs', 'CAMERA_APP_RECORD_STATE': 'run/recording.state', 'CAMERA_APP_RECORD_ROOT': 'mnt/DCIM/record',
              'CAMERA_APP_CAPTURE_ROOT': 'mnt/DCIM/capture'}
     env.update({key: posix_path(root / value) for key, value in paths.items()})
     env.update(CAMERA_APP_BACKEND=backend,

@@ -137,6 +137,7 @@ struct ca_config {
     enum ca_white_balance white_balance;
     bool position_targeting;
     enum ca_tracking_method tracking_method;
+    bool log_disarmed;
     unsigned mavlink_system_id;
     unsigned mavlink_tcp_port;
     unsigned mavlink_udp_port;

@@ -11,6 +11,7 @@ tests/test_protocol
 tests/test_mavlink
 tests/test_e5739
 tests/test_thermal
+tests/test_thermal_monitor
 tests/test_raw_thermal
 tests/test_raw_thermal_server
 tests/test_live_video_server

@@ -143,6 +143,8 @@ static const struct ca_config_option tracking_options[] = {
 };
 
 static const struct config_field config_fields[] = {
+    {"logging", "disarmed", CONFIG_BOOL, offsetof(struct ca_config, log_disarmed),
+     sizeof(((struct ca_config *)0)->log_disarmed), NULL, 0U, 0, 0, "LOG_DISARMED"},
     {"general", "timezone", CONFIG_TIMEZONE,
      offsetof(struct ca_config, timezone),
      sizeof(((struct ca_config *)0)->timezone), NULL, 0U, 0, 0, NULL},

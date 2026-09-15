@@ -163,6 +163,7 @@ def main():
             "CAMERA_APP_READY_PATH": str(ready),
             "CAMERA_APP_RECORD_STATE": str(runtime / "run/test-recording.state"),
             "CAMERA_APP_RECORD_ROOT": str(runtime / "mnt/DCIM/record"),
+            "CAMERA_APP_LOG_ROOT": str(runtime / "mnt/logs"),
             "CAMERA_APP_CAPTURE_ROOT": str(runtime / "mnt/DCIM/capture"),
             "CAMERA_APP_SITL_VIDEO1": str(video1),
             "CAMERA_APP_SITL_VIDEO2": str(video2),

@@ -9,6 +9,7 @@
 #include "camera_app/backend.h"
 #include "camera_app/config.h"
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/mavlink_server.h"
@@ -388,6 +389,16 @@ int main(int argc, char **argv)
                                                  "/mnt/DCIM/record");
     const char *capture_root = environment_string("CAMERA_APP_CAPTURE_ROOT",
                                                   "/mnt/DCIM/capture");
+    const char *log_root = environment_string("CAMERA_APP_LOG_ROOT", "/mnt/logs");
+#ifdef CAMERA_APP_SITL
+    /* Keep isolated tests/portable installs off the host /mnt filesystem. */
+    char sitl_log_root[4096];
+    if (!getenv("CAMERA_APP_LOG_ROOT")) {
+        snprintf(sitl_log_root, sizeof(sitl_log_root), "%s/../logs", record_root);
+        log_root = sitl_log_root;
+    }
+#endif
+    if (ca_binlog_init(log_root) < 0) ca_log("cannot start BIN log writer: %s", strerror(errno));
     unsigned rtsp_port = environment_port("CAMERA_APP_RTSP_PORT", 8554U);
     struct ca_media_config media_config = {
         .backend = backend_name,
@@ -565,6 +576,7 @@ done:
     ca_mavlink_server_close(mavlink_server);
     ca_backend_close(backend);
     ca_media_close(media);
+    ca_binlog_close();
 #if APCAM_HAVE_XFROBOT
     ca_xfrobot_server_close(xfrobot);
 #endif

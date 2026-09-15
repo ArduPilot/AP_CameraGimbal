@@ -18,14 +18,20 @@ static void write_config(int fd, const char *text)
     assert(close(fd) == 0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char path[] = "/tmp/camera-app-config-XXXXXX";
     char error[160] = "";
     struct ca_config config;
     int fd;
 
+    if (argc > 1) {
+        ca_config_defaults(&config);
+        assert(ca_config_load(&config, argv[1], error, sizeof(error)) == 0);
+        assert(!config.log_disarmed);
+    }
     ca_config_defaults(&config);
+    assert(!config.log_disarmed);
     assert(strcmp(config.timezone, "GMT-10") == 0);
     assert(config.photo_scope == CA_PHOTO_SCOPE_ALL);
     assert(config.orientation == CA_MOUNT_AUTO);
@@ -94,7 +100,7 @@ int main(void)
     assert(strcmp(ca_thermal_palette_name(config.thermal_palette),
                   "ironbow") == 0);
 
-    assert(ca_config_param_count() == 28U);
+    assert(ca_config_param_count() == 30U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);

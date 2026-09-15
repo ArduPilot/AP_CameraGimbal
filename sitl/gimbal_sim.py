@@ -124,6 +124,7 @@ class Gimbal:
         self.roll = 0.0
         self.yaw_rate = 0.0
         self.pitch_rate = 0.0
+        self.commanded_rates = (0.0, 0.0)
         self.target = None
         self.mode = 0
         self.zoom = 1.0
@@ -139,10 +140,12 @@ class Gimbal:
             target_yaw, target_pitch = self.target
             maximum_step = self.properties["gimbal_rate_max"] * elapsed
             yaw_error = target_yaw - self.yaw
+            if self.properties["gimbal_yaw_continuous"]:
+                yaw_error = self.wrap_angle(yaw_error)
             pitch_error = target_pitch - self.pitch
             yaw_step = clamp(yaw_error, -maximum_step, maximum_step)
             pitch_step = clamp(pitch_error, -maximum_step, maximum_step)
-            self.yaw = clamp(self.yaw + yaw_step, self.properties["gimbal_yaw_min"], self.properties["gimbal_yaw_max"])
+            self.yaw = self.constrain_yaw(self.yaw + yaw_step)
             self.pitch = clamp(self.pitch + pitch_step, self.properties["gimbal_pitch_min"], self.properties["gimbal_pitch_max"])
             self.yaw_rate = yaw_step / elapsed if elapsed > 0 else 0.0
             self.pitch_rate = pitch_step / elapsed if elapsed > 0 else 0.0
@@ -150,9 +153,52 @@ class Gimbal:
                 self.target = None
                 self.yaw_rate = 0.0
                 self.pitch_rate = 0.0
+                self.commanded_rates = (0.0, 0.0)
         else:
-            self.yaw = clamp(self.yaw + self.yaw_rate * elapsed, self.properties["gimbal_yaw_min"], self.properties["gimbal_yaw_max"])
-            self.pitch = clamp(self.pitch + self.pitch_rate * elapsed, self.properties["gimbal_pitch_min"], self.properties["gimbal_pitch_max"])
+            tau = self.properties.get("sim_rate_time_constant", 0)
+            steps, rates = [], []
+            for actual, demand in zip((self.pitch_rate, self.yaw_rate), self.commanded_rates):
+                if tau > 0:
+                    decay = math.exp(-elapsed / tau)
+                    steps.append(demand * elapsed + (actual - demand) * tau * (1 - decay))
+                    rates.append(demand + (actual - demand) * decay)
+                else:
+                    steps.append(demand * elapsed)
+                    rates.append(demand)
+            self.pitch_rate, self.yaw_rate = rates
+            self.yaw = self.constrain_yaw(self.yaw + steps[1])
+            self.pitch = clamp(self.pitch + steps[0], self.properties["gimbal_pitch_min"], self.properties["gimbal_pitch_max"])
+
+    def vendor_rate_response(self, axis, command):
+        """Map a quantised SDK command to physical motion, not desired rate.
+
+        Optional target curves contain signed (command, deg/s) pairs. Signed
+        knots allow different positive/negative response. Unmeasured commands
+        extrapolate the nearest segment; calibration notes document coverage.
+        """
+        command = clamp(command, -100, 100)
+        if command == 0:
+            return 0.0
+        curve = self.properties.get("sim_" + axis + "_rate_curve")
+        if curve:
+            if len(curve) < 4 or len(curve) % 2 or any(
+                    curve[i] >= curve[i + 2] for i in range(0, len(curve) - 2, 2)):
+                raise ValueError("invalid " + axis + " rate response curve")
+            segment = len(curve) - 4
+            for i in range(0, len(curve) - 2, 2):
+                if command <= curve[i + 2]:
+                    segment = i
+                    break
+            x1, y1, x2, y2 = curve[segment:segment + 4]
+            rate = y1 + (command - x1) * (y2 - y1) / (x2 - x1)
+        else:
+            rate = command * self.properties["vendor_" + axis + "_rate_full_scale"] / 100
+        return rate * self.properties.get("sim_" + axis + "_rate_gain", 1.0)
+
+    def constrain_yaw(self, value):
+        if self.properties["gimbal_yaw_continuous"]:
+            return self.wrap_angle(value)
+        return clamp(value,self.properties["gimbal_yaw_min"],self.properties["gimbal_yaw_max"])
 
     @staticmethod
     def wrap_angle(value):
@@ -193,10 +239,13 @@ class Gimbal:
             self.target = None
             # Rate command 0x07 is positive right on both controllers even
             # though MT11 attitude report 0x0d is positive left.
-            _, self.pitch_rate, self.yaw_rate = transform(
+            _, pitch_rate, yaw_rate = transform(
                 self.properties, "rate_command", self.mounting_direction == 2,
-                (0, signed_byte(payload[1]) * self.properties["gimbal_rate_max"] / 100,
-                 signed_byte(payload[0]) * self.properties["gimbal_rate_max"] / 100), rates=True, inverse=True)
+                (0, self.vendor_rate_response("pitch", signed_byte(payload[1])),
+                 self.vendor_rate_response("yaw", signed_byte(payload[0]))), rates=True, inverse=True)
+            self.commanded_rates = (pitch_rate, yaw_rate)
+            if not self.properties.get("sim_rate_time_constant", 0):
+                self.pitch_rate, self.yaw_rate = self.commanded_rates
         elif opcode == 0x08 and len(payload) == 1:
             if payload[0] == 1:
                 self.target = (0.0, 0.0)

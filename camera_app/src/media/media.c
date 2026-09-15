@@ -1,6 +1,12 @@
 #define _GNU_SOURCE
 #include "camera_app/media_impl.h"
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
+#include "camera_app/metadata.h"
+#include <string.h>
+#include <stdio.h>
+#include <pthread.h>
+#include <time.h>
 #include "apcam/target.h"
 #include <errno.h>
 #include <math.h>
@@ -10,16 +16,77 @@ struct ca_media {
     struct ca_media_impl *impl;
     struct ca_media_config config;
     bool inverted;
+    uint8_t cached_gain, cached_palette;
+    bool cached_thermal;
+    pthread_mutex_t controls_lock;
+    pthread_cond_t controls_wake;
+    pthread_t controls_thread;
+    bool controls_running, controls_stop;
+    unsigned controls_generation;
 };
+
+/* Thermal USB transactions can take hundreds of milliseconds. Refresh their
+ * diagnostic cache off the control loop, never holding the cache lock over I/O. */
+static void *monitor_controls(void *opaque)
+{
+    struct ca_media *media=opaque;
+    pthread_mutex_lock(&media->controls_lock);
+    while (!media->controls_stop) {
+        unsigned generation=media->controls_generation;
+        pthread_mutex_unlock(&media->controls_lock);
+        uint8_t gain,palette;
+        bool valid=ca_media_impl_get_thermal_gain(media->impl,&gain)==0 &&
+            ca_media_impl_get_thermal_palette(media->impl,&palette)==0;
+        pthread_mutex_lock(&media->controls_lock);
+        if (valid && generation==media->controls_generation) {
+            media->cached_gain=gain; media->cached_palette=palette;
+            media->cached_thermal=true;
+        }
+        if (!media->controls_stop) {
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME,&until);
+            until.tv_sec++;
+            pthread_cond_timedwait(&media->controls_wake,&media->controls_lock,&until);
+        }
+    }
+    pthread_mutex_unlock(&media->controls_lock);
+    return NULL;
+}
+static void stop_controls_monitor(struct ca_media *media)
+{
+    if (!media->controls_running) return;
+    pthread_mutex_lock(&media->controls_lock);
+    media->controls_stop=true;
+    pthread_cond_signal(&media->controls_wake);
+    pthread_mutex_unlock(&media->controls_lock);
+    pthread_join(media->controls_thread,NULL);
+    media->controls_running=false;
+}
+static void start_controls_monitor(struct ca_media *media)
+{
+    if (!APCAM_HAVE_THERMAL || !media->impl || media->controls_running) return;
+    media->controls_stop=false;
+    media->cached_thermal=false;
+    int error=pthread_create(&media->controls_thread,NULL,monitor_controls,media);
+    if (error) ca_log("cannot start thermal controls monitor: %s",strerror(error));
+    else media->controls_running=true;
+}
 
 int ca_media_open(struct ca_media **result, const struct ca_media_config *config)
 {
     if (!result || !config) { errno = EINVAL; return -1; }
     struct ca_media *media = calloc(1, sizeof(*media));
     if (!media) return -1;
+    pthread_mutex_init(&media->controls_lock,NULL);
+    pthread_cond_init(&media->controls_wake,NULL);
     media->config = *config;
     media->inverted = config->settings.orientation == CA_MOUNT_INVERTED;
-    if (ca_media_impl_open(&media->impl, config) < 0) { free(media); return -1; }
+    if (ca_media_impl_open(&media->impl, config) < 0) {
+        pthread_cond_destroy(&media->controls_wake);
+        pthread_mutex_destroy(&media->controls_lock);
+        free(media); return -1;
+    }
+    start_controls_monitor(media);
     *result = media;
     return 0;
 }
@@ -72,6 +139,7 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
         }
         struct ca_media_config next = media->config;
         next.settings = *settings;
+        stop_controls_monitor(media);
         ca_media_impl_close(media->impl);
         media->impl = NULL;
         ca_log("reconfiguring media pipeline without restarting camera app");
@@ -81,9 +149,11 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
             media->impl = NULL;
             if (ca_media_impl_open(&media->impl, &media->config) < 0 || restore_controls(media, &state) < 0)
                 ca_log("media configuration rollback failed; retry configuration");
+            start_controls_monitor(media);
             errno = saved_errno ? saved_errno : EIO;
             return -1;
         }
+        start_controls_monitor(media);
         media->config = next;
         return 0;
     }
@@ -103,7 +173,11 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
 void ca_media_close(struct ca_media *media)
 {
     if (!media) return;
+    stop_controls_monitor(media);
+    if (ca_media_recording(media)) (void)ca_media_set_recording(media, false);
     ca_media_impl_close(media->impl);
+    pthread_cond_destroy(&media->controls_wake);
+    pthread_mutex_destroy(&media->controls_lock);
     free(media);
 }
 
@@ -114,7 +188,22 @@ void ca_media_close(struct ca_media *media)
 bool ca_media_ready(const struct ca_media *media)
 { return IMPL && ca_media_impl_ready(IMPL); }
 int ca_media_set_recording(struct ca_media *media, bool active)
-{ REQUIRE_IMPL; return ca_media_impl_set_recording(IMPL, active); }
+{
+    REQUIRE_IMPL;
+    bool previous=ca_media_impl_recording(IMPL);
+    struct ca_log_vid r={.time_us=ca_binlog_time_us(),.active=active};
+    const char *path=ca_media_impl_recording_path(IMPL);
+    if (path) snprintf(r.path,sizeof(r.path),"%s",path);
+    r.result=ca_media_impl_set_recording(IMPL,active);
+    int saved_errno=errno;
+    if (active) {
+        path=ca_media_impl_recording_path(IMPL);
+        if (path) snprintf(r.path,sizeof(r.path),"%s",path);
+    }
+    if (previous!=active || r.result<0) ca_binlog_emit(CA_LOG_VID,&r,sizeof(r));
+    errno=saved_errno;
+    return r.result;
+}
 bool ca_media_recording(const struct ca_media *media)
 { return IMPL && ca_media_impl_recording(IMPL); }
 const char *ca_media_recording_path(const struct ca_media *media)
@@ -144,15 +233,66 @@ int ca_media_set_focus_percent(struct ca_media *media, float percent)
 bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
 { return IMPL && ca_media_impl_thermal_range(IMPL, range); }
 int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
-{ REQUIRE_IMPL; return ca_media_impl_capture_photo(IMPL, scope); }
+{
+    REQUIRE_IMPL;
+    struct ca_metadata snapshot;
+    ca_metadata_snapshot(&snapshot);
+    struct ca_log_cam r={.time_us=ca_binlog_time_us(),.scope=scope,
+        .lat=snapshot.lat_e7,.lon=snapshot.lon_e7,.alt=snapshot.alt_amsl_m,
+        .roll=snapshot.gimbal_roll_rad*57.295779513f,
+        .pitch=snapshot.gimbal_pitch_rad*57.295779513f,
+        .yaw=snapshot.gimbal_yaw_rad*57.295779513f};
+    r.result=ca_media_impl_capture_photo(IMPL,scope);
+    int saved_errno=errno;
+    ca_binlog_emit(CA_LOG_CAM,&r,sizeof(r));
+    errno=saved_errno;
+    return r.result;
+}
+bool ca_media_cached_thermal_controls(struct ca_media *media, uint8_t *gain, uint8_t *palette)
+{
+    if (!media) return false;
+    pthread_mutex_lock(&media->controls_lock);
+    bool valid=media->cached_thermal;
+    *gain=media->cached_gain; *palette=media->cached_palette;
+    pthread_mutex_unlock(&media->controls_lock);
+    return valid;
+}
 int ca_media_get_thermal_gain(struct ca_media *media, uint8_t *gain)
-{ REQUIRE_IMPL; return ca_media_impl_get_thermal_gain(IMPL, gain); }
+{ REQUIRE_IMPL; int result=ca_media_impl_get_thermal_gain(IMPL, gain);
+  if (!result) {
+      pthread_mutex_lock(&media->controls_lock);
+      media->cached_gain=*gain;
+      media->controls_generation++;
+      pthread_mutex_unlock(&media->controls_lock);
+  }
+  return result; }
 int ca_media_set_thermal_gain(struct ca_media *media, uint8_t gain)
-{ REQUIRE_IMPL; return ca_media_impl_set_thermal_gain(IMPL, gain); }
+{ REQUIRE_IMPL; int result=ca_media_impl_set_thermal_gain(IMPL, gain);
+  if (!result) {
+      pthread_mutex_lock(&media->controls_lock);
+      media->cached_gain=gain;
+      media->controls_generation++;
+      pthread_mutex_unlock(&media->controls_lock);
+  }
+  return result; }
 int ca_media_get_thermal_palette(struct ca_media *media, uint8_t *palette)
-{ REQUIRE_IMPL; return ca_media_impl_get_thermal_palette(IMPL, palette); }
+{ REQUIRE_IMPL; int result=ca_media_impl_get_thermal_palette(IMPL, palette);
+  if (!result) {
+      pthread_mutex_lock(&media->controls_lock);
+      media->cached_palette=*palette;
+      media->controls_generation++;
+      pthread_mutex_unlock(&media->controls_lock);
+  }
+  return result; }
 int ca_media_set_thermal_palette(struct ca_media *media, uint8_t palette)
-{ REQUIRE_IMPL; return ca_media_impl_set_thermal_palette(IMPL, palette); }
+{ REQUIRE_IMPL; int result=ca_media_impl_set_thermal_palette(IMPL, palette);
+  if (!result) {
+      pthread_mutex_lock(&media->controls_lock);
+      media->cached_palette=palette;
+      media->controls_generation++;
+      pthread_mutex_unlock(&media->controls_lock);
+  }
+  return result; }
 int ca_media_set_inverted(struct ca_media *media, bool inverted)
 {
     REQUIRE_IMPL;

@@ -174,6 +174,8 @@ a8_sitl-mavlink-test: a8_sitl
 .PHONY: sitl-live-tracking-test
 sitl-live-tracking-test: sitl
 	$(MAKE) -C web portable-sitl SITL_BIN_ROOT=$(abspath $(SITL_BUILD))
+	$(MAKE) -C camera_app thermal-monitor-test
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_rates.py
 	$(SITL_VIDEO_PYTHON) sitl/test_live_tracking.py --build $(SITL_BUILD)
 
 sitl-angle-hold-test: sitl a8_sitl zr10_sitl

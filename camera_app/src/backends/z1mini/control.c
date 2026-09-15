@@ -4,6 +4,7 @@
  * Requested rates are integrated into angle targets; relative yaw is an angle.
  */
 #define _GNU_SOURCE
+#include "camera_app/binlog.h"
 #include "camera_app/backend.h"
 #include "camera_app/log.h"
 #include "camera_app/udp_transport.h"
@@ -123,6 +124,7 @@ int ca_backend_handle_fd(struct ca_backend *b)
         b->attitude.pitch_rate_rad_s = NAN;
         b->attitude.yaw_rate_rad_s = NAN;
         b->attitude.timestamp_ms = now_ms();
+        ca_binlog_feedback(&b->attitude);
         if (resync) {
             b->tx_pending = 0; /* discard an old partial command after link loss */
             b->roll = b->attitude.roll_rad;
@@ -188,6 +190,8 @@ int ca_backend_set_gimbal_angles(struct ca_backend *b, float pitch, float yaw)
     b->pitch = clamp(pitch, APCAM_GIMBAL_PITCH_MIN * 100 * CD_RAD, APCAM_GIMBAL_PITCH_MAX * 100 * CD_RAD);
     b->yaw = clamp(yaw, APCAM_GIMBAL_YAW_MIN * 100 * CD_RAD, APCAM_GIMBAL_YAW_MAX * 100 * CD_RAD);
     b->pitch_rate = b->yaw_rate = 0;
+    CA_BINLOG(CA_LOG_GCMD,ca_log_gcmd,.mode=1,.pitch=b->pitch*57.295779513f,
+        .yaw=b->yaw*57.295779513f,.wirep=NAN,.wirey=NAN,.result=0);
     return 0;
 }
 int ca_backend_set_gimbal_rates(struct ca_backend *b, float pitch, float yaw)
@@ -196,7 +200,10 @@ int ca_backend_set_gimbal_rates(struct ca_backend *b, float pitch, float yaw)
     if (!isfinite(pitch) || !isfinite(yaw)) { errno = EINVAL; return -1; }
     b->pitch_rate = clamp(pitch, -6000 * CD_RAD, 6000 * CD_RAD);
     b->yaw_rate = clamp(yaw, -6000 * CD_RAD, 6000 * CD_RAD);
-    b->rate_time = now_ms(); return 0;
+    b->rate_time = now_ms();
+    CA_BINLOG(CA_LOG_GCMD,ca_log_gcmd,.mode=2,.pitch=b->pitch_rate*57.295779513f,
+        .yaw=b->yaw_rate*57.295779513f,.wirep=NAN,.wirey=NAN,.result=0);
+    return 0;
 }
 int ca_backend_set_gimbal_neutral(struct ca_backend *b) { return ca_backend_set_gimbal_angles(b, 0, 0); }
 bool ca_backend_recording(const struct ca_backend *b)

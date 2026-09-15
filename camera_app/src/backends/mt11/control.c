@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "camera_app/binlog.h"
 #include "camera_app/backend.h"
 #include "camera_app/gimbal_angle_target.h"
 #include "apcam/gimbal_transform.h"
@@ -418,6 +419,7 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
                 backend->attitude.pitch_rate_rad_s = rates[1] * scale;
                 backend->attitude.yaw_rate_rad_s = rates[2] * scale;
                 backend->attitude.timestamp_ms = monotonic_ms();
+                ca_binlog_feedback(&backend->attitude);
                 backend->have_attitude = true;
             }
             if (packet.opcode == 0x19U && packet.payload_length == 1U &&
@@ -855,6 +857,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         const char *feature = unsupported_linux_feature(&packet);
         if (feature != NULL) log_unsupported(backend, packet.opcode, feature);
     }
+    ca_binlog_vendor(packet.opcode, packet.payload, packet.payload_length);
     ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode, packet.payload, packet.payload_length);
     return send_private(backend, 0x08, MT11_TUNNEL, packet_data,
                         (uint16_t)length);
@@ -934,15 +937,17 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
         (uint8_t)pitch, (uint8_t)((uint16_t)pitch >> 8U),
     };
     int result = send_public_command(backend, 0x0eU, payload, sizeof(payload));
+    CA_BINLOG(CA_LOG_GCMD, ca_log_gcmd, .mode=1, .pitch=target_pitch, .yaw=target_yaw,
+        .wirep=pitch, .wirey=yaw, .result=result);
     if (result == 0) {
         ca_angle_target_sent(&backend->angle_target, yaw, pitch, now);
     }
     return result;
 }
 
-static int8_t rate_byte(float radians_per_second)
+static int8_t rate_byte(float radians_per_second, float full_scale)
 {
-    float units = radians_per_second * (180.0f / PI_F) / (APCAM_GIMBAL_RATE_MAX / 100.0f);
+    float units = radians_per_second * (180.0f / PI_F) / (full_scale / 100.0f);
     if (units < -100.0f) units = -100.0f;
     if (units > 100.0f) units = 100.0f;
     return (int8_t)(units + (units >= 0.0f ? 0.5f : -0.5f));
@@ -955,10 +960,14 @@ int ca_backend_set_gimbal_rates(struct ca_backend *backend,
     float rates[3] = {0, pitch_rate_rad_s, yaw_rate_rad_s};
     apcam_transform(&apcam_rate_command[backend->mounting_direction == 2U], rates, rates, true);
     uint8_t payload[2] = {
-        (uint8_t)rate_byte(rates[2]),
-        (uint8_t)rate_byte(rates[1]),
+        (uint8_t)rate_byte(rates[2], APCAM_VENDOR_YAW_RATE_FULL_SCALE),
+        (uint8_t)rate_byte(rates[1], APCAM_VENDOR_PITCH_RATE_FULL_SCALE),
     };
-    return send_public_command(backend, 0x07U, payload, sizeof(payload));
+    int result = send_public_command(backend, 0x07U, payload, sizeof(payload));
+    CA_BINLOG(CA_LOG_GCMD, ca_log_gcmd, .mode=2,
+        .pitch=pitch_rate_rad_s*57.295779513f, .yaw=yaw_rate_rad_s*57.295779513f,
+        .wirep=(int8_t)payload[1], .wirey=(int8_t)payload[0], .result=result);
+    return result;
 }
 
 int ca_backend_set_gimbal_neutral(struct ca_backend *backend)

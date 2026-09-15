@@ -283,7 +283,7 @@ def test_target(target, output):
             link = connect(endpoint)
             information = info(link)
             assert information.cam_definition_uri == 'mftp://[;comp=100]/camera.xml'
-            assert information.cam_definition_version == 3
+            assert information.cam_definition_version == 4
             xml = download(link)
             assert xml == (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
             (directory / 'camera.xml').write_bytes(xml)
