@@ -139,6 +139,7 @@ struct ca_config {
     enum ca_tracking_method tracking_method;
     bool log_disarmed;
     unsigned mavlink_system_id;
+    unsigned mavlink_camera_component_id;
     unsigned mavlink_tcp_port;
     unsigned mavlink_udp_port;
 };

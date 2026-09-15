@@ -397,6 +397,14 @@ enum string_id {
     S_P_UART_PROTOCOL,
     S_H_UART_PROTOCOL_MT11,
     S_H_UART_PROTOCOL_A8,
+    S_P_MAVLINK_CAMERA_COMPID,
+    S_H_MAVLINK_CAMERA_COMPID,
+    S_OPT_CAMERA_COMP1,
+    S_OPT_CAMERA_COMP2,
+    S_OPT_CAMERA_COMP3,
+    S_OPT_CAMERA_COMP4,
+    S_OPT_CAMERA_COMP5,
+    S_OPT_CAMERA_COMP6,
     S_P_MAVLINK_SYSID,
     S_H_MAVLINK_SYSID,
     S_P_MAVLINK_TCP,
@@ -904,6 +912,14 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_P_UART_PROTOCOL] = {"UART4 protocol", "UART4 协议", "UART4 プロトコル"},
     [S_H_UART_PROTOCOL_MT11] = {"External /dev/ttyAMA4 flight-controller link at 230400 baud, 8 data bits, no parity and one stop bit.", "通过 /dev/ttyAMA4 连接外部飞控，230400 波特率、8 数据位、无校验、1 停止位。", "/dev/ttyAMA4 経由の外部フライトコントローラー接続。230400 baud、データ 8 ビット、パリティなし、ストップ 1 ビット。"},
     [S_H_UART_PROTOCOL_A8] = {"External flight-controller UART link at 230400 baud, 8 data bits, no parity and one stop bit.", "外部飞控 UART 连接，230400 波特率、8 数据位、无校验、1 停止位。", "外部フライトコントローラーとの UART 接続。230400 baud、データ 8 ビット、パリティなし、ストップ 1 ビット。"},
+    [S_P_MAVLINK_CAMERA_COMPID] = {"MAVLink camera component ID", "MAVLink 相机组件 ID", "MAVLink カメラコンポーネント ID"},
+    [S_H_MAVLINK_CAMERA_COMPID] = {"Select Camera 1–6 (IDs 100–105). Use a different camera ID for each camera on the same vehicle.", "选择相机 1–6（ID 100–105）。同一载具上的每台相机应使用不同的相机 ID。", "カメラ 1–6（ID 100–105）を選択。同じ機体の各カメラには異なる ID を設定してください。"},
+    [S_OPT_CAMERA_COMP1] = {"Camera 1 (100)", "相机 1 (100)", "カメラ 1 (100)"},
+    [S_OPT_CAMERA_COMP2] = {"Camera 2 (101)", "相机 2 (101)", "カメラ 2 (101)"},
+    [S_OPT_CAMERA_COMP3] = {"Camera 3 (102)", "相机 3 (102)", "カメラ 3 (102)"},
+    [S_OPT_CAMERA_COMP4] = {"Camera 4 (103)", "相机 4 (103)", "カメラ 4 (103)"},
+    [S_OPT_CAMERA_COMP5] = {"Camera 5 (104)", "相机 5 (104)", "カメラ 5 (104)"},
+    [S_OPT_CAMERA_COMP6] = {"Camera 6 (105)", "相机 6 (105)", "カメラ 6 (105)"},
     [S_P_MAVLINK_SYSID] = {"MAVLink system ID", "MAVLink 系统 ID", "MAVLink システム ID"},
     [S_H_MAVLINK_SYSID] = {"0 automatically uses the first flight controller heartbeat's system ID (GCS heartbeats are ignored). 1–255 sets a fixed ID. Takes effect after camera-app restarts.", "0 自动使用首个飞控心跳的系统 ID（忽略地面站心跳）。1–255 为固定 ID。重启相机应用后生效。", "0 は最初のフライトコントローラーのハートビートから自動取得（GCS は無視）。1–255 は固定 ID。カメラアプリの再起動後に有効。"},
     [S_P_MAVLINK_TCP] = {"MAVLink TCP port", "MAVLink TCP 端口", "MAVLink TCP ポート"},
@@ -1605,6 +1621,15 @@ static const struct option replacement_wb_options[] = {
 };
 
 
+static const struct option camera_component_options[] = {
+    {"100", S_OPT_CAMERA_COMP1},
+    {"101", S_OPT_CAMERA_COMP2},
+    {"102", S_OPT_CAMERA_COMP3},
+    {"103", S_OPT_CAMERA_COMP4},
+    {"104", S_OPT_CAMERA_COMP5},
+    {"105", S_OPT_CAMERA_COMP6},
+};
+
 static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {"rate", S_OPT_TRACK_RATE}};
 
 static const struct parameter replacement_parameters[] = {
@@ -1619,6 +1644,8 @@ static const struct parameter replacement_parameters[] = {
      PARAM_ENUM, 0, 0, 0, uart_protocol_options, 3},
     {"mavlink_system_id", "mavlink", "system_id", S_P_MAVLINK_SYSID, S_H_MAVLINK_SYSID,
      PARAM_INTEGER, 0, 255, 1, NULL, 0},
+    {"mavlink_camera_component_id", "mavlink", "camera_component_id", S_P_MAVLINK_CAMERA_COMPID, S_H_MAVLINK_CAMERA_COMPID,
+     PARAM_ENUM, 0, 0, 0, camera_component_options, 6},
     {"mavlink_tcp_port", "mavlink", "tcp_port", S_P_MAVLINK_TCP, S_H_MAVLINK_TCP,
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"mavlink_udp_port", "mavlink", "udp_port", S_P_MAVLINK_UDP, S_H_MAVLINK_UDP,
@@ -1702,7 +1729,7 @@ static const struct parameter replacement_parameters[] = {
 static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
-    "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "14550", "14550",
+    "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot", "false",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION),
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
@@ -5733,6 +5760,7 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
         strcmp(parameter->form_name, "orientation") == 0 ||
         strcmp(parameter->form_name, "uart_protocol") == 0 ||
         strcmp(parameter->form_name, "mavlink_system_id") == 0 ||
+        strcmp(parameter->form_name, "mavlink_camera_component_id") == 0 ||
         strcmp(parameter->form_name, "mavlink_tcp_port") == 0 ||
         strcmp(parameter->form_name, "mavlink_udp_port") == 0) {
         sb_append(page, " ");

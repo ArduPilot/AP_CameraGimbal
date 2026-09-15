@@ -305,6 +305,16 @@ The default automatic system ID waits for a flight controller heartbeat; a
 standalone MAVProxy GCS cannot select it. Set **MAVLink system ID** to 1–255
 in the web UI and restart camera-app when testing without a flight controller.
 The parameter tests supply simulated flight controller heartbeats themselves.
+The **MAVLink camera component ID** setting defaults to Camera 1 (100) and
+supports Camera 2–6 (101–105), applying after restart. The parameter test also
+checks component 105 and rejection of requests to the old camera ID. To test
+MAVProxy camera definitions and extended controls with Camera 6:
+
+```sh
+make camera-definitions sitl
+python3 sitl/test_camera_definition.py --targets mt11 --component 105
+```
+
 See [the parameter table](../camera_app/README.md#mavlink-camera-and-gimbal-services)
 for names, enum values and restart behavior.
 

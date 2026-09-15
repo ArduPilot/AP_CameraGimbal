@@ -28,7 +28,7 @@ EXPECTED = {
     "REC_AUTOSTART", "REC_RESOLUTION", "VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC",
     "VIDEO_SUB_RES", "VIDEO_SUB_CODEC", "IMG_BRIGHTNESS", "IMG_SATURATION",
     "IMG_CONTRAST", "IMG_EXPOSURE", "IMG_ISO", "IMG_SHUTTER", "IMG_METERING",
-    "IMG_WHITE_BAL", "MAV_POS_TARGET", "TRACK_METHOD", "MAV_TCP_PORT", "MAV_UDP_PORT", "MAV_SYSID",
+    "IMG_WHITE_BAL", "MAV_POS_TARGET", "TRACK_METHOD", "MAV_TCP_PORT", "MAV_UDP_PORT", "MAV_SYSID", "MAV_CAM_COMP_ID",
     "PROXY_ENABLE", "PROXY_MAV_PORT", "PROXY_SIGN", "PROXY_SIGN_ID", "PROXY_VID1_PORT", "PROXY_VID2_PORT",
 }
 
@@ -98,7 +98,7 @@ def write(link, name, value, system=42, param_type=M.MAV_PARAM_TYPE_REAL32):
     return response.param_value
 
 
-def check_identity(link, system):
+def check_identity(link, system, component=CAMERA):
     seen = set()
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -109,7 +109,7 @@ def check_identity(link, system):
         if message.get_type() == "HEARTBEAT":
             assert message.autopilot == M.MAV_AUTOPILOT_INVALID
             seen.add(message.get_srcComponent())
-    assert seen == {CAMERA, GIMBAL}, seen
+    assert seen == {component, GIMBAL}, seen
 
 
 def mavproxy_checks(endpoint, directory, observer):
@@ -243,7 +243,9 @@ def main():
             for name, invalid in (("IMG_BRIGHTNESS", 101), ("IMG_BRIGHTNESS", 1.5),
                                   ("IMG_BRIGHTNESS", float("nan")), ("IMG_BRIGHTNESS", float("inf")),
                                   ("REC_AUTOSTART", 3), ("THERMAL_PALETTE", 1),
-                                  ("MAV_SYSID", -1), ("MAV_SYSID", 256)):
+                                  ("MAV_SYSID", -1), ("MAV_SYSID", 256),
+                                  ("MAV_CAM_COMP_ID", 99), ("MAV_CAM_COMP_ID", 106),
+                                  ("MAV_CAM_COMP_ID", 100.5)):
                 original = read(link, name).param_value
                 before = config.read_bytes()
                 assert write(link, name, invalid) == original
@@ -297,6 +299,32 @@ def main():
             heartbeat(link, 81)
             check_identity(link, 81)
             assert read(link, "MAV_SYSID", system=81).param_value == 0
+            # Saving identity must keep the old address until restart, and
+            # afterwards all camera traffic must use the configured component.
+            assert write(link, "MAV_CAM_COMP_ID", 105, system=81) == 105
+            drain(link)
+            check_identity(link, 81)
+            link.close()
+            stop(camera)
+            camera = start_camera()
+            link = connect(endpoint)
+            heartbeat(link, 81)
+            check_identity(link, 81, component=105)
+            assert read(link, "MAV_CAM_COMP_ID", system=81, component=105).param_value == 105
+            assert read(udp, "MAV_CAM_COMP_ID", system=81, component=105).param_value == 105
+            drain(link)
+            link.mav.param_request_list_send(81, 105)
+            configured_values = {}
+            while len(configured_values) < len(EXPECTED):
+                message = receive(link, "PARAM_VALUE")
+                assert message.get_srcComponent() == 105
+                configured_values[message.param_id] = message.param_value
+            assert set(configured_values) == EXPECTED
+            drain(link)
+            link.mav.param_set_send(81, 100, b"IMG_BRIGHTNESS", 90, M.MAV_PARAM_TYPE_REAL32)
+            assert link.recv_match(type="PARAM_VALUE", blocking=True, timeout=.3) is None
+            assert read(link, "IMG_BRIGHTNESS", system=81, component=105).param_value == 63
+            print("Camera component 105: persistence, heartbeat, TCP/UDP parameters and old-address rejection passed")
             print(f"{args.backend} SITL MAVLink parameters passed: TCP/UDP, addressing, validation, persistence, fixed/auto ID")
         finally:
             if link is not None:

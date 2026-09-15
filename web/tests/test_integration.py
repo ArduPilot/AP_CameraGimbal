@@ -583,6 +583,8 @@ try:
     assert status == 200 and b"camera-app parameters" in body
     assert b'name="mavlink_tcp_port"' in body and b'value="14550"' in body
     assert b'name="mavlink_system_id" id="mavlink_system_id" type=number min="0" max="255" step="1" value="0"' in body
+    assert b'<option value="100" selected>Camera 1 (100)</option>' in body
+    assert b'<option value="105">Camera 6 (105)</option>' in body
     for name in (b"proxy_video1_port", b"proxy_video2_port"):
         assert re.search(rb'<input[^>]*name="' + name + rb'"[^>]*value="0"', body)
     assert b'name="position_targeting"' in body
@@ -595,6 +597,7 @@ try:
         "orientation": "auto",
         "uart_protocol": "mavlink",
         "mavlink_system_id": "42",
+        "mavlink_camera_component_id": "105",
         "mavlink_tcp_port": "14600",
         "mavlink_udp_port": "14601",
         "position_targeting": "false",
@@ -640,6 +643,7 @@ try:
     assert saved_config.count("[uart]") == 1
     assert 'protocol = "mavlink"' in saved_config
     assert 'system_id = "42"' in saved_config
+    assert 'camera_component_id = "105"' in saved_config
     assert 'tcp_port = "14600"' in saved_config
     assert 'udp_port = "14601"' in saved_config
     assert 'position_targeting = "false"' in saved_config
@@ -718,6 +722,12 @@ try:
         _, invalid_body, _ = form(
             "/parameters", "initial-password", csrf, invalid_parameters
         )
+        assert b"Parameters saved" not in invalid_body
+        assert (root / "app" / "camera.ini").read_text() == saved_config
+
+    for invalid_id in ("99", "106", "100.5"):
+        invalid_parameters = dict(replacement_parameters, mavlink_camera_component_id=invalid_id)
+        _, invalid_body, _ = form("/parameters", "initial-password", csrf, invalid_parameters)
         assert b"Parameters saved" not in invalid_body
         assert (root / "app" / "camera.ini").read_text() == saved_config
 

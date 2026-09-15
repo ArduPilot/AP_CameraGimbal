@@ -46,6 +46,7 @@ int main(int argc, char **argv)
     assert(config.support.video2_port == 0U);
     assert(config.autorecord == CA_AUTORECORD_DISABLED);
     assert(config.mavlink_system_id == 0U);
+    assert(config.mavlink_camera_component_id == 100U);
     assert(config.mavlink_tcp_port == 14550U);
     assert(config.mavlink_udp_port == 14550U);
 
@@ -100,7 +101,7 @@ int main(int argc, char **argv)
     assert(strcmp(ca_thermal_palette_name(config.thermal_palette),
                   "ironbow") == 0);
 
-    assert(ca_config_param_count() == 30U);
+    assert(ca_config_param_count() == 31U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);
@@ -114,6 +115,15 @@ int main(int argc, char **argv)
         assert(ca_config_param_get(&config, i) == value);
     }
     assert(ca_config_param_find("TIMEZONE") == -1);
+    size_t component = (size_t)ca_config_param_find("MAV_CAM_COMP_ID");
+    for (unsigned value = 100; value <= 105; value++) {
+        assert(ca_config_param_save(&config, path, component, (float)value) == 0);
+        assert(config.mavlink_camera_component_id == value);
+    }
+    assert(ca_config_param_save(&config, path, component, 99) < 0);
+    assert(ca_config_param_save(&config, path, component, 106) < 0);
+    assert(ca_config_param_save(&config, path, component, 100.5f) < 0);
+    assert(config.mavlink_camera_component_id == 105U);
     int id = ca_config_param_find("MAV_SYSID");
     assert(ca_config_param_save(&config, path, (size_t)id, 255) == 0);
     assert(config.mavlink_system_id == 255U);

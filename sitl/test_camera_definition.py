@@ -21,11 +21,12 @@ from MAVProxy.modules.mavproxy_camera.definition import CameraDefinition, decode
 from test_mavlink_parameters import port, stop, wait_ready, connect, receive, drain
 
 M = mavutil.mavlink
+CAMERA = M.MAV_COMP_ID_CAMERA
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def info(link):
-    link.mav.command_long_send(42, 100, M.MAV_CMD_REQUEST_CAMERA_INFORMATION, 0,
+    link.mav.command_long_send(42, CAMERA, M.MAV_CMD_REQUEST_CAMERA_INFORMATION, 0,
                                1, 0, 0, 0, 0, 0, 0)
     return receive(link, 'CAMERA_INFORMATION')
 
@@ -37,10 +38,11 @@ def download(link):
         sequence = (sequence + 2) & 65535
         payload = struct.pack('<HBBBBBBI', sequence, session, opcode,
                               len(data) if size is None else size, 0, 0, 0, offset) + data
-        link.mav.file_transfer_protocol_send(0, 42, 100, payload.ljust(251, b'\0'))
+        link.mav.file_transfer_protocol_send(0, 42, CAMERA, payload.ljust(251, b'\0'))
         response = receive(link, 'FILE_TRANSFER_PROTOCOL', lambda m:
                            m.target_system == 255 and m.target_component == 190 and
                            struct.unpack('<H', bytes(m.payload[:2]))[0] == (sequence + 1) & 65535)
+        assert response.get_srcComponent() == CAMERA
         raw = bytes(response.payload)
         header = struct.unpack('<HBBBBBBI', raw[:12])
         assert header[2] == 128, (header, raw[12])
@@ -57,14 +59,14 @@ def download(link):
 
 
 def read(link, name, index=-1):
-    link.mav.param_ext_request_read_send(42, 100, name.encode(), index)
+    link.mav.param_ext_request_read_send(42, CAMERA, name.encode(), index)
     response = receive(link, 'PARAM_EXT_VALUE', lambda m: index == m.param_index if index >= 0 else m.param_id == name)
     return decode_value(response)
 
 
 def write(link, definition, name, value, result=M.PARAM_ACK_ACCEPTED, wire_type=None):
     parameter = definition.parameters[name]
-    link.mav.param_ext_set_send(42, 100, name.encode(), struct.pack("<" + parameter.fmt, value).ljust(128, b"\0"),
+    link.mav.param_ext_set_send(42, CAMERA, name.encode(), struct.pack("<" + parameter.fmt, value).ljust(128, b"\0"),
                                 parameter.wire_type if wire_type is None else wire_type)
     ack = receive(link, 'PARAM_EXT_ACK', lambda m: m.param_id == name and m.param_result != M.PARAM_ACK_IN_PROGRESS, timeout=30)
     assert ack.param_result == result, ack
@@ -72,12 +74,12 @@ def write(link, definition, name, value, result=M.PARAM_ACK_ACCEPTED, wire_type=
 
 
 def protocol_checks(link, definition, target):
-    link.mav.param_ext_request_list_send(42, 100)
+    link.mav.param_ext_request_list_send(42, CAMERA)
     values = {}
     while len(values) < len(definition.parameters):
         message = receive(link, 'PARAM_EXT_VALUE')
         assert message.param_count == len(definition.parameters)
-        assert message.get_srcComponent() == 100 and message.get_srcSystem() == 42
+        assert message.get_srcComponent() == CAMERA and message.get_srcSystem() == 42
         values[message.param_id] = decode_value(message)
     assert set(values) == set(definition.parameters)
     names = list(definition.parameters)
@@ -86,12 +88,12 @@ def protocol_checks(link, definition, target):
     if target != 'z1mini':
         write(link, definition, 'CAM_MODE', 1)
         assert read(link, 'CAM_MODE') == 1
-        link.mav.command_long_send(42, 100, M.MAV_CMD_SET_CAMERA_MODE, 0, 0, 0, 0, 0, 0, 0, 0)
+        link.mav.command_long_send(42, CAMERA, M.MAV_CMD_SET_CAMERA_MODE, 0, 0, 0, 0, 0, 0, 0, 0)
         receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_SET_CAMERA_MODE)
         assert read(link, 'CAM_MODE') == 0
     write(link, definition, 'REC_AUTOSTART', 2)
     assert read(link, 'REC_AUTOSTART') == 2
-    link.mav.param_request_read_send(42, 100, b'REC_AUTOSTART', -1)
+    link.mav.param_request_read_send(42, CAMERA, b'REC_AUTOSTART', -1)
     assert receive(link, 'PARAM_VALUE', lambda m: m.param_id == 'REC_AUTOSTART').param_value == 2
     write(link, definition, 'REC_AUTOSTART', 3, M.PARAM_ACK_VALUE_UNSUPPORTED)
     write(link, definition, 'REC_AUTOSTART', 1, M.PARAM_ACK_VALUE_UNSUPPORTED, M.MAV_PARAM_EXT_TYPE_REAL32)
@@ -116,11 +118,11 @@ def protocol_checks(link, definition, target):
         write(link, definition, 'CAM_AUTOFOCUS', 1)
         assert read(link, 'CAM_AUTOFOCUS') == 0
     drain(link)
-    link.mav.param_ext_request_read_send(43, 100, b'CAM_MODE', -1)
+    link.mav.param_ext_request_read_send(43, CAMERA, b'CAM_MODE', -1)
     assert link.recv_match(type='PARAM_EXT_VALUE', blocking=True, timeout=0.25) is None
     link.mav.param_ext_request_read_send(42, 154, b'CAM_MODE', -1)
     assert link.recv_match(type='PARAM_EXT_VALUE', blocking=True, timeout=0.25) is None
-    link.mav.param_ext_set_send(42, 100, b'UNKNOWN_PARAM', bytes(128), M.MAV_PARAM_EXT_TYPE_INT32)
+    link.mav.param_ext_set_send(42, CAMERA, b'UNKNOWN_PARAM', bytes(128), M.MAV_PARAM_EXT_TYPE_INT32)
     assert receive(link, 'PARAM_EXT_ACK').param_result == M.PARAM_ACK_VALUE_UNSUPPORTED
 
 
@@ -135,7 +137,7 @@ def live_config_checks(link, definition, target, directory, camera, rtsp_port):
     def recording(expected):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            link.mav.command_long_send(42, 100, M.MAV_CMD_REQUEST_CAMERA_CAPTURE_STATUS,
+            link.mav.command_long_send(42, CAMERA, M.MAV_CMD_REQUEST_CAMERA_CAPTURE_STATUS,
                                        0, 1, 0, 0, 0, 0, 0, 0)
             status = receive(link, 'CAMERA_CAPTURE_STATUS')
             if bool(status.video_status) == expected:
@@ -209,9 +211,9 @@ def mavproxy_checks(endpoint, directory, link, definition):
     env = dict(os.environ, MPLCONFIGDIR=str(directory / 'matplotlib'))
     with (directory / 'mavproxy-console.log').open('w') as transcript:
         cli = pexpect.spawn(shutil.which('mavproxy.py'), [
-            '--master', endpoint, '--target-system', '42', '--target-component', '100',
+            '--master', endpoint, '--target-system', '42', '--target-component', str(CAMERA),
             '--source-system', '255', '--mav20', '--nowait', '--default-modules', 'ftp,camera',
-            '--cmd', 'camera select 42:100', '--logfile', str(directory / 'mavproxy.tlog'),
+            '--cmd', f'camera select 42:{CAMERA}', '--logfile', str(directory / 'mavproxy.tlog'),
         ], cwd=str(directory), env=env, encoding='utf-8', timeout=30)
         cli.logfile_read = transcript
         try:
@@ -256,7 +258,7 @@ def test_target(target, output):
     config = directory / 'camera.ini'
     template = ROOT / ('camera_app/camera.ini' if target == 'mt11' else
                         'sitl/zr10.ini' if target == 'zr10' else 'packaging/' + target + '/camera.ini')
-    config.write_text(re.sub(r'(?m)^system_id\s*=.*$', 'system_id = 42', template.read_text()))
+    config.write_text(re.sub(r'(?m)^system_id\s*=.*$', f'system_id = 42\ncamera_component_id = {CAMERA}', re.sub(r'(?m)^camera_component_id\s*=.*\n?', '', template.read_text())))
     tcp_port, gimbal_port = port(), port()
     ready, gimbal_ready = directory / 'camera.ready', directory / 'gimbal.ready'
     env = dict(os.environ, CAMERA_APP_BACKEND=target, CAMERA_APP_CONFIG=str(config),
@@ -281,8 +283,19 @@ def test_target(target, output):
             wait_ready(ready, camera)
             endpoint = f'tcp:127.0.0.1:{tcp_port}'
             link = connect(endpoint)
+            if CAMERA != 100:
+                for send in (
+                    lambda: link.mav.command_long_send(42, 100, M.MAV_CMD_REQUEST_CAMERA_INFORMATION, 0, 1, 0, 0, 0, 0, 0, 0),
+                    lambda: link.mav.param_request_read_send(42, 100, b'MAV_CAM_COMP_ID', -1),
+                    lambda: link.mav.param_ext_request_list_send(42, 100),
+                    lambda: link.mav.file_transfer_protocol_send(0, 42, 100, bytes(251)),
+                ):
+                    drain(link)
+                    send()
+                    assert link.recv_match(type=['CAMERA_INFORMATION', 'COMMAND_ACK', 'PARAM_VALUE', 'PARAM_EXT_VALUE', 'FILE_TRANSFER_PROTOCOL'], blocking=True, timeout=.3) is None
             information = info(link)
-            assert information.cam_definition_uri == 'mftp://[;comp=100]/camera.xml'
+            assert information.get_srcComponent() == CAMERA
+            assert information.cam_definition_uri == f'mftp://[;comp={CAMERA}]/camera.xml'
             assert information.cam_definition_version == 4
             xml = download(link)
             assert xml == (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
@@ -302,8 +315,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
                         default=['mt11', 'a8', 'zr10', 'z1mini'])
+    parser.add_argument('--component', type=int, choices=range(100, 106), default=100)
     parser.add_argument('--output', type=Path, default=ROOT / 'build/camera-definition-test')
     args = parser.parse_args()
+    CAMERA = args.component
     args.output.mkdir(parents=True, exist_ok=True)
     for target in args.targets:
         test_target(target, args.output.resolve())

@@ -40,7 +40,6 @@
 #define CA_EVENT_UART UINT64_C(3)
 #define CA_EVENT_CLIENT_BASE UINT64_C(0x100)
 #define CA_MAVLINK_UART_OUTPUT (MAVLINK_MAX_PACKET_LEN * 16U)
-#define CA_CAMERA_COMPONENT_ID MAV_COMP_ID_CAMERA
 #define CA_GIMBAL_COMPONENT_ID MAV_COMP_ID_GIMBAL
 #define VEHICLE_ATTITUDE_TIMEOUT_MS 1000U
 #define VEHICLE_POSITION_TIMEOUT_MS 1500U
@@ -96,6 +95,7 @@ struct ca_mavlink_server {
     struct ext_parameter_list ext_lists[CA_MAVLINK_CLIENTS];
     char *config_path;
     uint8_t system_id;
+    uint8_t camera_component_id;
     size_t next_parameter;
     bool parameter_list_active;
     enum ca_photo_scope photo_scope;
@@ -413,7 +413,7 @@ static void send_heartbeat(struct ca_mavlink_server *server,
 static void broadcast_heartbeats(struct ca_mavlink_server *server)
 {
     mavlink_message_t message;
-    pack_heartbeat(server, CA_CAMERA_COMPONENT_ID, MAV_TYPE_CAMERA, &message);
+    pack_heartbeat(server, server->camera_component_id, MAV_TYPE_CAMERA, &message);
     broadcast_message(server, &message);
     pack_heartbeat(server, CA_GIMBAL_COMPONENT_ID, MAV_TYPE_GIMBAL, &message);
     broadcast_message(server, &message);
@@ -551,8 +551,8 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
-    put_text(info.cam_definition_uri, sizeof(info.cam_definition_uri),
-             "mftp://[;comp=100]" CA_CAMERA_DEFINITION_PATH);
+    snprintf(info.cam_definition_uri, sizeof(info.cam_definition_uri),
+             "mftp://[;comp=%u]" CA_CAMERA_DEFINITION_PATH, server->camera_component_id);
     unsigned width, height;
     ca_video_resolution_size(server->settings.main_resolution, &width, &height);
     info.resolution_h = (uint16_t)width;
@@ -561,7 +561,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
     put_text((char *)info.model_name, sizeof(info.model_name),
              APCAM_MODEL_NAME);
     (void)mavlink_msg_camera_information_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &info);
     (void)send_message(server, route, &message);
 }
@@ -583,7 +583,7 @@ static void send_camera_settings(struct ca_mavlink_server *server,
         .focusLevel = server->focus_percent,
     };
     (void)mavlink_msg_camera_settings_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &settings);
     (void)send_message(server, route, &message);
 }
@@ -623,7 +623,7 @@ static void send_storage_information(struct ca_mavlink_server *server,
         &storage.status);
     put_text(storage.name, sizeof(storage.name), "Camera microSD");
     (void)mavlink_msg_storage_information_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &storage);
     (void)send_message(server, route, &message);
 }
@@ -652,7 +652,7 @@ static void pack_capture_status(struct ca_mavlink_server *server,
         .image_count = (int32_t)server->image_count,
     };
     (void)mavlink_msg_camera_capture_status_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, message, &status);
 }
 
@@ -702,7 +702,7 @@ static void broadcast_image_captured(struct ca_mavlink_server *server,
     }
     for (unsigned i = 0; i < 4U; i++) captured.q[i] = q[i];
     (void)mavlink_msg_camera_image_captured_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &captured);
     broadcast_message(server, &message);
 }
@@ -773,7 +773,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
     info.encoding = codec == CA_VIDEO_H265 ? VIDEO_STREAM_ENCODING_H265
                                            : VIDEO_STREAM_ENCODING_H264;
     (void)mavlink_msg_video_stream_information_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &info);
     (void)send_message(server, route, &message);
 }
@@ -799,7 +799,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U));
     status.stream_id = (uint8_t)stream_id;
     (void)mavlink_msg_video_stream_status_encode_status(
-        server->system_id, CA_CAMERA_COMPONENT_ID,
+        server->system_id, server->camera_component_id,
         &server->encode_status, &message, &status);
     (void)send_message(server, route, &message);
 }
@@ -1203,7 +1203,7 @@ static void send_protocol_capabilities(struct ca_mavlink_server *server,
                         MAV_PROTOCOL_CAPABILITY_MAVLINK2 | MAV_PROTOCOL_CAPABILITY_FTP,
     };
     (void)mavlink_msg_autopilot_version_encode_status(server->system_id,
-        CA_CAMERA_COMPONENT_ID, &server->encode_status, &message, &version);
+        server->camera_component_id, &server->encode_status, &message, &version);
     (void)send_message(server, route, &message);
 }
 
@@ -1368,9 +1368,9 @@ static void handle_command_long(struct ca_mavlink_server *server,
         }
     }
     if (!target_matches(server, target_system, target_component,
-                        CA_CAMERA_COMPONENT_ID)) return;
+                        server->camera_component_id)) return;
     uint8_t result = handle_camera_command(server, route, message, command, params);
-    send_ack(server, route, CA_CAMERA_COMPONENT_ID, command, result, message);
+    send_ack(server, route, server->camera_component_id, command, result, message);
 }
 
 static void quaternion_to_euler(const float q[4], float *roll, float *pitch,
@@ -1670,7 +1670,7 @@ static void send_parameter(struct ca_mavlink_server *server, size_t index)
     const char *name = ca_config_param_name(index);
     memcpy(value.param_id, name, strlen(name));
     (void)mavlink_msg_param_value_encode_status(server->system_id,
-        CA_CAMERA_COMPONENT_ID, &server->encode_status, &message, &value);
+        server->camera_component_id, &server->encode_status, &message, &value);
     broadcast_message(server, &message);
 }
 
@@ -1681,7 +1681,7 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
     mavlink_statustext_t status = {.severity = MAV_SEVERITY_INFO};
     snprintf(status.text, sizeof(status.text), "%s", text);
     (void)mavlink_msg_statustext_encode_status(server->system_id,
-        CA_CAMERA_COMPONENT_ID, &server->encode_status, &message, &status);
+        server->camera_component_id, &server->encode_status, &message, &status);
     broadcast_message(server, &message);
 }
 
@@ -1894,7 +1894,7 @@ static void handle_parameter(struct ca_mavlink_server *server,
         memcpy(name, set.param_id, sizeof(set.param_id));
         index = ca_config_param_find(name);
     }
-    if (!target_matches(server, system, component, CA_CAMERA_COMPONENT_ID)) return;
+    if (!target_matches(server, system, component, server->camera_component_id)) return;
     refresh_parameters(server);
     if (message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_LIST) {
         /* Pace the list in periodic() so even a UART can drain between values. */
@@ -2069,7 +2069,7 @@ static void send_ext_parameter(struct ca_mavlink_server *server,
     memcpy(value.param_id, p.name, strlen(p.name));
     ext_encode(value.param_value, p.type, current);
     mavlink_message_t response;
-    mavlink_msg_param_ext_value_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+    mavlink_msg_param_ext_value_encode_status(server->system_id, server->camera_component_id,
         &server->encode_status, &response, &value);
     (void)send_message(server, route, &response);
 }
@@ -2100,7 +2100,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
         memcpy(name, set.param_id, 16);
         index = ca_camera_param_find(name);
     }
-    if (!target_matches(server, system, component, CA_CAMERA_COMPONENT_ID)) return;
+    if (!target_matches(server, system, component, server->camera_component_id)) return;
     refresh_parameters(server);
     if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
         struct ext_parameter_list *list = NULL;
@@ -2136,7 +2136,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
                 ack.param_result = PARAM_ACK_IN_PROGRESS;
                 ext_encode(ack.param_value, p.type, current);
                 mavlink_msg_param_ext_ack_encode_status(server->system_id,
-                    CA_CAMERA_COMPONENT_ID, &server->encode_status, &progress, &ack);
+                    server->camera_component_id, &server->encode_status, &progress, &ack);
                 (void)send_message(server, route, &progress);
             }
             if (camera_parameter_set(server, &p, requested) == 0) {
@@ -2149,7 +2149,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
     }
     if (found) ext_encode(ack.param_value, p.type, current);
     mavlink_message_t response;
-    mavlink_msg_param_ext_ack_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+    mavlink_msg_param_ext_ack_encode_status(server->system_id, server->camera_component_id,
         &server->encode_status, &response, &ack);
     (void)send_message(server, route, &response);
     if (found && ack.param_result == PARAM_ACK_ACCEPTED && p.operation != CA_CAMERA_CONFIG) {
@@ -2164,13 +2164,13 @@ static void handle_camera_ftp(struct ca_mavlink_server *server,
     mavlink_file_transfer_protocol_t request, reply = {0};
     mavlink_msg_file_transfer_protocol_decode(message, &request);
     if (request.target_network != 0 ||
-        !target_matches(server, request.target_system, request.target_component, CA_CAMERA_COMPONENT_ID)) return;
+        !target_matches(server, request.target_system, request.target_component, server->camera_component_id)) return;
     reply.target_system = message->sysid;
     reply.target_component = message->compid;
     ca_camera_ftp_reply(&server->ftp, server->definition_xml, server->definition_length,
                         message->sysid, message->compid, monotonic_ms(), request.payload, reply.payload);
     mavlink_message_t response;
-    mavlink_msg_file_transfer_protocol_encode_status(server->system_id, CA_CAMERA_COMPONENT_ID,
+    mavlink_msg_file_transfer_protocol_encode_status(server->system_id, server->camera_component_id,
         &server->encode_status, &response, &reply);
     (void)send_message(server, route, &response);
 }
@@ -2351,7 +2351,7 @@ static int accept_clients(struct ca_mavlink_server *server)
         ca_log("MAVLink TCP client %u connected from %s:%u", slot + 1U,
                host, ntohs(address.sin_port));
         struct route route = {.kind = ROUTE_TCP, .client = slot};
-        send_heartbeat(server, &route, CA_CAMERA_COMPONENT_ID, 30U);
+        send_heartbeat(server, &route, server->camera_component_id, 30U);
         send_heartbeat(server, &route, CA_GIMBAL_COMPONENT_ID, 26U);
     }
 }
@@ -2422,6 +2422,8 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     if (result == NULL || config == NULL || config->backend == NULL ||
         config->media == NULL || config->capture_root == NULL ||
         config->config_path == NULL || config->settings.mavlink_system_id > 255U ||
+        config->settings.mavlink_camera_component_id < MAV_COMP_ID_CAMERA ||
+        config->settings.mavlink_camera_component_id > MAV_COMP_ID_CAMERA6 ||
         config->tcp_port > 65535U || config->udp_port > 65535U) {
         errno = EINVAL;
         return -1;
@@ -2446,6 +2448,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->photo_scope = config->photo_scope;
     server->rtsp_port = config->rtsp_port;
     server->system_id = (uint8_t)config->settings.mavlink_system_id;
+    server->camera_component_id = (uint8_t)config->settings.mavlink_camera_component_id;
     server->parameters = config->settings;
     const char *ready = getenv("CAMERA_APP_READY_PATH");
     if (!ready || !*ready) ready = "/run/camera-app.ready";

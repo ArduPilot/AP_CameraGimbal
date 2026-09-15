@@ -361,7 +361,7 @@ ffmpeg -i recording.mp4 -map 0:d:0 -c copy -f data telemetry.json
 
 ## MAVLink camera and gimbal services
 
-The app presents one MAVLink system with a camera component at component ID
+The app presents one MAVLink system with a camera component defaulting to ID
 100 (`MAV_COMP_ID_CAMERA`) and a gimbal-device component at component ID 154
 (`MAV_COMP_ID_GIMBAL`). Both use `mavlink.system_id`, configurable in the web
 Parameters page as **MAVLink system ID**. The default, 0, waits for the first
@@ -372,14 +372,22 @@ messages are emitted or commands accepted before automatic selection. Set
 1–255 for a fixed ID, including standalone operation without a flight controller.
 Changes take effect after restarting camera-app.
 
+**MAVLink camera component ID** selects Camera 1–6, IDs 100–105
+(`MAV_COMP_ID_CAMERA` through `MAV_COMP_ID_CAMERA6`). The equivalent parameter
+is `MAV_CAM_COMP_ID`, or `[mavlink] camera_component_id` in the INI file.
+Use a distinct camera component for each camera on the same vehicle. This
+setting applies after restart; the save acknowledgment uses the current ID.
+Camera heartbeats, commands, parameters and the MAVFTP camera-definition URI
+all use the selected component. The gimbal-device component remains 154.
+
 It accepts MAVLink 1 input for interoperability and
 emits MAVLink 2. TCP is a listening server with up to four clients. UDP learns
 the most recent peer from an incoming MAVLink packet, so the ArduPilot side
 must be configured as a UDP client rather than a UDP listener.
 
-The camera component (100) exposes all 28 numeric camera-app settings through
+The configured camera component exposes all numeric camera-app settings through
 `PARAM_REQUEST_LIST`, `PARAM_REQUEST_READ` (by name or index), and `PARAM_SET`.
-Requests may target component 100 or component 0 (all); the gimbal component
+Requests may target that camera component or component 0 (all); the gimbal component
 uses the same configuration and does not publish a duplicate parameter table.
 Names are uppercase and at most 16 characters. Values use `MAV_PARAM_TYPE_INT32`
 with C-cast encoding, advertised in `AUTOPILOT_VERSION.capabilities`. All values
@@ -392,9 +400,12 @@ through the web UI/INI. The six additional proxy parameters are listed in
 | MAVLink name | INI setting | Values |
 | --- | --- | --- |
 | `MAV_SYSID` | `mavlink.system_id` | 0 automatic; 1–255 fixed |
+| `MAV_CAM_COMP_ID` | `mavlink.camera_component_id` | 100–105: Camera 1–6; default 100 |
 | `MAV_TCP_PORT` | `mavlink.tcp_port` | 0 disabled; 1–65535 port |
 | `MAV_UDP_PORT` | `mavlink.udp_port` | 0 disabled; 1–65535 port |
 | `MAV_POS_TARGET` | `mavlink.position_targeting` | 0 disabled, 1 enabled |
+| `TRACK_METHOD` | `mavlink.tracking_method` | 0 angle, 1 rate |
+| `LOG_DISARMED` | `logging.disarmed` | 0 log while armed, 1 also log while disarmed |
 | `PHOTO_SCOPE` | `capture.photo_scope` | 0 thermal, 1 all lenses |
 | `MOUNT_ORIENT` | `mount.orientation` | 0 auto, 1 upright, 2 inverted |
 | `UART_PROTOCOL` | `uart.protocol` | 0 none, 1 SIYI, 2 MAVLink |
@@ -416,13 +427,13 @@ through the web UI/INI. The six additional proxy parameters are listed in
 
 Writes validate ranges and enum choices and persist atomically to the same INI
 file as the web UI. Camera-definition settings described below also apply
-immediately through ordinary `PARAM_SET`. Other settings, including `MAV_SYSID`
+immediately through ordinary `PARAM_SET`. Other settings, including `MAV_SYSID`, `MAV_CAM_COMP_ID`
 and transports, require a restart, preserving the original acknowledgment link
 and system ID. Parameter reads reflect saved configuration, including web edits;
 `PARAM_EXT` reads report running camera state. Launcher environment overrides
 for TCP/UDP ports take precedence on restart.
 
-For a camera using system ID 42, connect MAVProxy to component 100:
+For a camera using system ID 42 and the default camera component, connect MAVProxy to component 100:
 
 ```sh
 mavproxy.py --master=tcp:127.0.0.1:14550 --target-system=42 --target-component=100 --mav20 --nowait

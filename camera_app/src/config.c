@@ -220,6 +220,10 @@ static const struct config_field config_fields[] = {
      offsetof(struct ca_config, mavlink_system_id),
      sizeof(((struct ca_config *)0)->mavlink_system_id), NULL, 0U, 0, 255,
      "MAV_SYSID"},
+    {"mavlink", "camera_component_id", CONFIG_UINT,
+     offsetof(struct ca_config, mavlink_camera_component_id),
+     sizeof(((struct ca_config *)0)->mavlink_camera_component_id), NULL, 0U, 100, 105,
+     "MAV_CAM_COMP_ID"},
     {"support_proxy", "enabled", CONFIG_BOOL,
      offsetof(struct ca_config, support.enabled),
      sizeof(((struct ca_config *)0)->support.enabled), NULL, 0U, 0, 1, "PROXY_ENABLE"},
@@ -374,6 +378,7 @@ static int set_field(struct ca_config *config, const struct config_field *field,
         errno = 0;
         parsed = strtoul(value, &end, 10);
         if (errno == 0 && end != value && *end == '\0' &&
+            parsed >= (unsigned long)field->minimum &&
             parsed <= (unsigned long)field->maximum) {
             unsigned selected = (unsigned)parsed;
             memcpy(destination, &selected, sizeof(selected));
@@ -409,6 +414,7 @@ void ca_config_defaults(struct ca_config *config)
     config->position_targeting = APCAM_DEFAULT_POSITION_TARGETING;
     config->tracking_method = CA_TRACK_ANGLE;
     config->mavlink_system_id = APCAM_DEFAULT_SYSTEM_ID;
+    config->mavlink_camera_component_id = 100U; /* MAV_COMP_ID_CAMERA */
     config->mavlink_tcp_port = 14550U;
     config->mavlink_udp_port = 14550U;
     config->support.mavlink_port = 10001U;
