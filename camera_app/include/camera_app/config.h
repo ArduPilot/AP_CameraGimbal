@@ -92,6 +92,11 @@ enum ca_autorecord_mode {
     CA_AUTORECORD_WHILE_ARMED = 2,
 };
 
+enum ca_tracking_method {
+    CA_TRACK_ANGLE = 0,
+    CA_TRACK_RATE = 1,
+};
+
 struct ca_support_config {
     bool enabled;
     char host[128];
@@ -131,6 +136,7 @@ struct ca_config {
     enum ca_metering_mode metering;
     enum ca_white_balance white_balance;
     bool position_targeting;
+    enum ca_tracking_method tracking_method;
     unsigned mavlink_system_id;
     unsigned mavlink_tcp_port;
     unsigned mavlink_udp_port;

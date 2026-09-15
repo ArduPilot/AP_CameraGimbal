@@ -18,7 +18,28 @@ make a8_sitl
 make a8_sitl-test
 make zr10_sitl
 make zr10_sitl-test
+make sitl-live-tracking-test
 ```
+
+The live tracking test uses isolated ports and files, and requires the usual
+MAVLink/video test dependencies. It checks web saves against the
+running app, rate tracking, stale-data stops and video-format changes deferred
+until recording stops.
+
+The **Tracking control method** setting (`TRACK_METHOD` in MAVLink, or
+`[mavlink] tracking_method=angle|rate` in `camera.ini`) selects how the camera
+tracks a geographic ROI. Angle is the default. Rate combines predicted target
+motion with filtered pointing-error correction, and stops on stale vehicle or
+gimbal telemetry. It does not change explicit mount-angle/rate commands.
+
+The camera app checks for configuration-file changes every 500 ms. Image
+controls, capture scope, thermal palette, automatic recording, timezone and
+tracking settings apply without an app restart. Video formats reopen the media
+pipeline, briefly reconnecting streams; during recording they remain pending
+until recording stops. Mount orientation, transport/identity and SupportProxy
+settings require restart. The Parameters page reports the app's acknowledgement
+of the saved configuration, including errors and deferred changes. External
+editors should replace the INI atomically, as the web UI does.
 
 Both `sitl-test` and `a8_sitl-test` run the complete camera/backend/web stack
 once upright and once inverted. The A8 cases begin at a physical yaw of -38

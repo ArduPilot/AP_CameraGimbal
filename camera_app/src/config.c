@@ -138,6 +138,10 @@ static const struct ca_config_option wb_options[] = {
     {"incandescent", CA_WB_INCANDESCENT},
 };
 
+static const struct ca_config_option tracking_options[] = {
+    {"angle", CA_TRACK_ANGLE}, {"rate", CA_TRACK_RATE},
+};
+
 static const struct config_field config_fields[] = {
     {"general", "timezone", CONFIG_TIMEZONE,
      offsetof(struct ca_config, timezone),
@@ -201,6 +205,9 @@ static const struct config_field config_fields[] = {
     {"mavlink", "position_targeting", CONFIG_BOOL,
      offsetof(struct ca_config, position_targeting),
      sizeof(((struct ca_config *)0)->position_targeting), NULL, 0U, 0, 0, "MAV_POS_TARGET"},
+    {"mavlink", "tracking_method", CONFIG_ENUM, offsetof(struct ca_config, tracking_method),
+     sizeof(((struct ca_config *)0)->tracking_method), tracking_options,
+     sizeof(tracking_options) / sizeof(tracking_options[0]), 0, 0, "TRACK_METHOD"},
     {"mavlink", "tcp_port", CONFIG_UINT,
      offsetof(struct ca_config, mavlink_tcp_port),
      sizeof(((struct ca_config *)0)->mavlink_tcp_port), NULL, 0U, 0, 65535, "MAV_TCP_PORT"},
@@ -398,6 +405,7 @@ void ca_config_defaults(struct ca_config *config)
     config->metering = CA_METERING_AVERAGE;
     config->white_balance = CA_WB_AUTO;
     config->position_targeting = APCAM_DEFAULT_POSITION_TARGETING;
+    config->tracking_method = CA_TRACK_ANGLE;
     config->mavlink_system_id = APCAM_DEFAULT_SYSTEM_ID;
     config->mavlink_tcp_port = 14550U;
     config->mavlink_udp_port = 14550U;

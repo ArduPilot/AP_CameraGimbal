@@ -14,6 +14,7 @@
 #include <math.h>
 #include "camera_app/udp_transport.h"
 #include "camera_app/backend.h"
+#include "camera_app/gimbal_angle_target.h"
 
 #include "camera_app/log.h"
 #include "camera_app/private_uart.h"
@@ -104,6 +105,7 @@ struct ca_backend {
     struct ca_gimbal_attitude attitude;
     bool have_attitude;
     bool attitude_logged;
+    struct ca_angle_target angle_target;
 };
 
 static uint64_t monotonic_ms(void)
@@ -221,6 +223,7 @@ static int send_public_command(struct ca_backend *backend, uint8_t opcode,
         errno = EMSGSIZE;
         return -1;
     }
+    ca_angle_target_invalidate_siyi(&backend->angle_target, opcode, payload, payload_length);
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     return ca_backend_handle_siyi(backend, packet, length);
 #else
@@ -326,6 +329,9 @@ static bool apply_mounting_direction(struct ca_backend *backend,
         ca_log("gimbal-reported mounting direction could not be applied: %s",
                strerror(errno));
         return false;
+    }
+    if (backend->mounting_direction != (inverted ? 2U : 1U)) {
+        backend->angle_target.valid = false;
     }
     backend->mounting_direction = inverted ? 2U : 1U;
     backend->mounting_direction_known = true;
@@ -604,6 +610,8 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         errno = EPROTO;
         return -1;
     }
+    ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode,
+                                     packet.payload, packet.payload_length);
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     /* ZR10 delegates these SDK actions to Linux. The vendor translates them
      * to native 6b commands in its control worker (5d7bc) and zoom handler
@@ -881,14 +889,23 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
     float angles[3] = {0, pitch_rad * (180.0f / PI_F), yaw_rad * (180.0f / PI_F)};
     angles[1] = fminf(APCAM_GIMBAL_PITCH_MAX, fmaxf(APCAM_GIMBAL_PITCH_MIN, angles[1]));
     angles[2] = fminf(APCAM_GIMBAL_YAW_MAX, fmaxf(APCAM_GIMBAL_YAW_MIN, angles[2]));
+    float target_pitch = angles[1], target_yaw = angles[2];
     apcam_transform(&apcam_angle_command[backend->mounting_direction == 2U], angles, angles, false);
     int16_t yaw = angle_tenths(angles[2] * (PI_F / 180.0f), -180.0f, 180.0f);
     int16_t pitch = angle_tenths(angles[1] * (PI_F / 180.0f), -180.0f, 180.0f);
+    uint64_t now = monotonic_ms();
+    if (ca_angle_target_suppress(&backend->angle_target, yaw, pitch,
+                                 target_yaw, target_pitch,
+                                 backend->have_attitude ? &backend->attitude : NULL, now)) return 0;
     uint8_t payload[4] = {
         (uint8_t)yaw, (uint8_t)((uint16_t)yaw >> 8U),
         (uint8_t)pitch, (uint8_t)((uint16_t)pitch >> 8U),
     };
-    return send_public_command(backend, 0x0eU, payload, sizeof(payload));
+    int result = send_public_command(backend, 0x0eU, payload, sizeof(payload));
+    if (result == 0) {
+        ca_angle_target_sent(&backend->angle_target, yaw, pitch, now);
+    }
+    return result;
 }
 
 static int8_t rate_byte(float radians_per_second)

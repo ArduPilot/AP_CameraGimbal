@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "camera_app/mavlink_server.h"
 #include "apcam/target.h"
+#include "apcam/config_status.h"
 
 #include "camera_app/backend.h"
 #include "camera_app/camera_definition.h"
@@ -28,6 +29,7 @@
 #include "camera_app/event_poll.h"
 #include <sys/socket.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -137,6 +139,14 @@ struct ca_mavlink_server {
     bool have_vehicle_position;
     bool gimbal_information_announced;
     bool target_location_active;
+    bool tracking_rate_active;
+    float tracking_error[2];
+    float tracking_rate[2];
+    uint64_t config_check_ms;
+    struct stat config_stat;
+    bool config_seen, config_pending;
+    char config_status_path[4096];
+    char config_last_status[512];
     bool yaw_lock;
     bool reported_recording;
 };
@@ -832,7 +842,8 @@ static void send_gimbal_information(struct ca_mavlink_server *server,
     (void)mavlink_msg_gimbal_device_information_encode_status(
         server->system_id, CA_GIMBAL_COMPONENT_ID,
         &server->encode_status, &message, &info);
-    (void)send_message(server, route, &message);
+    if (route) (void)send_message(server, route, &message);
+    else broadcast_message(server, &message);
 }
 
 static void euler_to_quaternion(float roll, float pitch, float yaw, float q[4])
@@ -929,33 +940,96 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
     }
 }
 
-static void update_target_location(struct ca_mavlink_server *server,
-                                   uint64_t now)
+static void stop_tracking_rate(struct ca_mavlink_server *server)
 {
-    int32_t vehicle_lat_e7;
-    int32_t vehicle_lon_e7;
-    float vehicle_alt_amsl_m;
-    float vehicle_yaw;
-    float pitch;
-    float yaw_earth;
+    if (server->tracking_rate_active)
+        (void)ca_backend_set_gimbal_rates(server->backend, 0, 0);
+    server->tracking_rate_active = false;
+    memset(server->tracking_error, 0, sizeof(server->tracking_error));
+    memset(server->tracking_rate, 0, sizeof(server->tracking_rate));
+}
 
-    if (!server->target_location_active ||
-        now - server->last_target_location_ms < TARGET_LOCATION_INTERVAL_MS ||
-        !current_vehicle_position(server, &vehicle_lat_e7, &vehicle_lon_e7,
-                                  &vehicle_alt_amsl_m) ||
-        !current_vehicle_attitude(server, &vehicle_yaw, NULL) ||
-        !ca_targeting_global_angles(vehicle_lat_e7, vehicle_lon_e7,
-                                    vehicle_alt_amsl_m,
-                                    server->target_lat_e7,
-                                    server->target_lon_e7,
-                                    server->target_alt_amsl_m,
-                                    &pitch, &yaw_earth)) {
+static float bounded(float value, float limit)
+{
+    return fminf(limit, fmaxf(-limit, value));
+}
+
+static void update_target_location(struct ca_mavlink_server *server, uint64_t now)
+{
+    bool rate = server->settings.tracking_method == CA_TRACK_RATE;
+    unsigned interval = rate ? 50U : TARGET_LOCATION_INTERVAL_MS;
+    if (!server->target_location_active || !server->settings.position_targeting) {
+        stop_tracking_rate(server);
         return;
     }
+    if (now - server->last_target_location_ms < interval) return;
+    int32_t lat, lon;
+    float alt, vehicle_yaw, vehicle_yaw_rate, pitch, yaw_earth;
+    float dt = fminf((now - server->last_target_location_ms) * .001f, .1f);
     server->last_target_location_ms = now;
+    if (!current_vehicle_position(server, &lat, &lon, &alt) ||
+        !current_vehicle_attitude(server, &vehicle_yaw, &vehicle_yaw_rate) ||
+        !ca_targeting_global_angles(lat, lon, alt, server->target_lat_e7,
+            server->target_lon_e7, server->target_alt_amsl_m, &pitch, &yaw_earth)) {
+        stop_tracking_rate(server);
+        return;
+    }
+    float yaw = wrap_pi_f(yaw_earth - vehicle_yaw);
     server->yaw_lock = true;
-    (void)ca_backend_set_gimbal_angles(server->backend, pitch,
-                                       wrap_pi_f(yaw_earth - vehicle_yaw));
+    if (!rate) {
+        stop_tracking_rate(server);
+        (void)ca_backend_set_gimbal_angles(server->backend, pitch, yaw);
+        return;
+    }
+    struct ca_gimbal_attitude attitude;
+    if (!ca_backend_gimbal_attitude(server->backend, &attitude) ||
+        now < attitude.timestamp_ms || now - attitude.timestamp_ms > 500U) {
+        stop_tracking_rate(server);
+        return;
+    }
+    /* Differentiate a short position/yaw prediction, rather than noisy
+     * differences between incoming telemetry samples, for feed-forward. */
+    float future_pitch, future_yaw;
+    const float horizon = .1f, radians = PI_F / 180.0f;
+    if (!ca_targeting_predict_position(&lat, &lon, &alt, server->vehicle_vn_m_s,
+                                       server->vehicle_ve_m_s, server->vehicle_vd_m_s, horizon) ||
+        !ca_targeting_global_angles(lat, lon, alt, server->target_lat_e7,
+            server->target_lon_e7, server->target_alt_amsl_m, &future_pitch, &future_yaw)) {
+        stop_tracking_rate(server);
+        return;
+    }
+    float desired[2] = {pitch, yaw};
+    float feedback[2] = {attitude.pitch_rad, attitude.yaw_rad};
+    float feed_forward[2] = {(future_pitch - pitch) / horizon,
+        wrap_pi_f(future_yaw - yaw_earth) / horizon - vehicle_yaw_rate};
+    const float minimum[2] = {APCAM_GIMBAL_PITCH_MIN * radians, APCAM_GIMBAL_YAW_MIN * radians};
+    const float maximum[2] = {APCAM_GIMBAL_PITCH_MAX * radians, APCAM_GIMBAL_YAW_MAX * radians};
+    float output[2];
+    for (unsigned i = 0; i < 2; i++) {
+        if (desired[i] < minimum[i] || desired[i] > maximum[i]) feed_forward[i] = 0;
+        desired[i] = fminf(maximum[i], fmaxf(minimum[i], desired[i]));
+        /* Predict the delayed feedback with our last output. Filter and give
+         * the error a small deadband to avoid chasing 0.1-degree IMU noise.
+         * Joint yaw is bounded: do not take a shortcut through a hard stop. */
+        float measured = feedback[i] + server->tracking_rate[i] *
+            fminf((now - attitude.timestamp_ms) * .001f, .2f);
+        float error = desired[i] - measured;
+        float alpha = dt / (.2f + dt);
+        server->tracking_error[i] += alpha * (error - server->tracking_error[i]);
+        float correction = copysignf(fmaxf(0, fabsf(server->tracking_error[i]) - .2f * radians),
+                                     server->tracking_error[i]);
+        float requested = bounded(feed_forward[i] + 2.0f * correction, APCAM_GIMBAL_RATE_MAX * radians);
+        output[i] = server->tracking_rate[i] + bounded(requested - server->tracking_rate[i],
+                                                       APCAM_GIMBAL_RATE_MAX * radians * dt);
+        if ((feedback[i] <= minimum[i] && output[i] < 0) ||
+            (feedback[i] >= maximum[i] && output[i] > 0)) output[i] = 0;
+    }
+    if (ca_backend_set_gimbal_rates(server->backend, output[0], output[1]) == 0) {
+        server->tracking_rate_active = true;
+        memcpy(server->tracking_rate, output, sizeof(output));
+    } else {
+        stop_tracking_rate(server);
+    }
 }
 
 static void pack_gimbal_status(struct ca_mavlink_server *server,
@@ -1432,6 +1506,7 @@ static bool clear_target_location(struct ca_mavlink_server *server)
 {
     bool was_active = server->target_location_active;
     server->target_location_active = false;
+    stop_tracking_rate(server);
     return was_active;
 }
 
@@ -1578,54 +1653,175 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
     broadcast_message(server, &message);
 }
 
-/* Camera-definition configuration has a runtime implementation. Other app
- * configuration (network identity, transports, etc.) remains save-only. */
+/* Share runtime application between PARAM_SET, PARAM_EXT_SET and INI reload. */
 static bool live_config_parameter(size_t index)
 {
-    int camera_index = ca_camera_param_find(ca_config_param_name(index));
+    const char *name = ca_config_param_name(index);
+    if (strcmp(name, "PHOTO_SCOPE") == 0) return true;
+    if (strcmp(name, "THERMAL_PALETTE") == 0) return APCAM_HAVE_THERMAL;
+    int camera_index = ca_camera_param_find(name);
     struct ca_camera_parameter p;
     return camera_index >= 0 && ca_camera_param_info((size_t)camera_index, &p) &&
         p.operation == CA_CAMERA_CONFIG;
 }
 
+static int apply_runtime_config(struct ca_mavlink_server *server, const struct ca_config *next)
+{
+    struct ca_config previous = server->settings;
+    bool was_recording = ca_media_recording(server->media);
+    bool pipeline = next->main_resolution != previous.main_resolution ||
+        next->sub_resolution != previous.sub_resolution ||
+        next->recording_resolution != previous.recording_resolution ||
+        next->main_codec != previous.main_codec || next->sub_codec != previous.sub_codec;
+    /* A media reopen can take seconds. Do not leave a moving rate command
+     * running while the event loop cannot service tracking or feedback. */
+    if (pipeline && !was_recording) stop_tracking_rate(server);
+    if (ca_media_configure(server->media, next) < 0) return -1;
+    bool record = was_recording;
+    if (next->autorecord != previous.autorecord) {
+        record = next->autorecord == CA_AUTORECORD_ENABLED ||
+            (next->autorecord == CA_AUTORECORD_WHILE_ARMED &&
+             server->have_vehicle_armed && server->vehicle_armed);
+    }
+    if ((next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL &&
+         ca_media_set_thermal_palette(server->media, next->thermal_palette) < 0) ||
+        (record != was_recording && ca_media_set_recording(server->media, record) < 0) ||
+        (strcmp(next->timezone, previous.timezone) != 0 && setenv("TZ", next->timezone, 1) < 0)) {
+        int saved_errno = errno;
+        if (ca_media_recording(server->media) != was_recording)
+            (void)ca_media_set_recording(server->media, was_recording);
+        if (next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL)
+            (void)ca_media_set_thermal_palette(server->media, previous.thermal_palette);
+        if (ca_media_configure(server->media, &previous) < 0)
+            ca_log("configuration runtime rollback failed");
+        errno = saved_errno;
+        return -1;
+    }
+    if (strcmp(next->timezone, previous.timezone) != 0) tzset();
+    if (next->tracking_method != previous.tracking_method || !next->position_targeting) {
+        stop_tracking_rate(server);
+        server->last_target_location_ms = 0;
+    }
+    if (!next->position_targeting) server->target_location_active = false;
+    server->settings = *next;
+    server->photo_scope = next->photo_scope;
+    if (next->position_targeting != previous.position_targeting) send_gimbal_information(server, NULL);
+    return 0;
+}
+
 static int apply_camera_config(struct ca_mavlink_server *server, size_t index, float value)
 {
     struct ca_config previous = server->settings, next = previous;
-    if (ca_config_param_assign(&next, index, value) < 0) return -1;
     bool was_recording = ca_media_recording(server->media);
-    if (ca_media_configure(server->media, &next) < 0) {
+    bool was_tracking = server->target_location_active;
+    if (ca_config_param_assign(&next, index, value) < 0) return -1;
+    if (apply_runtime_config(server, &next) < 0) {
         parameter_status(server, errno == EBUSY ?
             "Stop recording before changing video format" : "Camera could not apply parameter");
         return -1;
     }
-    bool record = was_recording;
-    if (next.autorecord != previous.autorecord) {
-        record = next.autorecord == CA_AUTORECORD_ENABLED ||
-            (next.autorecord == CA_AUTORECORD_WHILE_ARMED &&
-             server->have_vehicle_armed && server->vehicle_armed);
-    }
-    if ((record != was_recording && ca_media_set_recording(server->media, record) < 0) ||
-        ca_config_param_save(&server->parameters, server->config_path, index, value) < 0) {
+    if (ca_config_param_save(&server->parameters, server->config_path, index, value) < 0) {
         int saved_errno = errno;
-        bool restored = true;
-        if (ca_media_recording(server->media) != was_recording &&
-            ca_media_set_recording(server->media, was_recording) < 0) {
-            ca_log("recording policy rollback failed");
-            restored = false;
-        }
-        if (ca_media_configure(server->media, &previous) < 0) {
-            ca_log("parameter runtime rollback failed");
-            restored = false;
-        }
+        if (apply_runtime_config(server, &previous) < 0 ||
+            (ca_media_recording(server->media) != was_recording &&
+             ca_media_set_recording(server->media, was_recording) < 0))
+            ca_log("parameter persistence rollback failed");
+        server->target_location_active = was_tracking;
         errno = saved_errno;
-        parameter_status(server, restored ? "Parameter failed; previous setting restored" :
-                                           "Parameter failed; runtime rollback also failed");
+        parameter_status(server, "Parameter could not be saved");
         return -1;
     }
-    server->settings = next;
-    server->photo_scope = next.photo_scope;
     parameter_status(server, "Parameter applied and saved");
     return 0;
+}
+
+static bool same_config_file(const struct stat *a, const struct stat *b)
+{
+    return a->st_ino == b->st_ino && a->st_dev == b->st_dev && a->st_size == b->st_size &&
+        a->st_mtim.tv_sec == b->st_mtim.tv_sec && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
+        a->st_ctim.tv_sec == b->st_ctim.tv_sec && a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+static void config_status(struct ca_mavlink_server *server, uint64_t hash,
+                           const char *state, const char *message)
+{
+    char contents[512], temporary[sizeof(server->config_status_path) + 5];
+    snprintf(contents, sizeof(contents), "%016llx %ld %s\n%s\n",
+             (unsigned long long)hash, (long)getpid(), state, message);
+    if (strcmp(contents, server->config_last_status) == 0) return;
+    snprintf(temporary, sizeof(temporary), "%s.tmp", server->config_status_path);
+    FILE *file = fopen(temporary, "w");
+    if (!file) return;
+    bool ok = fputs(contents, file) >= 0;
+    if (fclose(file) != 0) ok = false;
+    if (ok && rename(temporary, server->config_status_path) == 0) {
+        snprintf(server->config_last_status, sizeof(server->config_last_status), "%s", contents);
+        ca_log("configuration %s: %s", state, message);
+    } else unlink(temporary);
+}
+
+static void reload_config(struct ca_mavlink_server *server, uint64_t now)
+{
+    if (now - server->config_check_ms < 500U) return;
+    server->config_check_ms = now;
+    struct stat before, after;
+    if (stat(server->config_path, &before) < 0) return;
+    if (server->config_seen && !server->config_pending && same_config_file(&before, &server->config_stat)) return;
+    struct ca_config desired;
+    ca_config_defaults(&desired);
+    char error[256] = "";
+    int loaded = ca_config_load(&desired, server->config_path, error, sizeof(error));
+    uint64_t hash;
+    if (apcam_config_file_hash(server->config_path, &hash) < 0 ||
+        stat(server->config_path, &after) < 0 || !same_config_file(&before, &after)) return;
+    server->config_seen = true;
+    server->config_stat = after;
+    server->config_pending = false;
+    if (loaded < 0) {
+        config_status(server, hash, "error", error[0] ? error : "Could not read configuration");
+        return;
+    }
+    server->parameters = desired;
+    /* Apply inexpensive settings even if a format change must wait for a
+     * recording to finish. Keep transport/mount identity at its running value. */
+    struct ca_config next = server->settings;
+    for (size_t i = 0; i < ca_config_param_count(); i++) {
+        if (live_config_parameter(i))
+            (void)ca_config_param_assign(&next, i, (float)ca_config_param_get(&desired, i));
+    }
+    memcpy(next.timezone, desired.timezone, sizeof(next.timezone));
+    next.main_resolution = server->settings.main_resolution;
+    next.sub_resolution = server->settings.sub_resolution;
+    next.recording_resolution = server->settings.recording_resolution;
+    next.main_codec = server->settings.main_codec;
+    next.sub_codec = server->settings.sub_codec;
+    if (apply_runtime_config(server, &next) < 0) {
+        snprintf(error, sizeof(error), "Could not apply saved live settings: %s", strerror(errno));
+        config_status(server, hash, "error", error);
+        return;
+    }
+    next.main_resolution = desired.main_resolution;
+    next.sub_resolution = desired.sub_resolution;
+    next.recording_resolution = desired.recording_resolution;
+    next.main_codec = desired.main_codec;
+    next.sub_codec = desired.sub_codec;
+    if (apply_runtime_config(server, &next) < 0) {
+        if (errno == EBUSY) {
+            server->config_pending = true;
+            config_status(server, hash, "pending", "Live settings applied; video format waits until recording stops. Restart-only changes still require restart.");
+        } else {
+            snprintf(error, sizeof(error), "Live settings applied; video format failed: %s", strerror(errno));
+            config_status(server, hash, "error", error);
+        }
+        return;
+    }
+    bool restart = memcmp(&desired.support, &server->settings.support, sizeof(desired.support)) != 0;
+    for (size_t i = 0; i < ca_config_param_count(); i++) {
+        if (!live_config_parameter(i) && ca_config_param_get(&desired, i) != ca_config_param_get(&server->settings, i)) restart = true;
+    }
+    config_status(server, hash, restart ? "restart" : "applied", restart ?
+        "Live settings applied. Restart to apply mount, identity, transport or SupportProxy changes." :
+        "All saved settings applied without restarting the camera app.");
 }
 
 static void handle_parameter(struct ca_mavlink_server *server,
@@ -2124,6 +2320,10 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->rtsp_port = config->rtsp_port;
     server->system_id = (uint8_t)config->settings.mavlink_system_id;
     server->parameters = config->settings;
+    const char *ready = getenv("CAMERA_APP_READY_PATH");
+    if (!ready || !*ready) ready = "/run/camera-app.ready";
+    if (snprintf(server->config_status_path, sizeof(server->config_status_path), "%s.config", ready) >=
+        (int)sizeof(server->config_status_path)) { errno = ENAMETOOLONG; goto fail; }
     server->config_path = strdup(config->config_path);
     if (server->config_path == NULL) goto fail;
     server->definition_xml = ca_camera_definition(&server->definition_length);
@@ -2237,6 +2437,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
         process_message(server, &proxy_route, &incoming);
     }
     uint64_t now = monotonic_ms();
+    reload_config(server, now);
     bool recording = ca_media_recording(server->media);
     if (recording != server->reported_recording) {
         server->reported_recording = recording;
@@ -2283,7 +2484,8 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
     // Poll the local gimbal at 10Hz, but publish MAVLink device status at the
     // low regular rate recommended by the Gimbal v2 protocol (e.g. 5Hz).
-    if (have_peer(server) && now - server->last_attitude_request_ms >= 100U) {
+    if (have_peer(server) && now - server->last_attitude_request_ms >=
+        (server->tracking_rate_active ? 50U : 100U)) {
         server->last_attitude_request_ms = now;
         (void)ca_backend_request_gimbal_attitude(server->backend);
     }
@@ -2306,6 +2508,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
 void ca_mavlink_server_close(struct ca_mavlink_server *server)
 {
     if (server == NULL) return;
+    stop_tracking_rate(server);
     ca_support_mavlink_close(server->support);
     for (unsigned i = 0; i < CA_MAVLINK_CLIENTS; i++) close_client(server, i);
     if (server->listener_fd >= 0) close(server->listener_fd);

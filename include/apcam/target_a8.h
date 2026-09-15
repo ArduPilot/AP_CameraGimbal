@@ -21,6 +21,7 @@
 #define APCAM_ZOOM_CONTROL_MAX APCAM_ZOOM_MAX
 #define APCAM_WEB_CONTROL_MAVLINK 0
 #define APCAM_HAVE_GIMBAL_RATES 1
+#define APCAM_SUPPRESS_DUPLICATE_ANGLES 1
 #define APCAM_WEB_CENTER_COMMAND 3
 #define APCAM_HAVE_OPTICAL_ZOOM 0
 /* Fixed-focus lens: the vendor-compatible focus commands are no-ops. */

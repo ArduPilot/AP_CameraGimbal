@@ -45,6 +45,8 @@ static const struct ca_camera_parameter parameters[] = {
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
 #endif
+    CONFIG("TRACK_METHOD", "Location tracking control method"),
+    CONFIG("MAV_POS_TARGET", "Position targeting"),
     CONFIG("REC_AUTOSTART", "Automatic recording"),
     CONFIG("REC_RESOLUTION", "Recording resolution"),
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),

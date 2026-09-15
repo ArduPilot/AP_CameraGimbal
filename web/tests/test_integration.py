@@ -598,6 +598,7 @@ try:
         "mavlink_tcp_port": "14600",
         "mavlink_udp_port": "14601",
         "position_targeting": "false",
+        "tracking_method": "angle",
         "thermal_palette": "white_hot",
         "autorecord": "while_armed",
         "recording_resolution": "1920x1080",

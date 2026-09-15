@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "camera_app/backend.h"
+#include "camera_app/gimbal_angle_target.h"
 #include "apcam/gimbal_transform.h"
 #include <math.h>
 
@@ -78,6 +79,7 @@ struct ca_backend {
     uint8_t feedback_last;
     struct ca_gimbal_attitude attitude;
     bool have_attitude;
+    struct ca_angle_target angle_target;
 };
 
 static void emit_feedback(struct ca_backend *backend, uint8_t feedback);
@@ -434,6 +436,7 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
     } else if (frame->command == 0x17U && frame->payload_length != 0U &&
                frame->payload[0] >= 1U && frame->payload[0] <= 2U) {
         bool inverted;
+        uint8_t previous_direction = backend->mounting_direction;
         backend->mounting_direction = frame->payload[0];
         inverted = backend->orientation == CA_MOUNT_AUTO
                        ? backend->mounting_direction == 2U
@@ -443,6 +446,9 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
                    strerror(errno));
         } else {
             backend->mounting_direction = inverted ? 2U : 1U;
+        }
+        if (backend->mounting_direction != previous_direction) {
+            backend->angle_target.valid = false;
         }
     }
 }
@@ -849,6 +855,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         const char *feature = unsupported_linux_feature(&packet);
         if (feature != NULL) log_unsupported(backend, packet.opcode, feature);
     }
+    ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode, packet.payload, packet.payload_length);
     return send_private(backend, 0x08, MT11_TUNNEL, packet_data,
                         (uint16_t)length);
 }
@@ -881,6 +888,7 @@ static int send_public_command(struct ca_backend *backend, uint8_t opcode,
         errno = EMSGSIZE;
         return -1;
     }
+    ca_angle_target_invalidate_siyi(&backend->angle_target, opcode, payload, payload_length);
     return send_private(backend, 0x08, MT11_TUNNEL, packet, (uint16_t)length);
 }
 
@@ -913,14 +921,23 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
     float angles[3] = {0, pitch_rad * (180.0f / PI_F), yaw_rad * (180.0f / PI_F)};
     angles[1] = fminf(APCAM_GIMBAL_PITCH_MAX, fmaxf(APCAM_GIMBAL_PITCH_MIN, angles[1]));
     angles[2] = fminf(APCAM_GIMBAL_YAW_MAX, fmaxf(APCAM_GIMBAL_YAW_MIN, angles[2]));
+    float target_pitch = angles[1], target_yaw = angles[2];
     apcam_transform(&apcam_angle_command[backend->mounting_direction == 2U], angles, angles, false);
     int16_t yaw = angle_tenths(angles[2] * (PI_F / 180.0f), -180.0f, 180.0f);
     int16_t pitch = angle_tenths(angles[1] * (PI_F / 180.0f), -180.0f, 180.0f);
+    uint64_t now = monotonic_ms();
+    if (ca_angle_target_suppress(&backend->angle_target, yaw, pitch,
+                                 target_yaw, target_pitch,
+                                 backend->have_attitude ? &backend->attitude : NULL, now)) return 0;
     uint8_t payload[4] = {
         (uint8_t)yaw, (uint8_t)((uint16_t)yaw >> 8U),
         (uint8_t)pitch, (uint8_t)((uint16_t)pitch >> 8U),
     };
-    return send_public_command(backend, 0x0eU, payload, sizeof(payload));
+    int result = send_public_command(backend, 0x0eU, payload, sizeof(payload));
+    if (result == 0) {
+        ca_angle_target_sent(&backend->angle_target, yaw, pitch, now);
+    }
+    return result;
 }
 
 static int8_t rate_byte(float radians_per_second)

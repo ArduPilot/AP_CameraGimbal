@@ -165,9 +165,24 @@ sitl-test: sitl
 sitl-mavlink-test: sitl
 	python3 sitl/test_mavlink_parameters.py --backend mt11 --build $(SITL_BUILD)
 	python3 sitl/test_roi_motion.py --build $(SITL_BUILD)
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --build $(SITL_BUILD)
 
 a8_sitl-mavlink-test: a8_sitl
 	python3 sitl/test_mavlink_parameters.py --backend a8 --build $(A8_SITL_BUILD)
+
+.PHONY: sitl-angle-hold-test
+.PHONY: sitl-live-tracking-test
+sitl-live-tracking-test: sitl
+	$(MAKE) -C web portable-sitl SITL_BIN_ROOT=$(abspath $(SITL_BUILD))
+	$(SITL_VIDEO_PYTHON) sitl/test_live_tracking.py --build $(SITL_BUILD)
+
+sitl-angle-hold-test: sitl a8_sitl zr10_sitl
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend mt11 --build $(SITL_BUILD)
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend mt11 --build $(SITL_BUILD) --orientation inverted
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend a8 --build $(A8_SITL_BUILD)
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend a8 --build $(A8_SITL_BUILD) --orientation inverted
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend zr10 --build $(ZR10_SITL_BUILD)
+	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --backend zr10 --build $(ZR10_SITL_BUILD) --orientation inverted
 
 sitl-video-telemetry-test: sitl
 	python3 sitl/test_video_telemetry.py --backend mt11 --build $(SITL_BUILD) --check-stale

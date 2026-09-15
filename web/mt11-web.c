@@ -5,6 +5,7 @@
 
 #include "build/version.h"
 #include "build/icons.h"
+#include "../include/apcam/config_status.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -402,6 +403,8 @@ enum string_id {
     S_H_MAVLINK_TCP,
     S_P_MAVLINK_UDP,
     S_H_MAVLINK_UDP,
+    S_P_TRACK_METHOD, S_H_TRACK_METHOD, S_OPT_TRACK_ANGLE, S_OPT_TRACK_RATE,
+    S_RESTART_REQUIRED,
     S_P_POSITION_TARGETING,
     S_H_POSITION_TARGETING,
     S_P_THERMAL_PALETTE,
@@ -906,12 +909,17 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_H_MAVLINK_TCP] = {"MAVLink 2 camera and gimbal listener. Set to 0 to disable TCP.", "MAVLink 2 相机与云台监听端口。设为 0 可禁用 TCP。", "MAVLink 2 カメラ／ジンバルの待ち受けポート。0 で TCP を無効にします。"},
     [S_P_MAVLINK_UDP] = {"MAVLink UDP port", "MAVLink UDP 端口", "MAVLink UDP ポート"},
     [S_H_MAVLINK_UDP] = {"MAVLink 2 camera and gimbal listener. Set to 0 to disable UDP.", "MAVLink 2 相机与云台监听端口。设为 0 可禁用 UDP。", "MAVLink 2 カメラ／ジンバルの待ち受けポート。0 で UDP を無効にします。"},
+    [S_P_TRACK_METHOD] = {"Tracking control method", "跟踪控制方式", "追尾制御方式"},
+    [S_H_TRACK_METHOD] = {"Angle sends absolute positions. Rate follows predicted target motion with pointing-error correction. Applies to geographic ROI tracking; changes apply when saved.", "角度模式发送绝对位置；速率模式结合预测运动与指向误差修正。用于地理 ROI 跟踪，保存后生效。", "角度は絶対位置、速度は予測運動と指向誤差補正で制御します。地理 ROI 追尾に使用し、保存時に反映します。"},
+    [S_OPT_TRACK_ANGLE] = {"Angle", "角度", "角度"},
+    [S_OPT_TRACK_RATE] = {"Rate", "速率", "速度"},
+    [S_RESTART_REQUIRED] = {"Requires camera app restart.", "需要重启相机应用。", "カメラアプリの再起動が必要です。"},
     [S_P_POSITION_TARGETING] = {"Position targeting", "位置目标指向", "位置ターゲット指向"},
-    [S_H_POSITION_TARGETING] = {"When enabled, advertise and handle geographic ROI targets in the camera. Disable to make ArduPilot calculate and send angle targets. Save and restart to switch modes.", "启用时，由相机宣告并处理地理 ROI 目标。禁用时，由 ArduPilot 计算并发送角度目标。请保存并重启以切换模式。", "有効にすると、カメラが地理 ROI ターゲットを通知して処理します。無効にすると、ArduPilot が角度ターゲットを計算して送信します。モードの切り替えには保存して再起動してください。"},
+    [S_H_POSITION_TARGETING] = {"When enabled, advertise and handle geographic ROI targets in the camera. Disable to make ArduPilot calculate and send angle targets. Changes apply when saved; the updated capability is advertised to the flight controller.", "启用时，由相机宣告并处理地理 ROI 目标。禁用时，由 ArduPilot 计算并发送角度目标。保存后生效。", "有効にすると、カメラが地理 ROI ターゲットを通知して処理します。無効にすると、ArduPilot が角度ターゲットを計算して送信します。保存時に反映します。"},
     [S_P_THERMAL_PALETTE] = {"Thermal palette", "热成像调色板", "サーマルパレット"},
     [S_H_THERMAL_PALETTE] = {"Pseudo-colour palette applied by the thermal module to video and still images.", "热成像模块应用于视频和照片的伪彩调色板。", "サーマルモジュールが映像と静止画に適用する疑似カラーパレット。"},
     [S_P_AUTORECORD] = {"Automatic recording", "自动录像", "自動録画"},
-    [S_H_AUTORECORD_APP] = {"Enabled starts recording at startup. While Armed starts on vehicle arm and stops on disarm, using MAVLink HEARTBEAT from the selected system's autopilot (component 1).", "启用会在应用启动后开始录像。解锁时模式根据所选系统飞控（组件 1）的 MAVLink 心跳，在解锁时开始录像、上锁时停止。", "有効では起動時に録画を開始します。アーム中では選択したシステムのオートパイロット（コンポーネント 1）の MAVLink HEARTBEAT に従い、アームで開始、ディスアームで停止します。"},
+    [S_H_AUTORECORD_APP] = {"Enabled starts recording immediately and at startup. While Armed follows the current armed state and stops on disarm, using MAVLink HEARTBEAT from the selected system's autopilot (component 1).", "启用会在应用启动后开始录像。解锁时模式根据所选系统飞控（组件 1）的 MAVLink 心跳，在解锁时开始录像、上锁时停止。", "有効では起動時に録画を開始します。アーム中では選択したシステムのオートパイロット（コンポーネント 1）の MAVLink HEARTBEAT に従い、アームで開始、ディスアームで停止します。"},
     [S_P_RECORDING_RESOLUTION] = {"Recording resolution", "录像分辨率", "録画解像度"},
     [S_H_RECORDING_RESOLUTION_MT11] = {"Resolution used by the visible recording encoder; the MT11 thermal recording remains 1280 x 720.", "可见光录像编码器使用的分辨率；MT11 的热成像录像固定为 1280 x 720。", "可視光録画エンコーダーの解像度。MT11 のサーマル録画は 1280 x 720 固定です。"},
     [S_H_RECORDING_RESOLUTION_A8] = {"Resolution used by the recording encoder.", "录像编码器使用的分辨率。", "録画エンコーダーの解像度。"},
@@ -1208,12 +1216,12 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_JS_FILES_UNREADABLE] = {"Unable to read the selected files.", "无法读取所选文件。", "選択したファイルを読み取れません。"},
     [S_TITLE_APP_PARAMETERS] = {"camera-app parameters", "camera-app 参数", "camera-app パラメータ"},
     [S_APP_PARAMETERS_SUBTITLE] = {"Validated ArduPilot camera app settings from %s", "来自 %s 的 ArduPilot 相机应用设置（经校验）", "%s に保存された ArduPilot カメラアプリ設定（検証付き）"},
-    [S_APP_PARAMETERS_NOTICE] = {"Changes take effect when <code>camera-app</code> restarts. Use <strong>Save and restart</strong> unless batching changes.", "更改在 <code>camera-app</code> 重新启动后生效。除非要批量修改，否则请使用<strong>保存并重新启动</strong>。", "変更は <code>camera-app</code> の再起動後に反映されます。まとめて変更する場合を除き、<strong>保存して再起動</strong>を使用してください。"},
+    [S_APP_PARAMETERS_NOTICE] = {"Use <strong>Save</strong> to apply live settings automatically. Video-format changes briefly reconnect streams and wait until recording stops. Settings marked as requiring restart use <strong>Save and restart</strong>.", "<strong>保存</strong>后自动应用实时设置。视频格式更改会短暂重连视频，并等待录像停止。标记需要重启的设置请使用<strong>保存并重新启动</strong>。", "<strong>保存</strong>で設定を自動反映します。映像形式の変更は録画停止後にストリームを再接続します。再起動が必要と表示された設定は<strong>保存して再起動</strong>を使ってください。"},
     [S_PARAMS_GENERAL] = {"General and capture", "常规与拍摄", "一般・撮影"},
     [S_PARAMS_SAVE] = {"Save parameters", "保存参数", "パラメータを保存"},
     [S_PARAMS_SAVE_RESTART] = {"Save and restart camera app", "保存并重新启动相机应用", "保存してカメラアプリを再起動"},
     [S_PARAMS_SAVED_RESTARTED] = {"Parameters saved and %s restarted", "参数已保存，%s 已重新启动", "パラメータを保存し、%s を再起動しました"},
-    [S_PARAMS_SAVED] = {"Parameters saved; restart %s to apply them", "参数已保存；重新启动 %s 后生效", "パラメータを保存しました。反映するには %s を再起動してください"},
+    [S_PARAMS_SAVED] = {"Parameters saved; waiting for %s to apply live settings", "参数已保存；重新启动 %s 后生效", "パラメータを保存しました。反映するには %s を再起動してください"},
     [S_E_CONFIG_UNREADABLE] = {"Unable to read config or out of memory", "无法读取配置或内存不足", "設定を読み取れないか、メモリが不足しています"},
     [S_TITLE_RAW] = {"%s raw config", "%s 原始配置", "%s 設定ファイル"},
     [S_RAW_HEADING] = {"Raw %s", "原始 %s", "%s の直接編集"},
@@ -1594,6 +1602,8 @@ static const struct option replacement_wb_options[] = {
 };
 
 
+static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {"rate", S_OPT_TRACK_RATE}};
+
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TEXT, 1, 127, 0, NULL, 0},
@@ -1613,6 +1623,8 @@ static const struct parameter replacement_parameters[] = {
     {"position_targeting", "mavlink", "position_targeting",
      S_P_POSITION_TARGETING, S_H_POSITION_TARGETING,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"tracking_method", "mavlink", "tracking_method", S_P_TRACK_METHOD, S_H_TRACK_METHOD,
+     PARAM_ENUM, 0, 0, 0, tracking_options, 2},
     {"thermal_palette", "thermal", "palette", S_P_THERMAL_PALETTE, S_H_THERMAL_PALETTE,
      PARAM_ENUM, 0, 0, 0, palette_options,
      sizeof(palette_options) / sizeof(palette_options[0])},
@@ -1686,7 +1698,7 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "14550", "14550",
-    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "white_hot", "false",
+    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "angle", "white_hot", "false",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION),
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264", "50", "50", "50", "0",
@@ -5570,6 +5582,48 @@ static void append_nav(struct string_buffer *page, const char *route,
                T(S_APPLY), csrf_token, T(S_NAV_LOGOUT));
 }
 
+/* Match the app acknowledgement to both the saved bytes and running PID. */
+static bool live_config_notice(const char *config, size_t length, char *message,
+                                size_t capacity, bool *is_error)
+{
+    char path[sizeof(CAMERA_READY_PATH) + 8], state[16];
+    snprintf(path, sizeof(path), "%s.config", CAMERA_READY_PATH);
+    size_t size;
+    char *status = read_file(path, 1024, &size);
+    char *ready = read_file(CAMERA_READY_PATH, 512, &size);
+    bool found = false;
+    unsigned long long hash;
+    long pid, running;
+    char *pid_line = ready ? strstr(ready, "\npid=") : NULL;
+    char *text = status ? strchr(status, '\n') : NULL;
+    if (status && text && pid_line &&
+        sscanf(status, "%llx %ld %15s", &hash, &pid, state) == 3 &&
+        sscanf(pid_line, "\npid=%ld", &running) == 1 && pid > 1 && pid == running &&
+        kill((pid_t)pid, 0) == 0 &&
+        hash == apcam_config_hash(config, length, APCAM_CONFIG_HASH_INITIAL)) {
+        text++;
+        text[strcspn(text, "\r\n")] = 0;
+        snprintf(message, capacity, "Parameters saved. %s", text);
+        *is_error = strcmp(state, "error") == 0;
+        found = true;
+    }
+    free(status);
+    free(ready);
+    return found;
+}
+
+static bool wait_live_config(const char *config, size_t length, char *message, size_t capacity)
+{
+    bool is_error = false;
+    for (unsigned attempt = 0; attempt < 30; attempt++) {
+        if (live_config_notice(config, length, message, capacity, &is_error)) return is_error;
+        if (access(CAMERA_READY_PATH, R_OK) != 0) break;
+        usleep(100000);
+    }
+    snprintf(message, capacity, "Parameters saved. Live settings await camera app acknowledgement; start the app if it is stopped.");
+    return false;
+}
+
 static void append_notice(struct string_buffer *page, const char *message, bool is_error)
 {
     char *copy;
@@ -5670,6 +5724,15 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
     free(submitted_value);
     sb_append(page, "<div class=help>");
     sb_append_html(page, T(parameter->help));
+    if (strcmp(parameter->section, "support_proxy") == 0 ||
+        strcmp(parameter->form_name, "orientation") == 0 ||
+        strcmp(parameter->form_name, "uart_protocol") == 0 ||
+        strcmp(parameter->form_name, "mavlink_system_id") == 0 ||
+        strcmp(parameter->form_name, "mavlink_tcp_port") == 0 ||
+        strcmp(parameter->form_name, "mavlink_udp_port") == 0) {
+        sb_append(page, " ");
+        sb_append_html(page, T(S_RESTART_REQUIRED));
+    }
     sb_appendf(page, " <code>[%s] %s</code></div></div>", parameter->section, parameter->key);
 }
 
@@ -6239,7 +6302,7 @@ static char *render_parameter_page(const char *message, bool message_is_error,
 
     if (kind == CAMERA_NONE) kind = DEFAULT_CAMERA_KIND;
     config = read_file(config_path(kind), MAX_CONFIG, &config_len);
-    (void)config_len;
+
     if (config == NULL) config = strdup("");
     if (config == NULL) return NULL;
 
@@ -6250,6 +6313,9 @@ static char *render_parameter_page(const char *message, bool message_is_error,
         sb_appendf(&page, T(S_APP_PARAMETERS_SUBTITLE), REPLACEMENT_CONFIG_PATH);
         sb_append(&page, "</div></header>");
         append_nav(&page, "/parameters", NULL);
+        char applied[512];
+        if (message == NULL && live_config_notice(config, config_len, applied, sizeof(applied), &message_is_error))
+            message = applied;
         append_notice(&page, message, message_is_error);
         sb_appendf(&page, "<p class=notice>%s</p>"
                           "<form method=post action=/parameters><input type=hidden name=csrf value=\"%s\">"
@@ -8336,7 +8402,8 @@ static void handle_request(int fd, const char *peer)
                 snprintf(error, sizeof(error),
                          T(restart ? S_PARAMS_SAVED_RESTARTED : S_PARAMS_SAVED),
                          camera_label(kind));
-                send_parameter_page(fd, error, false, NULL);
+                bool apply_error = !restart && wait_live_config(new_config, new_length, error, sizeof(error));
+                send_parameter_page(fd, error, apply_error, NULL);
             }
             free(action);
             free(new_config);
@@ -8370,7 +8437,8 @@ static void handle_request(int fd, const char *peer)
                     } else {
                         snprintf(error, sizeof(error), "%s", T(S_CONFIG_SAVED));
                     }
-                    send_raw_page(fd, error, false);
+                    bool apply_error = !restart && wait_live_config(config, config_len, error, sizeof(error));
+                    send_raw_page(fd, error, apply_error);
                 }
             }
             free(config);
