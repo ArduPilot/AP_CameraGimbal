@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Check source bootstrap ordering and recursive Make's exported roots."""
 import os
+import hashlib
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -101,6 +103,67 @@ recursive:
         self.assertEqual(self.make('recursive', 'DEPS_ROOT=custom-deps'),
                          ['bootstrap', 'compile', 'compile'])
         self.assertTrue((self.repo / 'custom-deps/minimp4/minimp4.h').is_file())
+
+
+class CachedRTSPSourcesTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='apcam-rtsp-dependency-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.mpp = self.root / 'deps/ss928-mpp'
+        self.mpp.mkdir(parents=True)
+        self.files = ['net/EventLoop.h', 'net/EventLoop.cpp', 'xop/RtspServer.h']
+        for name in self.files:
+            path = self.mpp / 'src/rtspserver/src' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('// pinned fixture\n')
+        self.git('init', '-q')
+        self.git('add', '.')
+        self.git('-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                 'commit', '-qm', 'Pinned SDK fixture')
+        revision = self.git('rev-parse', 'HEAD').strip()
+        header = self.root / 'deps/minimp4/minimp4.h'
+        header.parent.mkdir()
+        header.write_text('// cached minimp4 fixture\n')
+        script = (ROOT / 'tools/bootstrap_dependencies.sh').read_text()
+        script = re.sub(r'^mpp_commit=.*$', 'mpp_commit=' + revision, script, flags=re.M)
+        script = re.sub(r'^minimp4_sha256=.*$', 'minimp4_sha256=' +
+                        hashlib.sha256(header.read_bytes()).hexdigest(), script, flags=re.M)
+        self.script = self.root / 'bootstrap.sh'
+        self.script.write_text(script)
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.mpp), *args], text=True)
+
+    def bootstrap(self):
+        result = subprocess.run(['sh', str(self.script), str(self.root / 'deps')],
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        return result.stdout
+
+    def test_missing_header_is_restored_without_overwriting_local_edits(self):
+        source = self.mpp / 'src/rtspserver/src'
+        (source / 'net/EventLoop.h').unlink()
+        (source / 'net/EventLoop.cpp').write_text('// local change\n')
+        self.assertIn('Restoring missing RTSP source', self.bootstrap())
+        self.assertEqual((source / 'net/EventLoop.h').read_text(), '// pinned fixture\n')
+        self.assertEqual((source / 'net/EventLoop.cpp').read_text(), '// local change\n')
+        self.assertNotIn('Restoring', self.bootstrap())
+
+    def test_missing_source_tree_is_restored(self):
+        source = self.mpp / 'src/rtspserver/src'
+        shutil.rmtree(source)
+        self.bootstrap()
+        for name in self.files:
+            self.assertTrue((source / name).is_file())
+
+    def test_sparse_checkout_does_not_hide_required_sources(self):
+        self.git('sparse-checkout', 'set', '--cone', 'include')
+        source = self.mpp / 'src/rtspserver/src'
+        self.assertFalse(source.exists())
+        self.bootstrap()
+        for name in self.files:
+            self.assertTrue((source / name).is_file())
 
 
 if __name__ == '__main__':

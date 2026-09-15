@@ -33,6 +33,19 @@ else
     git -C "$mpp_root" checkout --detach "$mpp_commit"
 fi
 
+# A cached checkout can have the right HEAD but missing working-tree files
+# (for example after an incomplete copy). SITL builds this library from source;
+# checking only the revision otherwise lets compilation fail at EventLoop.h.
+# Restore only absent files so local edits to existing SDK sources survive.
+git -C "$mpp_root" ls-tree -r --name-only "$mpp_commit" -- src/rtspserver/src |
+while IFS= read -r source; do
+    if [ ! -e "$mpp_root/$source" ]; then
+        echo "Restoring missing RTSP source: $source"
+        git -C "$mpp_root" restore --source="$mpp_commit" --worktree \
+            --ignore-skip-worktree-bits -- "$source"
+    fi
+done
+
 mkdir -p "$minimp4_root"
 if [ -f "$minimp4_root/minimp4.h" ]; then
     printf '%s  %s\n' "$minimp4_sha256" "$minimp4_root/minimp4.h" |
