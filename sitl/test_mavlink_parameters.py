@@ -112,6 +112,21 @@ def check_identity(link, system, component=CAMERA):
     assert seen == {component, GIMBAL}, seen
 
 
+def check_telemetry_requests(link, system):
+    expected = {
+        M.MAVLINK_MSG_ID_GLOBAL_POSITION_INT: 100000,
+        M.MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE: 100000,
+        M.MAVLINK_MSG_ID_SYSTEM_TIME: 1000000,
+    }
+    while expected:
+        message = receive(link, "COMMAND_LONG",
+                          lambda m: m.command == M.MAV_CMD_SET_MESSAGE_INTERVAL)
+        assert message.get_srcSystem() == system
+        assert message.get_srcComponent() == GIMBAL
+        assert (message.target_system, message.target_component) == (system, 1)
+        assert message.param2 == expected.pop(int(message.param1)), message
+
+
 def mavproxy_checks(endpoint, directory, observer):
     """Use the actual interactive MAVProxy CLI, including its parameter module."""
     transcript = directory / "mavproxy-console.log"
@@ -208,12 +223,16 @@ def main():
                 heartbeat(link, 255, kind, autopilot)
             assert link.recv_match(blocking=True, timeout=1.2) is None, "auto mode transmitted before FC heartbeat"
             heartbeat(link, 42)
+            check_telemetry_requests(link, 42)
             check_identity(link, 42)
             heartbeat(link, 43)
             heartbeat(link, 255, M.MAV_TYPE_GCS)
             drain(link)
             check_identity(link, 42)
             print("Automatic ID waits for FC, ignores GCS, and retains first FC passed")
+            heartbeat(link, 42)
+            check_telemetry_requests(link, 42)
+            print("Selected FC receives 10 Hz motion and 1 Hz SYSTEM_TIME requests, renewed after five seconds")
 
             drain(link)
             link.mav.param_request_list_send(42, 0)

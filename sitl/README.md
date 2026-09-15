@@ -181,6 +181,7 @@ Terrain video defaults to **20 fps** for both cameras; override with
 `CAMERA_GIMBAL_SITL_FPS` (1–60). The camera requests `GLOBAL_POSITION_INT` and
 `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE` at 10 Hz from the selected flight controller,
 refreshing the requests every five seconds even when slower telemetry is present.
+It also requests `SYSTEM_TIME` at 1 Hz to correct an unset camera date.
 The latter provides the preferred vehicle attitude; `ATTITUDE` is a metadata
 fallback after one second without gimbal-state updates.
 

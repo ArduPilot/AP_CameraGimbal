@@ -258,6 +258,11 @@ $(MAVLINK_TEST_TARGET): tests/test_mavlink.c src/protocol/mavlink.c \
                         $(MAVLINK_DEPS)
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(filter %.c,$^) -lm
 
+tests/test_mavlink_time: tests/test_mavlink_time.c src/protocol/mavlink_server.c \
+                        src/protocol/mavlink.c $(MAVLINK_DEPS)
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections -o $@ $< src/protocol/mavlink.c -lm
+
 $(CONFIG_TEST_TARGET): tests/test_config.c src/config.c
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
 
@@ -498,7 +503,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.c \
 		src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
 		src/log.c src/recording/video_metadata.c src/recording/metadata.c -lpthread -lm
 
-test: tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -509,6 +514,7 @@ test: tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(
 	$(HOST_TARGET) $(A8_HOST_TARGET)
 	./$(TEST_TARGET)
 	./$(MAVLINK_TEST_TARGET)
+	./tests/test_mavlink_time
 	./tests/test_support_mavlink
 	python3 ../sitl/test_support_video_queue.py
 	python3 ../tests/test_targets.py
@@ -565,6 +571,7 @@ install-init: $(APP_INIT) $(APP_SELECTION) $(TIMESYNC)
 	$(SSH) $(SSH_HOST) 'set -eu; chmod 0755 $(REMOTE_TIMESYNC).new $(REMOTE_APP_SELECTION).new $(REMOTE_APP_INIT).new; /bin/fsync $(REMOTE_TIMESYNC).new; /bin/fsync $(REMOTE_APP_SELECTION).new; /bin/fsync $(REMOTE_APP_INIT).new; mv $(REMOTE_TIMESYNC).new $(REMOTE_TIMESYNC); /bin/fsync /app/bin; test -x $(REMOTE_TIMESYNC); mv $(REMOTE_APP_SELECTION).new $(REMOTE_APP_SELECTION); /bin/fsync /app; test -x $(REMOTE_APP_SELECTION); mv $(REMOTE_APP_INIT).new $(REMOTE_APP_INIT); /bin/fsync /app; test -x $(REMOTE_APP_INIT); sha256sum $(REMOTE_TIMESYNC) $(REMOTE_APP_SELECTION) $(REMOTE_APP_INIT)'
 
 clean:
+	rm -f tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
 	rm -f $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \

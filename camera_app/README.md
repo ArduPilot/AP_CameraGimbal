@@ -168,8 +168,11 @@ altitude and zoom, using the `drone-dji` field names that photogrammetry
 tools already read plus an `apcg` namespace with the full set. Position and
 attitude come from the MAVLink `GLOBAL_POSITION_INT`, `ATTITUDE` and
 `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE` streams and are dropped from the metadata
-once older than 10 seconds. The camera clock is set from the autopilot's
-`SYSTEM_TIME` when it is still at the epoch.
+once older than 10 seconds. The camera requests `SYSTEM_TIME` at 1 Hz from the
+selected flight controller and uses it to correct any camera date earlier than
+1 September 2026 UTC. Times before that date from the flight controller are
+ignored, allowing it to acquire valid GPS time after startup. A camera clock
+already at or after that date is left unchanged.
 
 Automatic Recording offers **Disabled**, **Enabled**, and **While Armed**.
 The INI values are `false`, `true`, and `while_armed`; existing boolean

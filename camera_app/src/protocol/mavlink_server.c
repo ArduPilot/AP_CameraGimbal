@@ -931,16 +931,21 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
         TELEMETRY_INTERVAL_REQUEST_MS) {
         return;
     }
-    const uint32_t messages[] = {
-        MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
-        MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE,
+    const struct {
+        uint32_t id;
+        uint32_t interval_us;
+    } messages[] = {
+        {MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 100000U},
+        {MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE, 100000U},
+        /* UTC date for recordings, including when GPS time becomes valid later. */
+        {MAVLINK_MSG_ID_SYSTEM_TIME, 1000000U},
     };
     server->last_telemetry_request_ms = now;
     for (unsigned i = 0; i < sizeof(messages) / sizeof(messages[0]); i++) {
         mavlink_message_t message;
         mavlink_command_long_t command = {
-            .param1 = (float)messages[i],
-            .param2 = 100000.0f, /* 10 Hz, independent of GCS stream groups */
+            .param1 = (float)messages[i].id,
+            .param2 = (float)messages[i].interval_us,
             .command = MAV_CMD_SET_MESSAGE_INTERVAL,
             .target_system = server->autopilot_system_id,
             .target_component = server->autopilot_component_id,
@@ -1463,7 +1468,8 @@ static void handle_attitude(struct ca_mavlink_server *server,
 static void handle_system_time(struct ca_mavlink_server *server,
                                const mavlink_message_t *message)
 {
-    /* adopt the autopilot's GPS time when our clock is clearly unset */
+    /* Adopt the autopilot's UTC date if ours predates 1 September 2026 UTC. */
+    const time_t earliest_valid_time = 1788220800;
     mavlink_system_time_t time;
     uint64_t unix_us;
     struct timespec now, wanted;
@@ -1473,9 +1479,9 @@ static void handle_system_time(struct ca_mavlink_server *server,
     }
     mavlink_msg_system_time_decode(message, &time);
     unix_us = time.time_unix_usec;
-    if (unix_us < UINT64_C(1600000000000000)) return;
+    if (unix_us < (uint64_t)earliest_valid_time * UINT64_C(1000000)) return;
     if (clock_gettime(CLOCK_REALTIME, &now) < 0 ||
-        (uint64_t)now.tv_sec >= UINT64_C(1600000000)) {
+        now.tv_sec >= earliest_valid_time) {
         return;
     }
     wanted.tv_sec = (time_t)(unix_us / UINT64_C(1000000));
