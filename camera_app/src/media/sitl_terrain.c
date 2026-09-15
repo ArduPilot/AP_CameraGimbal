@@ -118,7 +118,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
                           uint8_t *data[4], size_t length[4], bool key[4],
-                          uint8_t *photos[3], size_t photo_length[3])
+                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure)
 {
     struct ca_metadata metadata;
     struct timespec utc, now;
@@ -157,6 +157,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         data[i] = malloc(length[i]);
         if (!data[i] || transfer(t->fd, data[i], length[i], false) < 0) return -1;
     }
+    if (transfer(t->fd, exposure, sizeof(*exposure), false) < 0) return -1;
     for (unsigned i = 0; i < 3; i++) {
         if (!(image->capture_mask & (1U << i))) continue;
         uint32_t length;

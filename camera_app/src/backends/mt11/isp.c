@@ -8,6 +8,7 @@
 #include "ss_mpi_isp.h"
 
 #include <string.h>
+#include <errno.h>
 
 static td_s32 set_csc(ot_vi_pipe pipe, const struct ca_config *config)
 {
@@ -126,4 +127,38 @@ td_s32 ca_mt11_apply_isp_config(const struct ca_config *config, bool live)
            config->exposure_compensation, config->iso, config->shutter,
            config->metering, config->white_balance);
     return TD_SUCCESS;
+}
+
+int ca_mt11_exposure(unsigned lens, struct ca_exposure *s)
+{
+    if (lens>1) return -ENOTSUP; /* Thermal AGC is not RGB auto exposure. */
+    ot_vi_pipe pipe=lens==0 ? CA_MT11_WIDE_PIPE : CA_MT11_ZOOM_PIPE;
+    ot_isp_exp_info info={0};
+    td_s32 result=ss_mpi_isp_query_exposure_info(pipe,&info);
+    if (result!=TD_SUCCESS) return result;
+    s->shutter_us=info.exp_time;
+    s->analog_gain=info.a_gain/1024.0f;
+    s->digital_gain=info.d_gain/1024.0f;
+    s->isp_gain=info.isp_d_gain/1024.0f;
+    s->luma=info.ave_lum;
+    /* SDK histogram error is logged raw; it is not a luminance target. */
+    s->error=info.hist_error;
+    s->state=info.exposure_is_max ? CA_AE_STATE_LIMIT : 0;
+    s->valid=CA_AE_SHUTTER|CA_AE_AGAIN|CA_AE_DGAIN|CA_AE_IGAIN|
+             CA_AE_LUMA|CA_AE_ERROR|CA_AE_LIMIT;
+    ot_isp_exposure_attr attr={0};
+    result=ss_mpi_isp_get_exposure_attr(pipe,&attr);
+    if (result!=TD_SUCCESS) return result;
+    if (attr.op_type==OT_OP_MODE_AUTO) s->mode=CA_AE_AUTO;
+    else {
+        bool auto_gain=attr.manual_attr.a_gain_op_type==OT_OP_MODE_AUTO ||
+            attr.manual_attr.d_gain_op_type==OT_OP_MODE_AUTO ||
+            attr.manual_attr.ispd_gain_op_type==OT_OP_MODE_AUTO;
+        bool auto_time=attr.manual_attr.exp_time_op_type==OT_OP_MODE_AUTO;
+        s->mode=auto_gain ? (auto_time ? CA_AE_AUTO : CA_AE_SHUTTER_PRIORITY) :
+                           (auto_time ? CA_AE_GAIN_PRIORITY : CA_AE_MANUAL);
+    }
+    s->valid|=CA_AE_MODE;
+    /* This SDK does not expose the current target or convergence flag. */
+    return 0;
 }

@@ -588,11 +588,17 @@ def main():
                 force_key = record.get('swap') != previous_swap
                 previous_swap = record.get('swap')
                 active = [True, True, visible_sub, bool(record.get('recording'))]
-                futures = [pool.submit(encoders[i].encode, scene.render(i, record, valid), record['pts90k'],
-                                       force_key or (i == 3 and not previous_recording)) if active[i] else None
-                           for i in range(4)]
+                scene.controls.exposure = None
+                futures = []
+                for i in range(4):
+                    pixels = scene.render(i, record, valid) if active[i] else None
+                    if i == 0:  # RGB sensor, before other streams/still captures
+                        exposure = scene.controls.exposure_packet()
+                    futures.append(pool.submit(encoders[i].encode, pixels, record['pts90k'],
+                                               force_key or (i == 3 and not previous_recording)) if active[i] else None)
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
+                sock.sendall(exposure)
                 # Still images use the same current scene and image controls.
                 # Render each requested lens without changing the live selection.
                 for lens in range(3):

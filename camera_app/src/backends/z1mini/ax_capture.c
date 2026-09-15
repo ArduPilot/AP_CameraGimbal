@@ -7,6 +7,8 @@
 #include "ax_config.h"
 #include "ax_venc_api.h"
 #include "ax_vin_api.h"
+#include "ax_isp_3a_api.h"
+#include <errno.h>
 #include "native.h"
 #include <dirent.h>
 #include <dlfcn.h>
@@ -24,6 +26,8 @@ static atomic_bool stopped;
 static int created, isp_open, vin_started, dev_enabled, stream_on, enc_created[2], enc_started[2];
 static pthread_t isp_thread;
 static int thread_started;
+static pthread_t exposure_thread;
+static bool exposure_started;
 static uint64_t mono_ms(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -138,6 +142,43 @@ static int exclusive_owner(void) {
     return result;
 }
 static pthread_mutex_t output_lock = PTHREAD_MUTEX_INITIALIZER;
+/* SDK queries run independently of video encoding and gimbal control. */
+static void *exposure_poll(void *opaque)
+{
+    FILE *out=opaque;
+    typedef AX_S32 (*status_fn)(AX_U8, AX_ISP_IQ_AE_STATUS_T *);
+    typedef AX_S32 (*param_fn)(AX_U8, AX_ISP_IQ_AE_PARAM_T *);
+    status_fn query=(status_fn)dlsym(RTLD_DEFAULT,"AX_ISP_IQ_GetAeStatus");
+    param_fn param=(param_fn)dlsym(RTLD_DEFAULT,"AX_ISP_IQ_GetAeParam");
+    while (!stopped) {
+        struct ca_exposure s=ca_exposure_empty(0,mono_ms()*1000);
+        AX_ISP_IQ_AE_STATUS_T status={0};
+        s.result=query ? query(0,&status) : -ENOTSUP;
+        if (!s.result) {
+            s.shutter_us=status.tExpStatus.nShutter;
+            s.analog_gain=status.tExpStatus.nAGain/1024.0f;
+            s.digital_gain=status.tExpStatus.nDgain/1024.0f;
+            s.isp_gain=status.tExpStatus.nIspGain/1024.0f;
+            s.luma=status.tAlgStatus.nWeightedMeanLuma/1024.0f;
+            s.target=status.tExpStatus.nSetPoint/1024.0f;
+            s.error=s.target-s.luma;
+            s.valid=CA_AE_SHUTTER|CA_AE_AGAIN|CA_AE_DGAIN|CA_AE_IGAIN|
+                    CA_AE_LUMA|CA_AE_TARGET|CA_AE_ERROR;
+        }
+        AX_ISP_IQ_AE_PARAM_T p={0};
+        int r=param ? param(0,&p) : -ENOTSUP;
+        if (!r) { s.mode=p.nEnable ? CA_AE_AUTO : CA_AE_MANUAL; s.valid|=CA_AE_MODE; }
+        if (!s.result) s.result=r;
+        /* No vendor convergence/boundary flag in this SDK; do not invent one. */
+        struct ca_z1_native_header h={CA_Z1_NATIVE_AE_MAGIC,sizeof(s),s.time_us,0,0};
+        pthread_mutex_lock(&output_lock);
+        bool ok=fwrite(&h,1,sizeof(h),out)==sizeof(h) && fwrite(&s,1,sizeof(s),out)==sizeof(s);
+        pthread_mutex_unlock(&output_lock);
+        if (!ok) { stopped=true; break; }
+        usleep(200000);
+    }
+    return NULL;
+}
 struct encoder_worker {
     unsigned channel, limit, frames;
     size_t bytes;
@@ -388,6 +429,7 @@ int main(int argc, char **argv) {
         CALL(AX_VENC_StartRecvFrame, c, &recv, 0, 0);
         enc_started[c] = 1;
     }
+    if (framed && !pthread_create(&exposure_thread,NULL,exposure_poll,out[0])) exposure_started=true;
     struct encoder_worker workers[2] = {0};
     pthread_t encoders[2];
     unsigned started = 0;
@@ -413,6 +455,7 @@ int main(int argc, char **argv) {
 
 cleanup:
     stopped = 1;
+    if (exposure_started) pthread_join(exposure_thread,NULL);
     for (unsigned c = 0; c < 2; c++) {
         if (enc_started[c])
             call("AX_VENC_StopRecvFrame", c, 0, 0, 0);

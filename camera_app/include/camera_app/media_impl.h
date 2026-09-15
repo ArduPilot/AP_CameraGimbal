@@ -1,6 +1,7 @@
 #ifndef CAMERA_APP_MEDIA_IMPL_H
 #define CAMERA_APP_MEDIA_IMPL_H
 #include "camera_app/media.h"
+#include "camera_app/exposure.h"
 
 /* Hardware/SITL implementation behind the stable public media handle. */
 struct ca_media_impl;
@@ -30,6 +31,9 @@ int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *pale
 int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palette);
 int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted);
 void ca_media_impl_close(struct ca_media_impl *media);
+
+/* Read-only feedback; called on a background thread, only while logging. */
+int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *sample);
 
 int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings);
 #endif

@@ -4,6 +4,7 @@ These model control direction and interaction, not a particular sensor's
 radiometry, exposure calibration or lens mechanics. All arrays use RGB order.
 """
 import math
+import struct
 
 import cv2
 import numpy as np
@@ -34,6 +35,7 @@ class ImageControls:
             self.luts[palette] = np.stack([np.interp(np.arange(256), x, np.array(anchors)[:, c])
                                           for c in range(3)], axis=1).astype(np.uint8).reshape(256, 1, 3)
         self.matrix_key = None
+        self.exposure = None
 
     def apply(self, image, settings, thermal=False):
         if thermal:
@@ -52,17 +54,27 @@ class ImageControls:
         gain *= 2 ** max(0, iso - 1)
         if shutter:
             gain *= 100 / (30, 50, 100, 250, 500, 750, 1000, 2000)[shutter - 1]
+        gray = cv2.cvtColor(image[::8, ::8], cv2.COLOR_RGB2GRAY)
         metering = settings.get('metering', 0)
         if metering and (not iso or not shutter):
             # Match the selected region to the average-metered reference.
             # Subsampling bounds the work even with a 4K recording stream.
-            gray = cv2.cvtColor(image[::8, ::8], cv2.COLOR_RGB2GRAY)
             h, w = gray.shape
             fraction = 0.5 if metering == 1 else 0.15
             half_h, half_w = max(1, round(h * fraction / 2)), max(1, round(w * fraction / 2))
             region = gray[max(0, h // 2 - half_h):h // 2 + half_h,
                           max(0, w // 2 - half_w):w // 2 + half_w]
             gain *= np.clip(gray.mean() / max(1, region.mean()), 0.25, 4)
+        # Describe the actual visual model, not fictional hardware feedback.
+        # There is no closed-loop AE/convergence model yet. Its effective sensor
+        # shutter/gain and exposure-stage luminance are nevertheless measurable.
+        sensor_gain = 2 ** max(0, iso - 1)
+        shutter_us = 1000000 / (30, 50, 100, 250, 500, 750, 1000, 2000)[shutter - 1] if shutter else 10000
+        isp_gain = gain / (sensor_gain * shutter_us / 10000)
+        mode = (1 if shutter else 2) if iso else (3 if shutter else 0)
+        self.exposure = (shutter_us, sensor_gain, 1.0, isp_gain,
+                         float(np.clip(gray.astype(np.float32) * gain, 0, 255).mean()), math.nan, math.nan)
+        self.exposure_mode = mode
         balance = ((1, 1, 1), (1.04, 1, .96), (1.15, 1, .85),
                    (1.08, .90, 1.12), (.78, 1, 1.25))[settings.get('white_balance', 0)]
         key = (brightness, contrast, saturation, gain, balance)
@@ -88,3 +100,10 @@ class ImageControls:
             if reduction > 1:
                 image = cv2.resize(image, (w, h), interpolation=cv2.INTER_LINEAR)
         return image
+
+    def exposure_packet(self):
+        """Little-endian ca_exposure IPC; C supplies sample time and lens ID."""
+        valid = 0x9f if self.exposure is not None else 0
+        values = self.exposure or (math.nan,) * 7
+        return struct.pack('<QBBHBBi7f', 0, 0, 1, valid,
+                           self.exposure_mode if valid else 255, 0, 0, *values)

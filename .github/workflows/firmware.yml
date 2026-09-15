@@ -33,3 +33,24 @@ jobs:
           name: AP-CameraGimbal-camera-definitions
           path: build/camera-definitions/*.xml
           if-no-files-found: error
+
+  exposure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install SITL test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ffmpeg python3-venv
+          python3 -m venv build/terrain-venv
+          build/terrain-venv/bin/pip install pymavlink numpy opencv-python-headless av
+          echo "$PWD/build/terrain-venv/bin" >> "$GITHUB_PATH"
+      - name: Fetch pinned build sources
+        run: make dependencies
+      - name: Test ISP decoding, native IPC and background polling
+        run: make -C camera_app exposure-test
+      - name: Test exposure BIN logs and live controls on all four simulated cameras
+        run: make sitl-image-controls-test

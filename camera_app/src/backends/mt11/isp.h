@@ -6,4 +6,6 @@
 
 td_s32 ca_mt11_apply_isp_config(const struct ca_config *config, bool live);
 
+#include "camera_app/exposure.h"
+int ca_mt11_exposure(unsigned lens, struct ca_exposure *sample);
 #endif

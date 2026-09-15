@@ -631,14 +631,25 @@ endif
 Z1MINI_AX_SDK_INCLUDE ?=
 .PHONY: z1mini-capture
 z1mini-capture: build/z1mini/ax-capture
-build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/backends/z1mini/ax_config.h src/backends/z1mini/native.h
+build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)
-	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< -o $@ -ldl -pthread
+	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< -o $@ -ldl -pthread
 
 .PHONY: thermal-monitor-test
 thermal-monitor-test: tests/test_thermal_monitor
 	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_thermal_monitor"], check=True, timeout=10)'
 
-tests/test_thermal_monitor: tests/test_thermal_monitor.c src/media/media.c include/camera_app/media.h include/camera_app/binlog.h
+tests/test_thermal_monitor: tests/test_thermal_monitor.c src/media/media.c include/camera_app/media.h include/camera_app/binlog.h include/camera_app/exposure.h
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.c src/media/media.c -lpthread -lm
+
+.PHONY: exposure-test
+exposure-test: thermal-monitor-test tests/test_exposure tests/test_exposure_native
+	./tests/test_exposure
+	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_exposure_native"], check=True, timeout=10)'
+
+tests/test_exposure: tests/test_exposure.c include/camera_app/sigmastar_exposure.h include/camera_app/exposure.h
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< -lm
+
+tests/test_exposure_native: tests/test_z1mini_native.c src/backends/z1mini/native.c src/backends/z1mini/native.h include/camera_app/exposure.h src/log.c
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/test_z1mini_native.c src/backends/z1mini/native.c src/log.c -lpthread -lm

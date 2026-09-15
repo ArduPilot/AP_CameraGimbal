@@ -34,6 +34,7 @@ struct ca_media_impl {
     struct ca_mp4 *mp4;
     char path[PATH_MAX];
     uint64_t pts_offset, last_pts[2];
+    struct ca_exposure exposure;
 };
 static uint64_t monotonic_us(void)
 {
@@ -72,6 +73,13 @@ static void consume(void *opaque, const uint8_t *data, size_t n, uint64_t pts, b
 {
     consume_native(opaque, data, n, pts, key, 0);
 }
+static void consume_exposure(void *opaque, const struct ca_exposure *sample)
+{
+    struct ca_media_impl *m=opaque;
+    pthread_mutex_lock(&m->lock);
+    m->exposure=*sample;
+    pthread_mutex_unlock(&m->lock);
+}
 static void *receiver(void *opaque)
 {
     struct ca_media_impl *m = opaque;
@@ -80,7 +88,7 @@ static void *receiver(void *opaque)
     const char *native_path = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
     if (native_path && *native_path) {
         ca_log("Z1 native AX capture starting; exclusive media ownership required");
-        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, m);
+        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m);
         ca_log("Z1 native AX capture stopped result=%d", result);
         atomic_store(&m->ready, false);
         pthread_mutex_lock(&m->lock);
@@ -221,4 +229,17 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
 {
     (void)media; (void)settings;
     errno = ENOTSUP; return -1;
+}
+
+int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exposure *s)
+{
+    if (lens) return -ENOTSUP;
+    pthread_mutex_lock(&m->lock);
+    struct ca_exposure cached=m->exposure;
+    pthread_mutex_unlock(&m->lock);
+    if (!cached.time_us) return -ENODATA; /* Also identifies legacy RTSP-only mode. */
+    uint64_t now=monotonic_us();
+    if (now<cached.time_us || now-cached.time_us>1000000U) return -ETIMEDOUT;
+    *s=cached;
+    return s->result;
 }

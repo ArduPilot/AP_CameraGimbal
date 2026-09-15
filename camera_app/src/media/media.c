@@ -23,6 +23,9 @@ struct ca_media {
     pthread_t controls_thread;
     bool controls_running, controls_stop;
     unsigned controls_generation;
+    pthread_t exposure_thread;
+    bool exposure_running;
+    pthread_cond_t exposure_wake;
 };
 
 /* Thermal USB transactions can take hundreds of milliseconds. Refresh their
@@ -52,22 +55,56 @@ static void *monitor_controls(void *opaque)
     pthread_mutex_unlock(&media->controls_lock);
     return NULL;
 }
+/* Independent of slow thermal USB reads. The backend is joined before any
+ * pipeline teardown, including reconfiguration and rollback. */
+static void *monitor_exposure(void *opaque)
+{
+    struct ca_media *media=opaque;
+    pthread_mutex_lock(&media->controls_lock);
+    while (!media->controls_stop) {
+        pthread_mutex_unlock(&media->controls_lock);
+        if (ca_binlog_active()) {
+            for (unsigned lens=0; lens<APCAM_NUM_LENSES; lens++) {
+                struct ca_exposure sample=ca_exposure_empty(lens,ca_binlog_time_us());
+                sample.result=ca_media_impl_exposure(media->impl,lens,&sample);
+                ca_binlog_emit(CA_LOG_AE,&sample,sizeof(sample));
+            }
+        }
+        pthread_mutex_lock(&media->controls_lock);
+        if (!media->controls_stop) {
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME,&until);
+            until.tv_nsec+=200000000;
+            if (until.tv_nsec>=1000000000) { until.tv_sec++; until.tv_nsec-=1000000000; }
+            pthread_cond_timedwait(&media->exposure_wake,&media->controls_lock,&until);
+        }
+    }
+    pthread_mutex_unlock(&media->controls_lock);
+    return NULL;
+}
 static void stop_controls_monitor(struct ca_media *media)
 {
-    if (!media->controls_running) return;
+    if (!media->controls_running && !media->exposure_running) return;
     pthread_mutex_lock(&media->controls_lock);
     media->controls_stop=true;
     pthread_cond_signal(&media->controls_wake);
+    pthread_cond_signal(&media->exposure_wake);
     pthread_mutex_unlock(&media->controls_lock);
-    pthread_join(media->controls_thread,NULL);
+    if (media->controls_running) pthread_join(media->controls_thread,NULL);
+    if (media->exposure_running) pthread_join(media->exposure_thread,NULL);
+    media->exposure_running=false;
     media->controls_running=false;
 }
 static void start_controls_monitor(struct ca_media *media)
 {
-    if (!APCAM_HAVE_THERMAL || !media->impl || media->controls_running) return;
+    if (!media->impl || media->controls_running || media->exposure_running) return;
     media->controls_stop=false;
     media->cached_thermal=false;
-    int error=pthread_create(&media->controls_thread,NULL,monitor_controls,media);
+    int error=pthread_create(&media->exposure_thread,NULL,monitor_exposure,media);
+    if (error) ca_log("cannot start exposure monitor: %s",strerror(error));
+    else media->exposure_running=true;
+    if (!APCAM_HAVE_THERMAL) return;
+    error=pthread_create(&media->controls_thread,NULL,monitor_controls,media);
     if (error) ca_log("cannot start thermal controls monitor: %s",strerror(error));
     else media->controls_running=true;
 }
@@ -79,10 +116,12 @@ int ca_media_open(struct ca_media **result, const struct ca_media_config *config
     if (!media) return -1;
     pthread_mutex_init(&media->controls_lock,NULL);
     pthread_cond_init(&media->controls_wake,NULL);
+    pthread_cond_init(&media->exposure_wake,NULL);
     media->config = *config;
     media->inverted = config->settings.orientation == CA_MOUNT_INVERTED;
     if (ca_media_impl_open(&media->impl, config) < 0) {
         pthread_cond_destroy(&media->controls_wake);
+        pthread_cond_destroy(&media->exposure_wake);
         pthread_mutex_destroy(&media->controls_lock);
         free(media); return -1;
     }
@@ -177,6 +216,7 @@ void ca_media_close(struct ca_media *media)
     if (ca_media_recording(media)) (void)ca_media_set_recording(media, false);
     ca_media_impl_close(media->impl);
     pthread_cond_destroy(&media->controls_wake);
+    pthread_cond_destroy(&media->exposure_wake);
     pthread_mutex_destroy(&media->controls_lock);
     free(media);
 }

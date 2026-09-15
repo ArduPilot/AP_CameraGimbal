@@ -13,6 +13,10 @@ struct ca_media_impl { int unused; };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static bool release_io, in_io, closed;
+static unsigned exposure_count;
+bool ca_binlog_active(void) { return true; }
+int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exposure *s)
+{ (void)m; (void)lens; s->shutter_us=10000; s->valid=CA_AE_SHUTTER; return 0; }
 
 int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config *config)
 { (void)config; *out = calloc(1, sizeof(**out)); return *out ? 0 : -1; }
@@ -49,7 +53,13 @@ const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
 void ca_log(const char *format, ...) { (void)format; }
 uint64_t ca_binlog_time_us(void) { return 0; }
 void ca_binlog_emit(uint8_t id, const void *data, size_t size)
-{ (void)id; (void)data; (void)size; }
+{
+    if (id==CA_LOG_AE) {
+        assert(size==sizeof(struct ca_exposure));
+        assert(((const struct ca_exposure *)data)->shutter_us==10000);
+        pthread_mutex_lock(&lock); exposure_count++; pthread_cond_broadcast(&wake); pthread_mutex_unlock(&lock);
+    }
+}
 static void *close_media(void *opaque) { ca_media_close(opaque); return NULL; }
 
 int main(void)
@@ -59,6 +69,9 @@ int main(void)
     assert(ca_media_open(&media, &config) == 0);
     pthread_mutex_lock(&lock);
     while (!in_io) pthread_cond_wait(&wake, &lock);
+    pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&lock);
+    while (exposure_count<6) pthread_cond_wait(&wake,&lock);
     pthread_mutex_unlock(&lock);
     /* A permanently blocked sensor read must not block cache consumers. The
      * test runner times out if a cache call accidentally holds an I/O lock. */

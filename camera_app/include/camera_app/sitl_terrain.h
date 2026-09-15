@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "camera_app/config.h"
+#include "camera_app/exposure.h"
 
 struct ca_sitl_image {
     struct ca_config settings;
@@ -25,7 +26,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *terrain, uint64_t pts, uint64_
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
                           uint8_t *data[4], size_t length[4], bool key[4],
-                          uint8_t *photos[3], size_t photo_length[3]);
+                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure);
 void ca_sitl_terrain_interrupt(struct ca_sitl_terrain *terrain);
 void ca_sitl_terrain_close(struct ca_sitl_terrain *terrain);
 

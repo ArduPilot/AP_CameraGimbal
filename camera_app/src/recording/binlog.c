@@ -42,6 +42,7 @@ struct __attribute__((packed)) fmt_record {
 #define FMT(id, type, name, format, labels) {0xa3,0x95,128,id,3+sizeof(struct type),name,format,labels}
 static const struct fmt_record formats[] = {
     {0xa3,0x95,128,128,89,"FMT","BBnNZ","Type,Length,Name,Format,Columns"},
+    FMT(CA_LOG_AE,ca_exposure,"AE","QBBHBBifffffff","TimeUS,Lens,Src,Valid,Mode,State,Result,US,AG,DG,IG,Y,Targ,Err"),
     FMT(CA_LOG_VEND,ca_log_vendor,"VEND","QBHZ","TimeUS,Opcode,Length,Payload"),
     FMT(CA_LOG_PARM,ca_log_parm,"PARM","QNf","TimeUS,Name,Value"),
     FMT(CA_LOG_MSG,ca_log_msg,"MSG","QZ","TimeUS,Message"),

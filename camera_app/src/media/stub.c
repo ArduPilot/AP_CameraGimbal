@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "camera_app/media_impl.h"
+#include "camera_app/binlog.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/recorder.h"
 #include "apcam/lens.h"
@@ -42,7 +43,7 @@ struct ca_media_impl {
     float digital_ratio[2];
     float optical_ratio;
     _Atomic float visible_hfov_deg;
-    enum ca_media_lens lens;
+    _Atomic enum ca_media_lens lens;
     _Atomic bool thermal_main;
     unsigned thermal_captures;
     _Atomic uint8_t thermal_gain;
@@ -65,6 +66,7 @@ struct ca_media_impl {
     pthread_mutex_t record_lock;
     pthread_mutex_t image_lock;
     struct ca_config image_settings;
+    struct ca_exposure exposure;
     pthread_cond_t capture_changed;
     unsigned capture_mask;
     unsigned capture_generation;
@@ -196,11 +198,20 @@ static void *render_terrain_frames(void *opaque)
         image.defocus = media->defocus;
         uint8_t *photos[3] = {0};
         size_t photo_length[3] = {0};
+        struct ca_exposure exposure;
+        unsigned exposure_lens=media->lens;
         int result = ca_sitl_terrain_frame(media->terrain, frame->pts,
                 (uint64_t)due.tv_sec * 1000U + (uint64_t)due.tv_nsec / 1000000U,
                 frame->fov, frame->thermal_main, media->has_thermal,
                 media->rgb_record_source == 3U && atomic_load(&media->sitl_recording),
-                &image, frame->data, frame->length, frame->key, photos, photo_length);
+                &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure);
+        if (result==0) {
+            exposure.time_us=ca_binlog_time_us();
+            exposure.lens=exposure_lens;
+            pthread_mutex_lock(&media->image_lock);
+            media->exposure=exposure;
+            pthread_mutex_unlock(&media->image_lock);
+        }
         if (image.capture_mask) {
             pthread_mutex_lock(&media->image_lock);
             for (unsigned i = 0; i < 3; i++) {
@@ -891,3 +902,21 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
 }
 
 bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
+
+int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+{
+    s->source=1;
+#ifdef CAMERA_APP_SITL
+    pthread_mutex_lock(&media->image_lock);
+    struct ca_exposure cached=media->exposure;
+    pthread_mutex_unlock(&media->image_lock);
+    if (!cached.time_us || !cached.valid || cached.lens!=lens) return -ENODATA;
+    uint64_t now=ca_binlog_time_us();
+    if (now<cached.time_us || now-cached.time_us>1000000U) return -ETIMEDOUT;
+    *s=cached;
+    return s->result;
+#else
+    (void)media; (void)lens;
+    return -ENOTSUP;
+#endif
+}

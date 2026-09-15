@@ -28,7 +28,7 @@ static int receive_exact(int fd, void *data, size_t size, const atomic_bool *sto
 }
 
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
-                         ca_z1_native_frame_fn publish, void *opaque)
+                         ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) return -1;
@@ -58,6 +58,14 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
     while (!atomic_load(stop)) {
         struct ca_z1_native_header header;
         if (receive_exact(sockets[0], &header, sizeof(header), stop)) break;
+        if (header.magic==CA_Z1_NATIVE_AE_MAGIC) {
+            struct ca_exposure sample;
+            if (header.size!=sizeof(sample) || header.stream || header.key ||
+                receive_exact(sockets[0],&sample,sizeof(sample),stop)) break;
+            if (sample.lens || sample.source) break;
+            if (exposure) exposure(opaque,&sample);
+            continue;
+        }
         if (header.magic != CA_Z1_NATIVE_MAGIC || header.stream > 1 ||
             header.key > 1 || !header.size || header.size > CA_Z1_NATIVE_MAX_FRAME) {
             ca_log("Z1 native capture helper sent an invalid frame header");

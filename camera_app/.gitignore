@@ -29,3 +29,5 @@ tests/test.ffprobe.err
 tests/test.fragmented.ffprobe.err
 tests/test_video_metadata
 tests/test_support_mavlink
+tests/test_exposure
+tests/test_exposure_native

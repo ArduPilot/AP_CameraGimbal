@@ -1,6 +1,7 @@
 #ifndef CAMERA_APP_BINLOG_H
 #define CAMERA_APP_BINLOG_H
 #include <stdbool.h>
+#include "camera_app/exposure.h"
 #include <stddef.h>
 #include <stdint.h>
 struct ca_config;
@@ -12,7 +13,7 @@ struct ca_gimbal_attitude;
 enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_GIMB, CA_LOG_PIDP, CA_LOG_PIDY, CA_LOG_MODE, CA_LOG_CMD,
     CA_LOG_CAM, CA_LOG_VID, CA_LOG_GCMD, CA_LOG_STAT, CA_LOG_TIME, CA_LOG_ROI,
-    CA_LOG_PRMA, CA_LOG_VEND };
+    CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE };
 struct __attribute__((packed)) ca_log_vendor { uint64_t time_us; uint8_t opcode; uint16_t length; char payload[64]; };
 struct __attribute__((packed)) ca_log_parm { uint64_t time_us; char name[16]; float value; };
 struct __attribute__((packed)) ca_log_msg { uint64_t time_us; char text[64]; };

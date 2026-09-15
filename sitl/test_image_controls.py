@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check rendered pixels, including PARAM_EXT -> camera app -> live RTSP video."""
 import argparse
+import math
 import os
 from pathlib import Path
 import socket
@@ -105,7 +106,7 @@ def integration(backend):
                         '-t', '0.2', '-r', '20', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
                         str(root / 'source.mp4')], check=True)
         config = root / 'camera.ini'
-        config.write_text('[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
+        config.write_text('[logging]\ndisarmed=true\n[mavlink]\nsystem_id=42\n[stream.main]\nresolution=' +
                           ('1920x1080\n' if backend == 'z1mini' else '1280x720\n'))
         gp, tcp, rtsp = port(), port(), port()
         env = dict(os.environ, CAMERA_APP_CONFIG=str(config), CAMERA_APP_BACKEND=backend,
@@ -114,7 +115,7 @@ def integration(backend):
                    CAMERA_APP_MAVLINK_UDP_PORT='0', CAMERA_APP_READY_PATH=str(root / 'camera.ready'),
                    CAMERA_APP_SITL_VIDEO1=str(root / 'source.mp4'), CAMERA_APP_SITL_VIDEO2=str(root / 'source.mp4'),
                    CAMERA_GIMBAL_SITL_PYTHON=sys.executable, CAMERA_GIMBAL_SITL_FPS='20',
-                   CAMERA_APP_RECORD_ROOT=str(root / 'record'), CAMERA_APP_CAPTURE_ROOT=str(root / 'capture'))
+                   CAMERA_APP_LOG_ROOT=str(root / 'logs'), CAMERA_APP_RECORD_ROOT=str(root / 'record'), CAMERA_APP_CAPTURE_ROOT=str(root / 'capture'))
         env.pop('CAMERA_APP_SITL_TERRAIN', None)
         camera = gimbal = link = viewer = thermal = None
         with (root / 'camera.log').open('w') as log:
@@ -128,6 +129,11 @@ def integration(backend):
                 definition = CameraDefinition(download(link))
                 viewer = Viewer(rtsp, 'video1')
                 baseline = viewer.frame()
+                # Single-lens targets without image sliders otherwise finish
+                # before a useful 5 Hz diagnostic sample window is collected.
+                sample_until = time.monotonic() + 2
+                while time.monotonic() < sample_until:
+                    viewer.frame()
                 if 'IMG_BRIGHTNESS' in definition.parameters:
                     for name, value, check in (
                         ('IMG_BRIGHTNESS', 80, lambda im: im.mean() > baseline.mean() + 60),
@@ -229,11 +235,44 @@ def integration(backend):
                 print((root / 'camera.log').read_text())
                 raise
             finally:
-                if viewer: viewer.close()
-                if thermal: thermal.close()
-                if link: link.close()
+                if viewer:
+                    viewer.close()
+                if thermal:
+                    thermal.close()
+                if link:
+                    link.close()
                 stop(camera)
                 stop(gimbal)
+            from pymavlink import mavutil
+            logs = list((root / 'logs').glob('*.BIN'))
+            assert logs, 'No BIN log created'
+            reader = mavutil.mavlink_connection(str(logs[0]))
+            samples = []
+            while True:
+                message = reader.recv_match(type='AE')
+                if message is None:
+                    break
+                samples.append(message)
+            reader.close()
+            good = [s for s in samples if s.Valid & 0x1f == 0x1f]
+            assert len(good) >= 5, f'Insufficient exposure feedback: {len(good)} valid / {len(samples)} total'
+            assert all(s.Src == 1 for s in samples), 'Simulation must identify its source'
+            for sample in samples:
+                for bit, field in ((1, 'US'), (2, 'AG'), (4, 'DG'), (8, 'IG'),
+                                   (16, 'Y'), (32, 'Targ'), (64, 'Err')):
+                    if not sample.Valid & bit:
+                        assert math.isnan(getattr(sample, field)), (field, sample)
+            assert all(s.Result == 0 and s.US > 0 and 0 <= s.Y <= 255 for s in good)
+            assert all(not s.Valid & (256 | 512) for s in good), 'No invented convergence/limit flags'
+            if backend == 'mt11':
+                assert any(s.Lens == 2 and s.Valid == 0 and s.Result != 0 for s in samples)
+            if backend in ('mt11', 'a8'):
+                assert min(s.US for s in good) < 600, 'Manual shutter not reflected in log'
+                assert max(s.AG for s in good) >= 2, 'Manual ISO not reflected in log'
+            times = sorted({s.TimeUS for s in good})
+            rate = (len(times) - 1) * 1e6 / (times[-1] - times[0])
+            assert 3 <= rate <= 6, rate
+            print(f'PASS {backend} BIN AE decoding, validity, units and {rate:.1f} Hz sampling', flush=True)
 
 
 if __name__ == '__main__':

@@ -1724,3 +1724,11 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
 }
 
 bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
+
+int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+{
+    pthread_mutex_lock(&media->lock);
+    int result=ca_mt11_exposure(lens,s);
+    pthread_mutex_unlock(&media->lock);
+    return result;
+}

@@ -4,6 +4,8 @@
 #include "camera_app/live_video_server.h"
 #include "camera_app/log.h"
 #include "camera_app/media_impl.h"
+#include "camera_app/sigmastar_exposure.h"
+#include <dlfcn.h>
 #include "camera_app/zr10_fov.h"
 #include "camera_app/mp4.h"
 #include "camera_app/rtsp.h"
@@ -585,3 +587,23 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
 }
 
 bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
+
+/* Diagnostics are optional: unavailable SDK symbols must not stop capture. */
+int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+{
+    if (lens!=0) return -ENOTSUP;
+    pthread_mutex_lock(&media->lock);
+    if (!media->isp_bin_loaded) { pthread_mutex_unlock(&media->lock); return -EAGAIN; }
+    typedef int (*query_fn)(uint32_t, void *);
+    query_fn query=(query_fn)dlsym(RTLD_DEFAULT,"MI_ISP_AE_QueryExposureInfo");
+    query_fn mode=(query_fn)dlsym(RTLD_DEFAULT,"MI_ISP_AE_GetExpoMode");
+    /* Room for SDK extensions, while decoding only the documented prefix. */
+    union { struct ca_sstar_exposure_info info; uint64_t space[512]; } q={0};
+    int result=query ? query(0,&q) : -ENOTSUP;
+    if (!result) ca_sstar_exposure_decode(s,&q.info);
+    uint32_t value=0;
+    int mode_result=mode ? mode(0,&value) : -ENOTSUP;
+    if (!mode_result) ca_sstar_exposure_mode(s,value);
+    pthread_mutex_unlock(&media->lock);
+    return result ? result : mode_result;
+}

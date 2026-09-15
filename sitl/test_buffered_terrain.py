@@ -25,7 +25,7 @@ with socket.socket(fileno=a.fd) as s, s.makefile('rb') as requests:
         # Nagle/delayed-ACK stalls. This is a valid H.264 filler-data NAL.
         frame=data+bytes([0,0,0,1,12])+bytes([255])*(i*97%1200)+bytes([128])
         packet=struct.pack('!II',len(frame),1)+frame
-        s.sendall(packet+packet+struct.pack('!IIII',0,0,0,0))
+        s.sendall(packet+packet+struct.pack('!IIII',0,0,0,0)+struct.pack('<QBBHBBi7f',0,0,1,0,255,0,0,*([float('nan')]*7)))
 '''
 
 
