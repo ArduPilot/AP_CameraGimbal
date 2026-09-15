@@ -1,7 +1,8 @@
 # Diagnostic BIN logs
 
 The camera writes ArduPilot DataFlash-compatible, self-describing logs to the
-microSD card at `/mnt/logs/00000001.BIN`, incrementing the number for each session.
+microSD card at `/mnt/logs/00000001.BIN` (`/mnt/mmc/logs/00000001.BIN` on A8),
+incrementing the number for each session.
 `LASTLOG.TXT` records the latest number. Existing BIN files are never overwritten
 or automatically deleted. Download them through the web UI **Files → logs**.
 A log can be downloaded while it is being written; an interrupted file remains
@@ -46,8 +47,9 @@ Angles use degrees, rates degrees/second, positions degrees, distances metres,
 and `DT`/`Age` seconds. Invalid or unavailable measurements are NaN. GIMB rates
 retain the camera's reported axis rates; they must not be assumed to be Euler
 angle derivatives. ATT Src 2 rates are body rates; Src 1 provides Euler yaw
-rate and has no roll/pitch-rate fields. PID I and D are currently zero: the
-tracking controller uses feed-forward plus filtered proportional correction.
+rate and has no roll/pitch-rate fields. The tracking controller uses feed-forward
+plus filtered proportional correction; A8 also uses a bounded integral correction
+near the target to overcome its rate dead zone. PID D is currently zero.
 
 A dedicated writer thread uses a bounded approximately 1 MiB queue, flushes data
 at least every 250 ms when storage is responsive, and requests a file sync every
@@ -61,6 +63,7 @@ Thermal settings are refreshed on a separate background thread. Log sampling
 reads a cache and performs no sensor USB transactions. Pipeline reconfiguration
 and shutdown join the polling thread before closing its media implementation.
 
-SITL uses its runtime `mnt/logs` directory. `CAMERA_APP_LOG_ROOT` can override the
+A8 uses `/mnt/mmc/logs` on the microSD card. SITL uses its runtime `mnt/logs`
+directory. `CAMERA_APP_LOG_ROOT` can override the
 location for isolated tests. Run `make sitl-live-tracking-test` to check DataFlash
 decoding, parameter history, capture events, logging policy, and live settings.

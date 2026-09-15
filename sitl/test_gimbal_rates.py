@@ -15,6 +15,25 @@ from mt11_rate_sweep import Vendor
 
 
 class RateResponse(unittest.TestCase):
+    def test_a8_measured_response(self):
+        gimbal = Gimbal(2, 'a8')
+        for axis in ('pitch', 'yaw'):
+            for command in range(-5, 6):
+                self.assertEqual(gimbal.vendor_rate_response(axis, command), 0)
+        for axis, command, speed in [('pitch', 6, 4.3), ('pitch', -20, -14.6),
+                                     ('pitch', 100, 74), ('yaw', -100, -65),
+                                     ('yaw', 100, 89), ('yaw', -10, -7.6),
+                                     ('yaw', 10, 8.6)]:
+            self.assertAlmostEqual(gimbal.vendor_rate_response(axis, command), speed)
+
+    def test_a8_inverted_sweep_coordinates(self):
+        with patch('mt11_rate_sweep.socket.socket') as factory:
+            sock = factory.return_value
+            reply = siyi_frame(2, 801, 13, struct.pack('<6h', 100, -1700, 0, 20, -30, 0))
+            sock.recv.side_effect = [BlockingIOError(), reply]
+            vendor = Vendor('127.0.0.1', 37260, 'a8', True)
+            self.assertEqual(vendor.attitude(), (10, -10, 0, 2, 3, 0))
+
     def test_sweep_discards_queued_feedback_without_requiring_sequence_echo(self):
         with patch('mt11_rate_sweep.socket.socket') as factory:
             sock = factory.return_value

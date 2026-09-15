@@ -170,6 +170,12 @@ sitl-mavlink-test: sitl
 a8_sitl-mavlink-test: a8_sitl
 	python3 sitl/test_mavlink_parameters.py --backend a8 --build $(A8_SITL_BUILD)
 
+.PHONY: a8_sitl-rate-test
+a8_sitl-rate-test: a8_sitl
+	$(MAKE) -C camera_app tests/test_gimbal_rate
+	./camera_app/tests/test_gimbal_rate
+	$(SITL_VIDEO_PYTHON) sitl/test_rate_tracking.py --output $(A8_SITL_BUILD)/rate-test
+
 .PHONY: sitl-angle-hold-test
 .PHONY: sitl-live-tracking-test
 sitl-live-tracking-test: sitl

@@ -63,8 +63,17 @@
 #define APCAM_GIMBAL_YAW_MIN -135.0f
 #define APCAM_GIMBAL_YAW_MAX 135.0f
 #define APCAM_GIMBAL_RATE_MAX 60.0f
-#define APCAM_VENDOR_YAW_RATE_FULL_SCALE 60.0f
-#define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 60.0f
+#define APCAM_VENDOR_YAW_RATE_FULL_SCALE 90.0f
+#define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 74.0f
+/* Inverted bench, September 2026: command +/-5 is stationary. Signed yaw
+ * response is asymmetric. See docs/a8-rate-calibration.md for measurements. */
+#define APCAM_VENDOR_PITCH_RATE_CURVE {-100, -74, -20, -14.6, -10, -7.3, -6, -4.3, -5, 0, 5, 0, 6, 4.3, 10, 7.3, 20, 14.6, 100, 74}
+#define APCAM_VENDOR_YAW_RATE_CURVE {-100, -65, -80, -52, -60, -39.5, -40, -27, -20, -14.4, -10, -7.6, -6, -4.6, -5, 0, 5, 0, 6, 5, 10, 8.6, 20, 17.8, 40, 35.5, 60, 53.5, 80, 72, 100, 89}
+#define APCAM_SIM_PITCH_RATE_CURVE {-100, -74, -20, -14.6, -10, -7.3, -6, -4.3, -5, 0, 5, 0, 6, 4.3, 10, 7.3, 20, 14.6, 100, 74}
+#define APCAM_SIM_YAW_RATE_CURVE {-100, -65, -80, -52, -60, -39.5, -40, -27, -20, -14.4, -10, -7.6, -6, -4.6, -5, 0, 5, 0, 6, 5, 10, 8.6, 20, 17.8, 40, 35.5, 60, 53.5, 80, 72, 100, 89}
+#define APCAM_SIM_RATE_TIME_CONSTANT 0.12f
+#define APCAM_TRACKING_RATE_I 0.4f
+#define APCAM_LOG_ROOT "/mnt/mmc/logs"
 #define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
 #define APCAM_GIMBAL_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
 #define APCAM_GIMBAL_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, -1, 0, 0, 0, 1}

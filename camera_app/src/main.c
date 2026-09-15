@@ -389,7 +389,7 @@ int main(int argc, char **argv)
                                                  "/mnt/DCIM/record");
     const char *capture_root = environment_string("CAMERA_APP_CAPTURE_ROOT",
                                                   "/mnt/DCIM/capture");
-    const char *log_root = environment_string("CAMERA_APP_LOG_ROOT", "/mnt/logs");
+    const char *log_root = environment_string("CAMERA_APP_LOG_ROOT", APCAM_LOG_ROOT);
 #ifdef CAMERA_APP_SITL
     /* Keep isolated tests/portable installs off the host /mnt filesystem. */
     char sitl_log_root[4096];

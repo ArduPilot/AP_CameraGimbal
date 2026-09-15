@@ -16,6 +16,7 @@
 #include "camera_app/udp_transport.h"
 #include "camera_app/backend.h"
 #include "camera_app/gimbal_angle_target.h"
+#include "camera_app/gimbal_rate.h"
 
 #include "camera_app/log.h"
 #include "camera_app/private_uart.h"
@@ -931,6 +932,16 @@ int ca_backend_set_gimbal_rates(struct ca_backend *backend,
         (uint8_t)rate_byte(rates[2], APCAM_VENDOR_YAW_RATE_FULL_SCALE),
         (uint8_t)rate_byte(rates[1], APCAM_VENDOR_PITCH_RATE_FULL_SCALE),
     };
+#ifdef APCAM_VENDOR_YAW_RATE_CURVE
+    static const float yaw_curve[] = APCAM_VENDOR_YAW_RATE_CURVE;
+    payload[0] = (uint8_t)ca_gimbal_rate_command(rates[2] * (180.0f / PI_F),
+        yaw_curve, sizeof(yaw_curve) / sizeof(yaw_curve[0]));
+#endif
+#ifdef APCAM_VENDOR_PITCH_RATE_CURVE
+    static const float pitch_curve[] = APCAM_VENDOR_PITCH_RATE_CURVE;
+    payload[1] = (uint8_t)ca_gimbal_rate_command(rates[1] * (180.0f / PI_F),
+        pitch_curve, sizeof(pitch_curve) / sizeof(pitch_curve[0]));
+#endif
     int result = send_public_command(backend, 0x07U, payload, sizeof(payload));
     CA_BINLOG(CA_LOG_GCMD, ca_log_gcmd, .mode=2,
         .pitch=pitch_rate_rad_s*57.295779513f, .yaw=yaw_rate_rad_s*57.295779513f,

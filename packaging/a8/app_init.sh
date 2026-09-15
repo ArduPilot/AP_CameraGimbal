@@ -181,6 +181,7 @@ if ! sd_mounted && ! mount -t tmpfs -o size=64k,mode=0555 tmpfs "$SD_MOUNT"; the
     log "warning: no tmpfs guard under $SD_MOUNT; disabling card output paths"
     export CAMERA_APP_RECORD_ROOT=/proc/camera-app/record
     export CAMERA_APP_CAPTURE_ROOT=/proc/camera-app/capture
+    export CAMERA_APP_LOG_ROOT=/proc/camera-app/logs
 fi
 # demo.sh mounts the card briefly right after starting us; let it finish
 sleep 2

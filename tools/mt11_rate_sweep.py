@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bench-test raw MT11 SIYI rate commands, with BIN logging and CSV feedback.
+"""Bench-test raw SIYI rate commands, with BIN logging and CSV feedback.
 
 Use a stationary base. This deliberately bypasses the MAVLink rate conversion.
 ROI tracking is suspended for the sweep and its setting restored on exit.
@@ -22,10 +22,13 @@ from pymavlink import mavutil
 # The protocol helpers have no third-party dependencies or hardware side effects.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'sitl'))
 from gimbal_sim import crc16, parse_siyi
+from target_properties import TARGETS, transform
 
 
 class Vendor:
-    def __init__(self, host, port):
+    def __init__(self, host, port, backend='mt11', inverted=False):
+        self.properties = TARGETS[backend]
+        self.inverted = inverted
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.connect((host, port))
         self.socket.settimeout(.2)
@@ -60,13 +63,18 @@ class Vendor:
                 continue
             if opcode == 13 and len(payload) >= 12:
                 yaw, pitch, roll, gy, gp, gr = struct.unpack_from('<6h', payload)
-                # MT11 public feedback yaw is left-positive; use right-positive.
-                return -yaw * .1, pitch * .1, roll * .1, -gy * .1, gp * .1, gr * .1
+                pose = transform(self.properties, 'feedback', self.inverted,
+                                 (roll * .1, pitch * .1, yaw * .1))
+                rates = transform(self.properties, 'feedback', self.inverted,
+                                  (gr * .1, gp * .1, gy * .1), rates=True)
+                return (*reversed(pose), *reversed(rates))
         raise TimeoutError('no gimbal feedback; sweep stopped')
 
     def center(self, pitch=-45):
         self.stop()
-        self.send(14, struct.pack('<hh', 0, round(pitch * 10)))
+        _, wire_pitch, wire_yaw = transform(self.properties, 'angle_command',
+                                             self.inverted, (0, pitch, 0))
+        self.send(14, struct.pack('<hh', round(wire_yaw * 10), round(wire_pitch * 10)))
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             pose = self.attitude()
@@ -100,6 +108,10 @@ def parameter(link, system, name, value=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True)
+    parser.add_argument('--backend', choices=('mt11', 'a8', 'zr10'), default='mt11')
+    parser.add_argument('--inverted', action='store_true')
+    parser.add_argument('--mavlink-rates', action='store_true',
+                        help='interpret commands as deg/s and test MAVLink-to-vendor conversion')
     parser.add_argument('--vendor-port', type=int, default=37260)
     parser.add_argument('--mavlink-port', type=int, default=16001)
     parser.add_argument('--system', type=int, default=1)
@@ -125,7 +137,7 @@ def main():
         parser.error('pitch must be -70..0 degrees and stop-hold 0..5 seconds')
     if args.reverse:
         commands.reverse()
-    vendor = Vendor(args.host, args.vendor_port)
+    vendor = Vendor(args.host, args.vendor_port, args.backend, args.inverted)
     link = mavutil.mavlink_connection(f'tcp:{args.host}:{args.mavlink_port}',
                                       source_system=255, source_component=190)
     original = {}
@@ -148,9 +160,17 @@ def main():
                     payload = struct.pack('<bb', command if args.axis == 'yaw' else 0,
                                           command if args.axis == 'pitch' else 0)
                     start = time.monotonic()
-                    print(f'{args.axis}: raw command {command}', flush=True)
+                    kind = 'MAVLink deg/s' if args.mavlink_rates else 'raw command'
+                    print(f'{args.axis}: {kind} {command}', flush=True)
                     while time.monotonic() - start < args.hold:
-                        vendor.send(7, payload)
+                        if args.mavlink_rates:
+                            link.mav.gimbal_device_set_attitude_send(args.system, 154,
+                                mavutil.mavlink.GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME,
+                                [math.nan] * 4, math.nan,
+                                math.radians(command if args.axis == 'pitch' else 0),
+                                math.radians(command if args.axis == 'yaw' else 0))
+                        else:
+                            vendor.send(7, payload)
                         pose = vendor.attitude()
                         now = time.monotonic()
                         writer.writerow((now, now - start, args.axis, command, *pose, 'run'))

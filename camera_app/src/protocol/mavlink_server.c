@@ -142,6 +142,7 @@ struct ca_mavlink_server {
     bool target_location_active;
     bool tracking_rate_active;
     float tracking_error[2];
+    float tracking_integral[2];
     float tracking_rate[2];
     uint64_t config_check_ms;
     struct stat config_stat;
@@ -964,6 +965,7 @@ static void stop_tracking_rate(struct ca_mavlink_server *server)
     if (server->tracking_rate_active) ca_binlog_message("Tracking rate stopped");
     server->tracking_rate_active = false;
     memset(server->tracking_error, 0, sizeof(server->tracking_error));
+    memset(server->tracking_integral, 0, sizeof(server->tracking_integral));
     memset(server->tracking_rate, 0, sizeof(server->tracking_rate));
 }
 
@@ -1038,7 +1040,17 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
         server->tracking_error[i] += alpha * (error - server->tracking_error[i]);
         float correction = copysignf(fmaxf(0, fabsf(server->tracking_error[i]) - .2f * radians),
                                      server->tracking_error[i]);
-        float requested = bounded(feed_forward[i] + 1.2f * correction, APCAM_GIMBAL_RATE_MAX * radians);
+        /* Integrate only near the target, where quantisation and the motor
+         * dead zone cause static error. Reset during acquisition or when a
+         * target is outside the joint range; never wind up against a stop. */
+        if (fabsf(error) < 5 * radians && desired[i] > minimum[i] && desired[i] < maximum[i]) {
+            server->tracking_integral[i] = bounded(server->tracking_integral[i] +
+                APCAM_TRACKING_RATE_I * correction * dt, 6 * radians);
+        } else {
+            server->tracking_integral[i] = 0;
+        }
+        float requested = bounded(feed_forward[i] + 1.2f * correction +
+                                  server->tracking_integral[i], APCAM_GIMBAL_RATE_MAX * radians);
         output[i] = server->tracking_rate[i] + bounded(requested - server->tracking_rate[i],
                                                        APCAM_GIMBAL_RATE_MAX * radians * dt);
         if (!circular && ((feedback[i] <= minimum[i] && output[i] < 0) ||
@@ -1047,7 +1059,8 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
             .target=desired[i]/radians, .actual=feedback[i]/radians,
             .rate=(i ? attitude.yaw_rate_rad_s : attitude.pitch_rate_rad_s)/radians,
             .ff=feed_forward[i]/radians, .error=error/radians,
-            .p=1.2f*correction/radians, .i=0, .d=0, .output=output[i]/radians,
+            .p=1.2f*correction/radians, .i=server->tracking_integral[i]/radians,
+            .d=0, .output=output[i]/radians,
             .dt=dt, .age=(now-attitude.timestamp_ms)*.001f);
     }
     if (ca_backend_set_gimbal_rates(server->backend, output[0], output[1]) == 0) {
