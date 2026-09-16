@@ -91,4 +91,6 @@ jobs:
       - name: Test all six camera and gimbal component pairs
         run: make -C camera_app mavlink-components-test
       - name: Test exposure BIN logs and live controls on all four simulated cameras
-        run: make sitl-image-controls-test
+        run: |
+          python3 tests/test_overlay.py
+          make sitl-image-controls-test
