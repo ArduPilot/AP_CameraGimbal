@@ -25,7 +25,7 @@ CHECKS = r"""
     assert(active().id === 'tab-system', 'default System tab');
     assert(panels.filter(panel => !panel.hidden).length === 1, 'one visible panel');
     const categories = {timezone: 'system', orientation: 'system', mavlink_system_id: 'system',
-      mavlink_tcp_port: 'network', proxy_network_address: 'network',
+      mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
       brightness: 'video', autorecord: 'video', main_resolution: 'video',
       proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy'};
     for (const [name, category] of Object.entries(categories)) {
@@ -74,16 +74,29 @@ CHECKS = r"""
     }
     submit();
     assert(blocked === false, 'valid configuration rejected');
-    rejected({proxy_network_address: '192.168.2.97'}, 'proxy_network_address');
-    assert(document.getElementById('proxy_network_address-error').textContent.includes('/24'), 'missing prefix guidance');
-    field('proxy_network_address').value = '192.168.2.97/24';
-    field('proxy_network_address').dispatchEvent(new Event('input', {bubbles: true}));
-    assert(field('proxy_network_address').getAttribute('aria-invalid') === 'false', 'correction still highlighted');
+    rejected({network_secondary_address: '192.168.2.97'}, 'network_secondary_address');
+    assert(document.getElementById('network_secondary_address-error').textContent.includes('/24'), 'missing prefix guidance');
+    field('network_secondary_address').value = '192.168.2.97/24';
+    field('network_secondary_address').dispatchEvent(new Event('input', {bubbles: true}));
+    assert(field('network_secondary_address').getAttribute('aria-invalid') === 'false', 'correction still highlighted');
     submit();
     assert(blocked === false, 'corrected prefix rejected');
-    rejected({proxy_network_address: '192.168.2.999/24'}, 'proxy_network_address');
-    rejected({proxy_network_address: '192.168.2.97/33'}, 'proxy_network_address');
-    rejected({proxy_network_gateway: '192.168.2.999'}, 'proxy_network_gateway');
+    rejected({network_secondary_address: '192.168.2.999/24'}, 'network_secondary_address');
+    rejected({network_secondary_address: '192.168.2.97/33'}, 'network_secondary_address');
+    rejected({network_gateway: '192.168.2.999'}, 'network_gateway');
+    rejected({network_primary_address: '192.0.2.25'}, 'network_primary_address');
+    rejected({network_primary_address: '192.0.2.0/24'}, 'network_primary_address');
+    rejected({network_primary_address: '192.0.2.255/24'}, 'network_primary_address');
+    rejected({network_primary_address: '127.0.0.1/8'}, 'network_primary_address');
+    rejected({network_primary_address: original.network_secondary_address}, 'network_secondary_address');
+    rejected({network_primary_address: '198.51.100.27/24', network_gateway: '203.0.113.1'}, 'network_gateway');
+    reset();
+    field('network_primary_address').value = '198.51.100.27/24';
+    field('proxy_enabled').value = 'false';
+    submit();
+    assert(blocked === false, 'network configuration requires SupportProxy');
+    assert(!document.getElementById('network-reconnect').hidden, 'reconnect instructions missing');
+    assert(document.getElementById('network-link').href.includes('198.51.100.27'), 'reconnect link has wrong address');
     rejected({proxy_host: ''}, 'proxy_host');
     rejected({proxy_host: 'rtsp://localhost'}, 'proxy_host');
     rejected({proxy_signing_passphrase: ''}, 'proxy_signing_passphrase');
@@ -97,10 +110,21 @@ CHECKS = r"""
     field('proxy_enabled').value = 'false';
     field('proxy_host').value = '';
     field('proxy_signing_passphrase').value = '';
-    field('proxy_network_address').value = '';
-    field('proxy_network_gateway').value = '';
+    field('network_secondary_address').value = '';
+    field('network_gateway').value = '';
     submit();
     assert(blocked === false, 'disabled proxy requires optional fields');
+    field('network_primary_address').value = '198.51.100.27/24';
+    let restartRequest;
+    window.fetch = (url, options) => {
+      restartRequest = {url, options};
+      return new Promise(() => {}); // Keep the request pending, without any network access.
+    };
+    form.requestSubmit(form.querySelector('button[value=save_restart]'));
+    assert(blocked === true && restartRequest, 'restart navigated away from reconnect instructions');
+    assert(restartRequest.options.body.get('action') === 'save_restart', 'restart action missing');
+    assert(restartRequest.options.body.get('network_primary_address') === '198.51.100.27/24', 'new address missing');
+    assert(!document.getElementById('network-reconnect').hidden, 'reconnect link lost during request');
     result.textContent = 'PASS parameter tabs, keyboard navigation, cross-tab validation and input preservation';
   } catch (error) {
     result.textContent = 'FAIL ' + error.stack;

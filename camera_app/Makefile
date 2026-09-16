@@ -90,7 +90,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/protocol/mavlink.c \
 	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
 	src/protocol/support_mavlink.c \
-	src/protocol/support_network.c \
+	src/protocol/network.c \
 	src/streaming/support_video.c \
 	src/protocol/external_uart.c \
 	src/protocol/targeting.c \
@@ -263,8 +263,8 @@ tests/test_mavlink_time: tests/test_mavlink_time.c src/protocol/mavlink_server.c
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/mavlink.c -lm
 
-$(CONFIG_TEST_TARGET): tests/test_config.c src/config.c
-	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
+$(CONFIG_TEST_TARGET): tests/test_config.c src/config.c include/camera_app/config.h $(APCAM_HEADERS)
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 tests/test_gimbal_rate: tests/test_gimbal_rate.c include/camera_app/gimbal_rate.h $(APCAM_HEADERS)
 	$(HOST_CC) -I../include -Iinclude -DAPCAM_TARGET=APCAM_TARGET_A8 $(CFLAGS) -o $@ $< -lm

@@ -710,13 +710,10 @@ configured stream names and proxy HTTP viewer URLs (`/v1.ts` and `/v2.ts` on
 their respective ports). Viewer access remains subject to the proxy's access
 rules. Requests received locally continue to advertise local RTSP URLs.
 
-The optional network settings add an IPv4 address in CIDR notation to the
-chosen interface and install a default route through the supplied gateway.
-They are applied at camera-app startup and preserve existing interface
-addresses. Leave address and gateway blank to use the existing network setup.
-Clearing these fields or disabling SupportProxy does not remove previously
-applied addresses or routes until reboot or manual network reconfiguration.
-SITL deliberately skips these changes to the host's network.
+Camera networking is configured independently in **Parameters → Network**,
+using the `[network]` section below. These settings work even with SupportProxy
+disabled. Enabled legacy `[support_proxy]` network settings are imported if the
+corresponding new keys are absent; saving the form writes the new keys.
 
 For example, with ports and credentials allocated on your proxy:
 
@@ -733,9 +730,11 @@ video2_port = 40002
 video1_name = "Front Camera"
 video2_name = "Thermal Camera"
 publish_password = "replace-with-your-publish-password"
-network_interface = eth0
-network_address = 192.168.20.25/24
-network_gateway = 192.168.20.1
+[network]
+interface = eth0
+primary_address = 192.168.144.25/24
+secondary_address = 192.168.20.25/24
+gateway = 192.168.20.1
 ```
 
 The numeric settings are also exposed by the MAVLink parameter service:
@@ -760,6 +759,40 @@ A lost connection reconnects separately. TCP send buffers use the kernel's
 normal autotuning and `tcp_wmem` memory limits. MAVLink has separate queues of
 128 messages in each direction.
 The camera needs no external streaming daemon or FFmpeg installation.
+
+## Camera IP configuration
+
+Use **Parameters → Network** to set the interface (normally `eth0`), primary
+IPv4 address/prefix, optional secondary address/prefix and default gateway.
+Include the subnet prefix on addresses, for example `192.168.144.27/24`.
+The gateway is an address without a prefix and must be reachable through one
+of the configured subnets when a primary address is specified.
+
+**Save** persists network settings without changing the running network.
+**Save and restart camera app** applies them. A reconnect link appears for the
+new primary address; changing subnets also requires a reachable address or
+route on your computer. You may need to log in again at the new address.
+
+An explicit primary replaces the selected interface's global IPv4 addresses
+with the configured primary and optional secondary. It also replaces that
+interface's default route with the configured gateway, or removes it if the
+gateway is blank. IPv6 and other interfaces are left alone. A blank primary
+leaves existing addresses in place; by default all optional fields are blank,
+so cameras retain their boot-time network configuration.
+
+Clearing a secondary address or gateway removes the setting previously applied
+by this app on its next restart. Clearing the primary alone leaves its current
+address in place until a camera reboot restores the boot-time address. If an
+operation fails, the app attempts to restore the previous IPv4 addresses and
+routes, and reports the failure in the web UI and app log. Existing static
+routes are preserved when reachable; changes that would strand those routes
+are rejected. Interfaces with shared multipath routes are rejected before
+changing anything. Correct the settings and restart the app to retry. This cannot detect a syntactically valid but unreachable address;
+keep the correct subnet settings for your computer when changing camera IPs.
+
+SITL saves these fields but never modifies the host network. Address and route
+handling is tested in an isolated Linux network namespace; see the
+[SITL network test](../sitl/README.md#supportproxy-integration-tests) instructions.
 
 ## Install
 

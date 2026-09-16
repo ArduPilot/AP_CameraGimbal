@@ -109,12 +109,21 @@ struct ca_support_config {
     char video1_name[64];
     char video2_name[64];
     char publish_password[128];
+    /* Legacy INI keys; new settings belong to ca_network_config below. */
     char network_interface[16];
     char network_address[32];
     char network_gateway[16];
 };
 
+struct ca_network_config {
+    char interface[16];
+    char primary_address[32];
+    char secondary_address[32];
+    char gateway[16];
+};
+
 struct ca_config {
+    struct ca_network_config network;
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;

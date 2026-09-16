@@ -31,9 +31,11 @@ Features:
 - a typed parameter page with codec/resolution menus, decoded imaging-path
   masks, ISP controls, network checks, thermal controls and calibration guards;
 - an optional SupportProxy section for MAVLink and video forwarding, signing
-  and publishing credentials, stream names and ports, and an additional IPv4
-  address and default gateway; see
+  and publishing credentials, stream names and ports; see
   [SupportProxy configuration](../camera_app/README.md#supportproxy);
+- independent primary/secondary IPv4 addresses and a default gateway under
+  Parameters → Network, applied on app restart with validation and reconnect
+  guidance; see [Camera IP configuration](../camera_app/README.md#camera-ip-configuration);
 - raw editing of the AP CameraGimbal configuration, with syntax validation,
   atomic saves and a backup;
 - restart of AP CameraGimbal while the web service remains available for recovery;

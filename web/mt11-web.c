@@ -6,6 +6,7 @@
 #include "build/version.h"
 #include "build/icons.h"
 #include "../include/apcam/config_status.h"
+#include "../include/apcam/network.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -555,12 +556,18 @@ enum string_id {
     S_H_PROXY_VIDEO2_NAME,
     S_P_PROXY_PUBLISH_PASSWORD,
     S_H_PROXY_PUBLISH_PASSWORD,
-    S_P_PROXY_NETWORK_INTERFACE,
-    S_H_PROXY_NETWORK_INTERFACE,
-    S_P_PROXY_NETWORK_ADDRESS,
-    S_H_PROXY_NETWORK_ADDRESS,
-    S_P_PROXY_NETWORK_GATEWAY,
-    S_H_PROXY_NETWORK_GATEWAY,
+    S_P_NETWORK_PRIMARY,
+    S_H_NETWORK_PRIMARY,
+    S_E_NETWORK,
+    S_NETWORK_RECONNECT,
+    S_NETWORK_CONNECTION_LOST,
+    S_NETWORK_SITL,
+    S_P_NETWORK_INTERFACE,
+    S_H_NETWORK_INTERFACE,
+    S_P_NETWORK_ADDRESS,
+    S_H_NETWORK_ADDRESS,
+    S_P_NETWORK_GATEWAY,
+    S_H_NETWORK_GATEWAY,
     S_STATUS_FIRMWARE_VERSION,
     S_STATUS_CAMERA_APP,
     S_STATUS_PID_RSS,
@@ -1078,12 +1085,18 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_H_PROXY_VIDEO2_NAME] = {"Stream name used in the RTSP publishing URL.", "RTSP 发布 URL 中使用的流名称。", "RTSP 送信 URL で使用するストリーム名。"},
     [S_P_PROXY_PUBLISH_PASSWORD] = {"Video publish password", "视频发布密码", "映像送信パスワード"},
     [S_H_PROXY_PUBLISH_PASSWORD] = {"Optional SupportProxy video publish password. Without it, allow publishing via the MAVLink session on the proxy.", "可选的 SupportProxy 视频发布密码。留空时需在代理上允许通过 MAVLink 会话发布。", "任意の SupportProxy 映像送信パスワード。空欄の場合、プロキシで MAVLink セッション経由の送信を許可してください。"},
-    [S_P_PROXY_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"},
-    [S_H_PROXY_NETWORK_INTERFACE] = {"Interface used for the optional additional address and default gateway.", "用于可选附加地址和默认网关的接口。", "任意の追加アドレスとデフォルトゲートウェイを設定するインターフェース。"},
-    [S_P_PROXY_NETWORK_ADDRESS] = {"Additional IPv4 address/prefix", "附加 IPv4 地址/前缀", "追加 IPv4 アドレス/プレフィックス"},
-    [S_H_PROXY_NETWORK_ADDRESS] = {"Optional address/prefix, for example 192.168.20.25/24. Adds an address without removing the existing camera address.", "可选地址/前缀，例如 192.168.20.25/24。保留相机现有地址。", "任意のアドレス/プレフィックス（例：192.168.20.25/24）。既存のカメラアドレスを維持して追加します。"},
-    [S_P_PROXY_NETWORK_GATEWAY] = {"Default gateway", "默认网关", "デフォルトゲートウェイ"},
-    [S_H_PROXY_NETWORK_GATEWAY] = {"Optional IPv4 gateway. Replaces the default route on the selected interface when SupportProxy is enabled.", "可选 IPv4 网关。启用 SupportProxy 后会替换所选接口的默认路由。", "任意の IPv4 ゲートウェイ。SupportProxy 有効時に選択したインターフェースのデフォルトルートを置き換えます。"},
+    [S_P_NETWORK_PRIMARY] = {"Primary IPv4 address/prefix", "主 IPv4 地址/前缀", "プライマリ IPv4 アドレス/プレフィックス"},
+    [S_H_NETWORK_PRIMARY] = {"For example 192.168.144.27/24. Replaces existing IPv4 addresses on this interface with the primary and optional secondary address. Blank leaves existing addresses in place.", "例如 192.168.144.27/24。用主地址及可选的次地址替换此接口的现有 IPv4 地址。留空保留现有地址。", "例：192.168.144.27/24。このインターフェースの IPv4 アドレスをプライマリと任意のセカンダリアドレスに置き換えます。空欄では既存のアドレスを維持します。"},
+    [S_E_NETWORK] = {"Use distinct host addresses and a gateway reachable through one of the configured subnets.", "请使用不同的主机地址及可通过已配置子网访问的网关。", "異なるホストアドレスと、設定したサブネットから到達可能なゲートウェイを指定してください。"},
+    [S_NETWORK_CONNECTION_LOST] = {"Connection lost during restart. Use the link below to reconnect, or reload this page to check whether the settings were saved.", "重启时连接断开。请使用下方链接重新连接，或重新加载此页检查设置是否已保存。", "再起動中に接続が切れました。下のリンクで再接続するか、このページを再読み込みして設定が保存されたか確認してください。"},
+    [S_NETWORK_SITL] = {"SITL uses the host network; address and gateway settings are saved but do not change the host network.", "SITL 使用主机网络；地址和网关设置会保存，但不会更改主机网络。", "SITL はホストのネットワークを使用します。アドレスとゲートウェイの設定は保存されますが、ホストのネットワークは変更しません。"},
+    [S_NETWORK_RECONNECT] = {"Network changes apply on camera-app restart. If the primary address changes, reconnect here after restarting:", "网络更改在相机应用重启后生效。主地址更改后，请重新连接：", "ネットワーク設定はカメラアプリの再起動後に反映されます。プライマリアドレスを変更した場合、再起動後はこちらに接続してください："},
+    [S_P_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"},
+    [S_H_NETWORK_INTERFACE] = {"Interface used for camera addresses and the default gateway, independent of SupportProxy.", "用于相机地址和默认网关的接口，独立于 SupportProxy。", "カメラのアドレスとデフォルトゲートウェイのインターフェース。SupportProxy とは独立しています。"},
+    [S_P_NETWORK_ADDRESS] = {"Secondary IPv4 address/prefix", "附加 IPv4 地址/前缀", "追加 IPv4 アドレス/プレフィックス"},
+    [S_H_NETWORK_ADDRESS] = {"Optional second address, for example 192.168.20.25/24. Leave blank to remove the secondary address previously set here.", "可选次地址，例如 192.168.20.25/24。留空删除先前在此设置的次地址。", "任意のセカンダリアドレス（例：192.168.20.25/24）。空欄にすると以前ここで設定したアドレスを削除します。"},
+    [S_P_NETWORK_GATEWAY] = {"Default gateway", "默认网关", "デフォルトゲートウェイ"},
+    [S_H_NETWORK_GATEWAY] = {"Optional IPv4 gateway, independent of SupportProxy. Leave blank to remove the gateway previously set here.", "可选 IPv4 网关，独立于 SupportProxy。留空删除先前在此设置的网关。", "任意の IPv4 ゲートウェイ。SupportProxy とは独立しています。空欄にすると以前ここで設定したゲートウェイを削除します。"},
     [S_STATUS_FIRMWARE_VERSION] = {"Firmware version", "固件版本", "ファームウェアバージョン"},
     [S_STATUS_CAMERA_APP] = {"Camera app", "相机应用", "カメラアプリ"},
     [S_STATUS_PID_RSS] = {" (PID %ld, RSS %ld KiB)", "（PID %ld，RSS %ld KiB）", "（PID %ld、RSS %ld KiB）"},
@@ -1727,11 +1740,13 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 63, 1, NULL, 0},
     {"proxy_publish_password", "support_proxy", "publish_password", S_P_PROXY_PUBLISH_PASSWORD, S_H_PROXY_PUBLISH_PASSWORD,
      PARAM_PASSWORD, 0, 127, 1, NULL, 0},
-    {"proxy_network_interface", "support_proxy", "network_interface", S_P_PROXY_NETWORK_INTERFACE, S_H_PROXY_NETWORK_INTERFACE,
+    {"network_interface", "network", "interface", S_P_NETWORK_INTERFACE, S_H_NETWORK_INTERFACE,
      PARAM_TEXT, 1, 15, 1, NULL, 0},
-    {"proxy_network_address", "support_proxy", "network_address", S_P_PROXY_NETWORK_ADDRESS, S_H_PROXY_NETWORK_ADDRESS,
+    {"network_primary_address", "network", "primary_address", S_P_NETWORK_PRIMARY, S_H_NETWORK_PRIMARY,
      PARAM_TEXT, 0, 31, 1, NULL, 0},
-    {"proxy_network_gateway", "support_proxy", "network_gateway", S_P_PROXY_NETWORK_GATEWAY, S_H_PROXY_NETWORK_GATEWAY,
+    {"network_secondary_address", "network", "secondary_address", S_P_NETWORK_ADDRESS, S_H_NETWORK_ADDRESS,
+     PARAM_TEXT, 0, 31, 1, NULL, 0},
+    {"network_gateway", "network", "gateway", S_P_NETWORK_GATEWAY, S_H_NETWORK_GATEWAY,
      PARAM_TEXT, 0, 15, 1, NULL, 0},
 };
 
@@ -1746,7 +1761,7 @@ static const struct {
 
 static enum parameter_tab parameter_tab(const struct parameter *p)
 {
-    if (!strcmp(p->section, "network") || !strncmp(p->form_name, "proxy_network_", 14) ||
+    if (!strcmp(p->section, "network") ||
         !strcmp(p->form_name, "mavlink_tcp_port") || !strcmp(p->form_name, "mavlink_udp_port"))
         return TAB_NETWORK;
     if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
@@ -1765,7 +1780,7 @@ static const char *replacement_defaults[] = {
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264", "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
-    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "eth0", "", "",
+    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "eth0", "", "", "",
 };
 
 
@@ -3335,27 +3350,21 @@ static bool valid_text_parameter(const struct parameter *parameter,
 
     if (length < (size_t)parameter->minimum ||
         length > (size_t)parameter->maximum) return false;
+    if (!strcmp(parameter->section, "network")) {
+        struct in_addr address;
+        unsigned prefix;
+        if (!strcmp(parameter->key, "interface"))
+            return length && strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
+        if (!length) return true;
+        if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
+        return apcam_ipv4_prefix(text, &address, &prefix);
+    }
     if (strcmp(parameter->section, "support_proxy") == 0) {
         for (size_t i = 0; i < length; i++) {
             unsigned char c = (unsigned char)text[i];
             if (c < 32 || c > 126 || c == '"') return false;
-            if ((strcmp(parameter->key, "host") == 0 || strcmp(parameter->key, "network_interface") == 0) &&
+            if (strcmp(parameter->key, "host") == 0 &&
                 !isalnum(c) && c != '.' && c != '-' && c != '_') return false;
-        }
-        if (length && strcmp(parameter->key, "network_gateway") == 0) {
-            struct in_addr address;
-            return inet_pton(AF_INET, text, &address) == 1;
-        }
-        if (length && strcmp(parameter->key, "network_address") == 0) {
-            char copy[32];
-            if (length >= sizeof(copy)) return false;
-            memcpy(copy, text, length + 1);
-            char *slash = strchr(copy, '/');
-            if (!slash) return false;
-            *slash++ = '\0';
-            long prefix;
-            struct in_addr address;
-            return parse_long_strict(slash, 1, 32, &prefix) && inet_pton(AF_INET, copy, &address) == 1;
         }
         return true;
     }
@@ -3447,7 +3456,7 @@ static bool collect_described_parameters(const struct request *request,
         }
         if (!valid) {
             snprintf(error, error_size, T(S_E_INVALID_VALUE), T(parameter->label));
-            if (strcmp(parameter->form_name, "proxy_network_address") == 0)
+            if (!strcmp(parameter->form_name, "network_primary_address") || !strcmp(parameter->form_name, "network_secondary_address"))
                 snprintf(error, error_size, "%s: %s", T(parameter->label), T(parameter->help));
             log_message("parameter validation failed: %s", error);
             free(value);
@@ -3475,6 +3484,17 @@ static bool collect_replacement_parameter_updates(
             request, replacement_parameters,
             sizeof(replacement_parameters) / sizeof(replacement_parameters[0]),
             updates, capacity, &count, error, error_size)) return false;
+    const char *primary = "", *secondary = "", *gateway = "";
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(updates[i].section, "network")) continue;
+        if (!strcmp(updates[i].key, "primary_address")) primary = updates[i].value;
+        if (!strcmp(updates[i].key, "secondary_address")) secondary = updates[i].value;
+        if (!strcmp(updates[i].key, "gateway")) gateway = updates[i].value;
+    }
+    if (!apcam_network_valid(primary, secondary, gateway)) {
+        snprintf(error, error_size, "%s", T(S_E_NETWORK));
+        return false;
+    }
     const char *enabled = "false", *host = "", *signing = "false", *passphrase = "";
     const char *video1_port = "0", *video2_port = "0", *video1_name = "", *video2_name = "";
     for (size_t i = 0; i < count; i++) {
@@ -4914,6 +4934,8 @@ static pid_t start_camera(enum camera_kind kind)
 }
 #endif
 
+static bool restarted_config_ok(char *error, size_t error_size);
+
 #if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))
 static bool stop_camera(char *error, size_t error_size)
 {
@@ -4958,6 +4980,7 @@ static bool restart_camera(char *error, size_t error_size)
     int lock = lock_restart(error, error_size);
     if (lock < 0) return false;
     bool ok = restart_camera_direct(error, error_size);
+    if (ok) ok = restarted_config_ok(error, error_size);
     close(lock);
     return ok;
 }
@@ -5137,6 +5160,7 @@ static bool restart_camera(char *error, size_t error_size)
     /* Serialize concurrent restart requests. */
     kind = CAMERA_REPLACEMENT;
     ok = restart_camera_locked(kind, error, error_size);
+    if (ok) ok = restarted_config_ok(error, error_size);
     close(lock);
     return ok;
 }
@@ -5605,7 +5629,7 @@ static bool live_config_notice(const char *config, size_t length, char *message,
     return found;
 }
 
-static bool wait_live_config(const char *config, size_t length, char *message, size_t capacity)
+static bool wait_live_config(const char *config, size_t length, char *message, size_t capacity, bool require_ack)
 {
     bool is_error = false;
     for (unsigned attempt = 0; attempt < 30; attempt++) {
@@ -5613,8 +5637,25 @@ static bool wait_live_config(const char *config, size_t length, char *message, s
         if (access(CAMERA_READY_PATH, R_OK) != 0) break;
         usleep(100000);
     }
-    snprintf(message, capacity, "Parameters saved. Live settings await camera app acknowledgement; start the app if it is stopped.");
-    return false;
+    snprintf(message, capacity, "%s", require_ack ?
+        "Camera restarted, but configuration was not acknowledged. Check the camera app log." :
+        "Parameters saved. Live settings await camera app acknowledgement; start the app if it is stopped.");
+    return require_ack;
+}
+
+/* Read acknowledgement from the new PID, not the previous app instance.
+ * A running app is deliberately retained on failure so the user can recover. */
+static bool restarted_config_ok(char *error, size_t error_size)
+{
+    size_t length;
+    char *config = read_file(config_path(CAMERA_REPLACEMENT), MAX_CONFIG, &length);
+    if (!config) {
+        snprintf(error, error_size, "Camera restarted, but configuration status could not be checked: %s", strerror(errno));
+        return false;
+    }
+    bool failed = wait_live_config(config, length, error, error_size, true);
+    free(config);
+    return !failed;
 }
 
 static void append_notice(struct string_buffer *page, const char *message, bool is_error)
@@ -5637,6 +5678,17 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
     char value[160] = "";
     bool present = ini_get_value(config, parameter->section, parameter->key,
                                  value, sizeof(value));
+
+    if (!present && !strcmp(parameter->section, "network")) {
+        char enabled[16] = "";
+        ini_get_value(config, "support_proxy", "enabled", enabled, sizeof(enabled));
+        if (!strcmp(enabled, "true") || !strcmp(enabled, "1") || !strcmp(enabled, "yes")) {
+            const char *legacy = !strcmp(parameter->key, "interface") ? "network_interface" :
+                !strcmp(parameter->key, "secondary_address") ? "network_address" :
+                !strcmp(parameter->key, "gateway") ? "network_gateway" : NULL;
+            if (legacy) present = ini_get_value(config, "support_proxy", legacy, value, sizeof(value));
+        }
+    }
 
     if (!present) {
         size_t replacement_count = sizeof(replacement_parameters) /
@@ -5700,7 +5752,7 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
             sb_appendf(page, "\" type=%s autocomplete=off minlength=\"%.0f\" maxlength=\"%.0f\"",
                        parameter->kind == PARAM_PASSWORD ? "password" : "text",
                        parameter->minimum, parameter->maximum);
-            if (strcmp(parameter->form_name, "proxy_network_address") == 0) {
+            if (!strcmp(parameter->form_name, "network_primary_address") || !strcmp(parameter->form_name, "network_secondary_address")) {
                 sb_append(page, " placeholder=\"192.168.2.97/24\""
                                 " pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
                 sb_append_html(page, T(parameter->help));
@@ -5718,6 +5770,7 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
     sb_append(page, "<div class=help>");
     sb_append_html(page, T(parameter->help));
     if (strcmp(parameter->section, "support_proxy") == 0 ||
+        strcmp(parameter->section, "network") == 0 ||
         strcmp(parameter->form_name, "orientation") == 0 ||
         strcmp(parameter->form_name, "uart_protocol") == 0 ||
         strcmp(parameter->form_name, "mavlink_system_id") == 0 ||
@@ -6330,7 +6383,16 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                 if (parameter_shown(parameter) && parameter_tab(parameter) == tab)
                     append_parameter_field(&page, config, parameter, submitted);
             }
-            sb_append(&page, "</div></section>");
+            sb_append(&page, "</div>");
+            if (tab == TAB_NETWORK) {
+#ifdef MT11_WEB_SITL
+                sb_appendf(&page, "<p class=help>%s</p><p id=network-reconnect data-sitl=true hidden>", T(S_NETWORK_SITL));
+#else
+                sb_append(&page, "<p class=help id=network-reconnect hidden>");
+#endif
+                sb_appendf(&page, "%s <a id=network-link></a></p>", T(S_NETWORK_RECONNECT));
+            }
+            sb_append(&page, "</section>");
         }
         sb_appendf(&page, "<div class=actions><div class=help>%s</div>"
                           "<button type=submit name=action value=save>%s</button>"
@@ -7150,6 +7212,8 @@ static const char parameters_script[] =
     "    const parts = text.split('.');\n"
     "    return parts.length === 4 && parts.every(p => /^(0|[1-9][0-9]{0,2})$/.test(p) && Number(p) <= 255);\n"
     "  };\n"
+    "  const number = text => text.split('.').reduce((v, n) => ((v << 8) | Number(n)) >>> 0, 0);\n"
+    "  const host = text => ipv4(text) && Number(text.split('.')[0]) > 0 && Number(text.split('.')[0]) !== 127 && Number(text.split('.')[0]) < 224;\n"
     "  function invalid(field, message) {\n"
     "    if (field) field.setCustomValidity(message || L.invalid.replace('%s', field.closest('.field').querySelector('label').textContent));\n"
     "  }\n"
@@ -7161,16 +7225,43 @@ static const char parameters_script[] =
     "      }\n"
     "      if (field.name === 'timezone' && /[\\s\\x00-\\x1f\\x7f]/.test(field.value)) invalid(field);\n"
     "    }\n"
-    "    for (const name of ['proxy_host', 'proxy_network_interface']) {\n"
+    "    for (const name of ['proxy_host', 'network_interface']) {\n"
     "      if (!/^[a-zA-Z0-9_.-]*$/.test(value(name))) invalid(get(name));\n"
     "    }\n"
-    "    const address = value('proxy_network_address');\n"
-    "    if (address) {\n"
-    "      const parts = address.split('/');\n"
-    "      if (parts.length !== 2 || !ipv4(parts[0]) || !/^([1-9]|[12][0-9]|3[0-2])$/.test(parts[1]))\n"
-    "        invalid(get('proxy_network_address'), L.address);\n"
+    "    const parseAddress = text => {\n"
+    "      const parts = text.split('/');\n"
+    "      if (parts.length !== 2 || !host(parts[0]) || !/^([1-9]|[12][0-9]|3[0-2])$/.test(parts[1])) return null;\n"
+    "      const ip = number(parts[0]), prefix = Number(parts[1]), mask = (0xffffffff << (32 - prefix)) >>> 0;\n"
+    "      if (prefix < 31 && ((ip & ~mask) === 0 || (ip & ~mask) === (~mask >>> 0))) return null;\n"
+    "      return {ip, mask, prefix};\n"
+    "    };\n"
+    "    for (const name of ['network_primary_address', 'network_secondary_address']) {\n"
+    "      if (value(name) && !parseAddress(value(name))) invalid(get(name), L.address);\n"
     "    }\n"
-    "    if (value('proxy_network_gateway') && !ipv4(value('proxy_network_gateway'))) invalid(get('proxy_network_gateway'));\n"
+    "    const primary = parseAddress(value('network_primary_address'));\n"
+    "    const secondary = parseAddress(value('network_secondary_address'));\n"
+    "    const gateway = value('network_gateway');\n"
+    "    if (primary && secondary && primary.ip === secondary.ip) invalid(get('network_secondary_address'), L.network);\n"
+    "    if (gateway) {\n"
+    "      if (!host(gateway)) invalid(get('network_gateway'));\n"
+    "      else {\n"
+    "        const g = number(gateway);\n"
+    "        const reachable = address => address && !((g ^ address.ip) & address.mask) &&\n"
+    "          (address.prefix >= 31 || ((g & ~address.mask) !== 0 && (g & ~address.mask) !== (~address.mask >>> 0)));\n"
+    "        if ((primary && g === primary.ip) || (secondary && g === secondary.ip) ||\n"
+    "            (primary && !reachable(primary) && !reachable(secondary)))\n"
+    "          invalid(get('network_gateway'), L.network);\n"
+    "      }\n"
+    "    }\n"
+    "    const reconnect = document.getElementById('network-reconnect');\n"
+    "    reconnect.hidden = !primary || reconnect.dataset.sitl === 'true';\n"
+    "    if (primary) {\n"
+    "      const link = document.getElementById('network-link');\n"
+    "      const url = new URL(location.href);\n"
+    "      url.hostname = value('network_primary_address').split('/')[0];\n"
+    "      url.pathname = '/parameters'; url.search = ''; url.hash = 'network';\n"
+    "      link.href = url.href; link.textContent = url.href;\n"
+    "    }\n"
     "    if (value('proxy_enabled') === 'true') {\n"
     "      if (!value('proxy_host')) invalid(get('proxy_host'));\n"
     "      if (value('proxy_signing') === 'true' && !value('proxy_signing_passphrase')) invalid(get('proxy_signing_passphrase'));\n"
@@ -7201,6 +7292,28 @@ static const char parameters_script[] =
     "      event.preventDefault();\n"
     "      reveal(bad); bad.focus();\n"
     "      bad.reportValidity();\n"
+    "      return;\n"
+    "    }\n"
+    "    const reconnect = document.getElementById('network-reconnect');\n"
+    "    const link = document.getElementById('network-link');\n"
+    "    if (event.submitter && event.submitter.value === 'save_restart' && !reconnect.hidden &&\n"
+    "        new URL(link.href).hostname !== location.hostname) {\n"
+    "      // Keep the reconnect link visible if removing our address breaks the response.\n"
+    "      event.preventDefault();\n"
+    "      reveal(get('network_primary_address'));\n"
+    "      const body = new URLSearchParams(new FormData(form));\n"
+    "      body.set('action', 'save_restart');\n"
+    "      const buttons = [...form.querySelectorAll('button[type=submit]')];\n"
+    "      buttons.forEach(button => { button.disabled = true; });\n"
+    "      fetch(form.action, {method: 'POST', body, signal: AbortSignal.timeout(45000)})\n"
+    "        .then(response => response.text()).then(page => {\n"
+    "          document.open(); document.write(page); document.close();\n"
+    "        }).catch(() => {\n"
+    "          const notice = document.createElement('p');\n"
+    "          notice.className = 'notice error'; notice.textContent = L.connectionLost;\n"
+    "          reconnect.before(notice);\n"
+    "          buttons.forEach(button => { button.disabled = false; });\n"
+    "        });\n"
     "    }\n"
     "  });\n"
     "  // Run our checks before native submission so dependent fields are checked too.\n"
@@ -7214,8 +7327,10 @@ static void send_parameters_script(int fd)
 {
     const struct js_string items[] = {
         {"invalid", T(S_E_INVALID_VALUE)},
-        {"address", T(S_H_PROXY_NETWORK_ADDRESS)},
+        {"address", T(S_H_NETWORK_ADDRESS)},
         {"ports", T(S_E_PROXY_VIDEO_PORTS)},
+        {"network", T(S_E_NETWORK)},
+        {"connectionLost", T(S_NETWORK_CONNECTION_LOST)},
     };
     send_script(fd, items, sizeof(items) / sizeof(items[0]), parameters_script);
 }
@@ -8492,7 +8607,7 @@ static void handle_request(int fd, const char *peer)
                 snprintf(error, sizeof(error),
                          T(restart ? S_PARAMS_SAVED_RESTARTED : S_PARAMS_SAVED),
                          camera_label(kind));
-                bool apply_error = !restart && wait_live_config(new_config, new_length, error, sizeof(error));
+                bool apply_error = !restart && wait_live_config(new_config, new_length, error, sizeof(error), false);
                 send_parameter_page(fd, error, apply_error, NULL);
             }
             free(action);
@@ -8527,7 +8642,7 @@ static void handle_request(int fd, const char *peer)
                     } else {
                         snprintf(error, sizeof(error), "%s", T(S_CONFIG_SAVED));
                     }
-                    bool apply_error = !restart && wait_live_config(config, config_len, error, sizeof(error));
+                    bool apply_error = !restart && wait_live_config(config, config_len, error, sizeof(error), false);
                     send_raw_page(fd, error, apply_error);
                 }
             }

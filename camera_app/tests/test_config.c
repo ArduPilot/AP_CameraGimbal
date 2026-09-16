@@ -218,6 +218,48 @@ int main(int argc, char **argv)
         ca_config_defaults(&config);
         assert(ca_config_load(&config, path, error, sizeof(error)) < 0);
     }
+    const char *invalid_network[] = {
+        "primary_address = 192.0.2.25\n", "primary_address = 192.0.2.25/33\n",
+        "primary_address = 192.0.2.0/24\n", "primary_address = 192.0.2.255/24\n",
+        "primary_address = 127.0.0.1/8\n", "secondary_address = 224.0.0.1/24\n",
+        "primary_address = 192.0.2.25/24\nsecondary_address = 192.0.2.25/25\n",
+        "primary_address = 192.0.2.25/24\ngateway = 198.51.100.1\n",
+        "primary_address = 192.0.2.25/24\ngateway = 192.0.2.25\n",
+        "interface = eth0;command\n", "interface = \"\"\n",
+    };
+    for (size_t i = 0; i < sizeof(invalid_network) / sizeof(invalid_network[0]); i++) {
+        fd = open(path, O_WRONLY | O_TRUNC);
+        assert(fd >= 0);
+        assert(write(fd, "[network]\n", 10) == 10);
+        write_config(fd, invalid_network[i]);
+        ca_config_defaults(&config);
+        assert(ca_config_load(&config, path, error, sizeof(error)) < 0);
+    }
+    fd = open(path, O_WRONLY | O_TRUNC);
+    write_config(fd, "[network]\nprimary_address=198.51.100.27/24\n"
+                     "secondary_address=192.0.2.25/24\ngateway=192.0.2.1\n");
+    ca_config_defaults(&config);
+    assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(!config.support.enabled);
+    assert(strcmp(config.network.primary_address, "198.51.100.27/24") == 0);
+    assert(strcmp(config.network.secondary_address, "192.0.2.25/24") == 0);
+    assert(strcmp(config.network.gateway, "192.0.2.1") == 0);
+    /* Legacy proxy networking migrates only when enabled, and an explicitly
+     * empty new setting overrides a legacy value. */
+    for (unsigned enabled = 0; enabled < 2; enabled++) {
+        for (unsigned override = 0; override < 2; override++) {
+            fd = open(path, O_WRONLY | O_TRUNC);
+            assert(dprintf(fd, "[support_proxy]\nenabled=%s\nhost=localhost\n"
+                           "network_interface=eth1\nnetwork_address=192.0.2.25/24\nnetwork_gateway=192.0.2.1\n",
+                           enabled ? "true" : "false") > 0);
+            write_config(fd, override ? "[network]\ninterface=eth0\nsecondary_address=\"\"\ngateway=\"\"\n" : "");
+            ca_config_defaults(&config);
+            assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+            assert(strcmp(config.network.interface, enabled && !override ? "eth1" : "eth0") == 0);
+            assert(strcmp(config.network.secondary_address, enabled && !override ? "192.0.2.25/24" : "") == 0);
+            assert(strcmp(config.network.gateway, enabled && !override ? "192.0.2.1" : "") == 0);
+        }
+    }
     assert(unlink(path) == 0);
     puts("camera configuration tests passed");
     return 0;

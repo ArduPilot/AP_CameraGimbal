@@ -149,6 +149,7 @@ struct ca_mavlink_server {
     struct stat config_stat;
     bool config_seen, config_pending;
     char config_status_path[4096];
+    char network_error[256];
     char config_last_status[512];
     bool yaw_lock;
     bool reported_recording;
@@ -1894,12 +1895,17 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         }
         return;
     }
-    bool restart = memcmp(&desired.support, &server->settings.support, sizeof(desired.support)) != 0;
+    if (server->network_error[0]) {
+        config_status(server, hash, "error", server->network_error);
+        return;
+    }
+    bool restart = memcmp(&desired.support, &server->settings.support, sizeof(desired.support)) != 0 ||
+        memcmp(&desired.network, &server->settings.network, sizeof(desired.network)) != 0;
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         if (!live_config_parameter(i) && ca_config_param_get(&desired, i) != ca_config_param_get(&server->settings, i)) restart = true;
     }
     config_status(server, hash, restart ? "restart" : "applied", restart ?
-        "Live settings applied. Restart to apply mount, identity, transport or SupportProxy changes." :
+        "Live settings applied. Restart to apply mount, identity, transport, network or SupportProxy changes." :
         "All saved settings applied without restarting the camera app.");
 }
 
@@ -2482,6 +2488,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->backend = config->backend;
     server->media = config->media;
     server->settings = config->settings;
+    snprintf(server->network_error, sizeof(server->network_error), "%s", config->network_error ? config->network_error : "");
     server->photo_scope = config->photo_scope;
     server->rtsp_port = config->rtsp_port;
     server->system_id = (uint8_t)config->settings.mavlink_system_id;
