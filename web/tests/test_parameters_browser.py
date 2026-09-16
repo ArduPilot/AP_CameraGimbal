@@ -13,10 +13,35 @@ CHECKS = r"""
   result.id = 'browser-test-result';
   document.body.append(result);
   try {
-    const form = document.querySelector('form[action="/parameters"]');
+    const form = document.querySelector('form[action^="/parameters"]');
     const field = name => form.elements.namedItem(name);
     const original = Object.fromEntries(new FormData(form));
     const assert = (ok, message) => { if (!ok) throw new Error(message); };
+    const tabs = [...document.querySelectorAll('#parameter-tabs [role=tab]')];
+    const panels = [...form.querySelectorAll('.parameter-panel')];
+    assert(tabs.length === 4 && panels.length === 4, 'four parameter tabs');
+    const active = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true');
+    const switchTo = name => document.getElementById('tab-' + name).click();
+    assert(active().id === 'tab-system', 'default System tab');
+    assert(panels.filter(panel => !panel.hidden).length === 1, 'one visible panel');
+    const categories = {timezone: 'system', orientation: 'system', mavlink_system_id: 'system',
+      mavlink_tcp_port: 'network', proxy_network_address: 'network',
+      brightness: 'video', autorecord: 'video', main_resolution: 'video',
+      proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy'};
+    for (const [name, category] of Object.entries(categories)) {
+      assert(field(name).closest('.parameter-panel').id === 'parameters-' + category, 'wrong category: ' + name);
+    }
+    field('brightness').value = '63';
+    for (const name of ['network', 'video', 'supportproxy', 'system']) switchTo(name);
+    assert(field('brightness').value === '63', 'tab change discarded edits');
+    assert(new FormData(form).get('brightness') === '63', 'hidden fields omitted from save');
+    field('brightness').value = original.brightness;
+    active().dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
+    assert(active().id === 'tab-network' && document.activeElement === active(), 'arrow navigation');
+    active().dispatchEvent(new KeyboardEvent('keydown', {key: 'End', bubbles: true}));
+    assert(active().id === 'tab-supportproxy', 'End navigation');
+    active().dispatchEvent(new KeyboardEvent('keydown', {key: 'Home', bubbles: true}));
+    assert(active().id === 'tab-system', 'Home navigation');
     let blocked;
     // Observe whether the application blocked submission, then prevent actual
     // navigation for valid cases too so this test never writes configuration.
@@ -39,6 +64,8 @@ CHECKS = r"""
       const before = JSON.stringify([...new FormData(form)]);
       submit();
       assert(blocked, 'invalid form submitted: ' + badName);
+      assert(!field(badName).closest('.parameter-panel').hidden, 'invalid tab still hidden');
+      assert(active().classList.contains('has-error'), 'invalid tab not marked');
       assert(document.activeElement === field(badName), 'wrong focused field: ' + badName);
       assert(field(badName).getAttribute('aria-invalid') === 'true', 'missing highlight: ' + badName);
       const error = document.getElementById(badName + '-error');
@@ -74,7 +101,7 @@ CHECKS = r"""
     field('proxy_network_gateway').value = '';
     submit();
     assert(blocked === false, 'disabled proxy requires optional fields');
-    result.textContent = 'PASS browser validation, focus, highlighting, corrections and input preservation';
+    result.textContent = 'PASS parameter tabs, keyboard navigation, cross-tab validation and input preservation';
   } catch (error) {
     result.textContent = 'FAIL ' + error.stack;
   }

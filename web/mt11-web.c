@@ -714,7 +714,11 @@ enum string_id {
     S_TITLE_APP_PARAMETERS,
     S_APP_PARAMETERS_SUBTITLE,
     S_APP_PARAMETERS_NOTICE,
-    S_PARAMS_GENERAL,
+    S_PARAMS_SYSTEM,
+    S_PARAMS_NETWORK,
+    S_PARAMS_VIDEO,
+    S_PARAMS_CATEGORIES,
+    S_PARAMS_SAVE_ALL,
     S_PARAMS_SAVE,
     S_PARAMS_SAVE_RESTART,
     S_PARAMS_SAVED_RESTARTED,
@@ -1234,10 +1238,14 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_JS_KEYS_TOO_LARGE] = {"The selected public keys exceed 64 KiB.", "所选公钥超过 64 KiB。", "選択した公開鍵が 64 KiB を超えています。"},
     [S_JS_UPLOADING_KEYS] = {"Uploading public keys…", "正在上传公钥…", "公開鍵をアップロードしています…"},
     [S_JS_FILES_UNREADABLE] = {"Unable to read the selected files.", "无法读取所选文件。", "選択したファイルを読み取れません。"},
-    [S_TITLE_APP_PARAMETERS] = {"camera-app parameters", "camera-app 参数", "camera-app パラメータ"},
-    [S_APP_PARAMETERS_SUBTITLE] = {"Validated ArduPilot camera app settings from %s", "来自 %s 的 ArduPilot 相机应用设置（经校验）", "%s に保存された ArduPilot カメラアプリ設定（検証付き）"},
+    [S_TITLE_APP_PARAMETERS] = {"Parameters", "参数", "パラメータ"},
+    [S_APP_PARAMETERS_SUBTITLE] = {"Configure the camera, networking and video", "配置相机、网络和视频", "カメラ、ネットワーク、映像の設定"},
     [S_APP_PARAMETERS_NOTICE] = {"Use <strong>Save</strong> to apply live settings automatically. Video-format changes briefly reconnect streams and wait until recording stops. Settings marked as requiring restart use <strong>Save and restart</strong>.", "<strong>保存</strong>后自动应用实时设置。视频格式更改会短暂重连视频，并等待录像停止。标记需要重启的设置请使用<strong>保存并重新启动</strong>。", "<strong>保存</strong>で設定を自動反映します。映像形式の変更は録画停止後にストリームを再接続します。再起動が必要と表示された設定は<strong>保存して再起動</strong>を使ってください。"},
-    [S_PARAMS_GENERAL] = {"General and capture", "常规与拍摄", "一般・撮影"},
+    [S_PARAMS_SYSTEM] = {"System", "系统", "システム"},
+    [S_PARAMS_NETWORK] = {"Network", "网络", "ネットワーク"},
+    [S_PARAMS_VIDEO] = {"Video", "视频", "映像"},
+    [S_PARAMS_CATEGORIES] = {"Parameter categories", "参数分类", "パラメータ分類"},
+    [S_PARAMS_SAVE_ALL] = {"Save applies changes from all tabs.", "保存将应用所有选项卡中的更改。", "保存はすべてのタブの変更を反映します。"},
     [S_PARAMS_SAVE] = {"Save parameters", "保存参数", "パラメータを保存"},
     [S_PARAMS_SAVE_RESTART] = {"Save and restart camera app", "保存并重新启动相机应用", "保存してカメラアプリを再起動"},
     [S_PARAMS_SAVED_RESTARTED] = {"Parameters saved and %s restarted", "参数已保存，%s 已重新启动", "パラメータを保存し、%s を再起動しました"},
@@ -1726,6 +1734,27 @@ static const struct parameter replacement_parameters[] = {
     {"proxy_network_gateway", "support_proxy", "network_gateway", S_P_PROXY_NETWORK_GATEWAY, S_H_PROXY_NETWORK_GATEWAY,
      PARAM_TEXT, 0, 15, 1, NULL, 0},
 };
+
+enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_COUNT };
+static const struct {
+    const char *name;
+    enum string_id label;
+} parameter_tabs[TAB_COUNT] = {
+    {"system", S_PARAMS_SYSTEM}, {"network", S_PARAMS_NETWORK},
+    {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY},
+};
+
+static enum parameter_tab parameter_tab(const struct parameter *p)
+{
+    if (!strcmp(p->section, "network") || !strncmp(p->form_name, "proxy_network_", 14) ||
+        !strcmp(p->form_name, "mavlink_tcp_port") || !strcmp(p->form_name, "mavlink_udp_port"))
+        return TAB_NETWORK;
+    if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
+    if (!strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
+        !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
+        !strcmp(p->section, "thermal")) return TAB_VIDEO;
+    return TAB_SYSTEM;
+}
 
 static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
@@ -5412,6 +5441,12 @@ static char file_type_char(mode_t mode)
 }
 
 static const char *page_style =
+    ".parameter-tabs:not([hidden]){display:flex;flex-wrap:wrap;gap:6px;margin:18px 0 12px}"
+    ".parameter-tabs button{margin:0;border:2px solid var(--line);background:var(--card);color:var(--accent)}"
+    ".parameter-tabs button[aria-selected=true]{border-color:var(--accent);background:var(--accent);color:var(--bg)}"
+    ".parameter-tabs button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}"
+    ".parameter-tabs button.has-error{border-color:var(--danger)}"
+    ".parameter-panel{margin-bottom:12px}.parameter-panel[hidden]{display:none}.parameter-panel h2{margin-top:0}.parameter-panel .help code{overflow-wrap:anywhere}"
         ":root{color-scheme:light dark;--bg:#f4f7fa;--card:#fff;--text:#17212b;"
         "--muted:#607080;--line:#d7e0e8;--accent:#1769aa;--danger:#b42318}"
         "@media(prefers-color-scheme:dark){:root{--bg:#10161d;--card:#18222d;"
@@ -6269,7 +6304,7 @@ static char *render_parameter_page(const char *message, bool message_is_error,
     if (kind == CAMERA_REPLACEMENT) {
         append_head(&page, T(S_TITLE_APP_PARAMETERS), page_style, NULL);
         sb_appendf(&page, "<header><h1>%s</h1><div class=muted>", T(S_TITLE_APP_PARAMETERS));
-        sb_appendf(&page, T(S_APP_PARAMETERS_SUBTITLE), REPLACEMENT_CONFIG_PATH);
+        sb_append_html(&page, T(S_APP_PARAMETERS_SUBTITLE));
         sb_append(&page, "</div></header>");
         append_nav(&page, "/parameters", NULL);
         char applied[512];
@@ -6278,22 +6313,30 @@ static char *render_parameter_page(const char *message, bool message_is_error,
         append_notice(&page, message, message_is_error);
         sb_appendf(&page, "<p class=notice>%s</p>"
                           "<form method=post action=/parameters><input type=hidden name=csrf value=\"%s\">"
-                          "<section class=card><h2>%s</h2><div class=fields>",
-                   T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_GENERAL));
-        for (size_t i = 0;
-             i < sizeof(replacement_parameters) / sizeof(replacement_parameters[0]);
-             i++) {
-            if (!parameter_shown(&replacement_parameters[i])) continue;
-            if (strcmp(replacement_parameters[i].section, "support_proxy") == 0 &&
-                (i == 0 || strcmp(replacement_parameters[i - 1].section, "support_proxy") != 0))
-                sb_appendf(&page, "</div></section><section class=card><h2>%s</h2><div class=fields>", T(S_PARAMS_PROXY));
-            append_parameter_field(&page, config, &replacement_parameters[i], submitted);
+                          "<div id=parameter-tabs class=parameter-tabs role=tablist aria-label=\"%s\" hidden>",
+                   T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES));
+        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+            sb_appendf(&page, "<button type=button role=tab id=tab-%s aria-controls=parameters-%s "
+                             "aria-selected=false tabindex=-1>%s</button>",
+                       parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
         }
-        sb_appendf(&page, "</div></section><div class=actions>"
+        sb_append(&page, "</div>");
+        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+            sb_appendf(&page, "<section class=\"card parameter-panel\" id=parameters-%s "
+                             "aria-labelledby=tab-%s><h2>%s</h2><div class=fields>",
+                       parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
+            for (size_t i = 0; i < sizeof(replacement_parameters) / sizeof(replacement_parameters[0]); i++) {
+                const struct parameter *parameter = &replacement_parameters[i];
+                if (parameter_shown(parameter) && parameter_tab(parameter) == tab)
+                    append_parameter_field(&page, config, parameter, submitted);
+            }
+            sb_append(&page, "</div></section>");
+        }
+        sb_appendf(&page, "<div class=actions><div class=help>%s</div>"
                           "<button type=submit name=action value=save>%s</button>"
                           "<button type=submit name=action value=save_restart>%s</button>"
-                          "</div></form><script src=/parameters.js defer></script></body></html>", T(S_PARAMS_SAVE),
-                   T(S_PARAMS_SAVE_RESTART));
+                          "</div></form><script src=/parameters.js defer></script></body></html>",
+                   T(S_PARAMS_SAVE_ALL), T(S_PARAMS_SAVE), T(S_PARAMS_SAVE_RESTART));
         free(config);
         *page_len = page.len;
         return page.data;
@@ -7053,6 +7096,43 @@ static const char parameters_script[] =
     "(() => {\n"
     "  const form = document.querySelector('form[action=\"/parameters\"]');\n"
     "  if (!form) return;\n"
+    "  const tablist = document.getElementById('parameter-tabs');\n"
+    "  const tabs = [...tablist.querySelectorAll('[role=tab]')];\n"
+    "  const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));\n"
+    "  function selectTab(tab, focus = false) {\n"
+    "    if (!tabs.includes(tab)) tab = tabs[0];\n"
+    "    tabs.forEach((item, i) => {\n"
+    "      const selected = item === tab;\n"
+    "      item.setAttribute('aria-selected', String(selected));\n"
+    "      item.tabIndex = selected ? 0 : -1;\n"
+    "      panels[i].hidden = !selected;\n"
+    "    });\n"
+    "    const name = tab.id.slice(4);\n"
+    "    form.action = '/parameters#' + name;\n"
+    "    try { history.replaceState(null, '', '#' + name); } catch (_) {}\n"
+    "    if (focus) tab.focus();\n"
+    "  }\n"
+    "  function reveal(field) {\n"
+    "    const panel = field.closest('.parameter-panel');\n"
+    "    selectTab(tabs[panels.indexOf(panel)]);\n"
+    "  }\n"
+    "  tabs.forEach((tab, index) => {\n"
+    "    tab.addEventListener('click', () => selectTab(tab));\n"
+    "    tab.addEventListener('keydown', event => {\n"
+    "      let next;\n"
+    "      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;\n"
+    "      else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;\n"
+    "      else if (event.key === 'Home') next = 0;\n"
+    "      else if (event.key === 'End') next = tabs.length - 1;\n"
+    "      else return;\n"
+    "      event.preventDefault(); selectTab(tabs[next], true);\n"
+    "    });\n"
+    "  });\n"
+    "  panels.forEach(panel => panel.setAttribute('role', 'tabpanel'));\n"
+    "  tablist.hidden = false;\n"
+    "  const fromHash = () => selectTab(tabs.find(tab => tab.id === 'tab-' + location.hash.slice(1)));\n"
+    "  fromHash();\n"
+    "  window.addEventListener('hashchange', fromHash);\n"
     "  const fields = [...form.querySelectorAll('.field input, .field select')];\n"
     "  const touched = new Set();\n"
     "  let attempted = Boolean(document.querySelector('.notice.error'));\n"
@@ -7107,6 +7187,7 @@ static const char parameters_script[] =
     "      error.hidden = !bad;\n"
     "      error.textContent = bad ? field.validationMessage : '';\n"
     "    }\n"
+    "    tabs.forEach((tab, i) => tab.classList.toggle('has-error', Boolean(panels[i].querySelector('[aria-invalid=true]'))));\n"
     "    return fields.find(field => !field.validity.valid);\n"
     "  }\n"
     "  for (const name of ['input', 'change']) form.addEventListener(name, event => {\n"
@@ -7118,14 +7199,14 @@ static const char parameters_script[] =
     "    const bad = validate();\n"
     "    if (bad) {\n"
     "      event.preventDefault();\n"
-    "      bad.focus();\n"
+    "      reveal(bad); bad.focus();\n"
     "      bad.reportValidity();\n"
     "    }\n"
     "  });\n"
     "  // Run our checks before native submission so dependent fields are checked too.\n"
     "  form.noValidate = true;\n"
     "  const bad = validate();\n"
-    "  if (attempted && bad) bad.focus();\n"
+    "  if (attempted && bad) { reveal(bad); bad.focus(); }\n"
     "})();\n"
     ;
 
