@@ -23,6 +23,31 @@ if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
 target = root / "armv7-eabihf--uclibc--stable-2018.11-1"
 if not target.exists():
     with tarfile.open(archive) as tar:
-        tar.extractall(root, filter="data")
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(root, filter="data")
+        else:
+            members = []
+            destination = root.resolve()
+            for original in tar.getmembers():
+                member = original.copy()
+                member_path = Path(member.name)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    raise SystemExit(f"unsafe archive path: {member.name}")
+                target_path = destination / member_path
+                if not target_path.resolve().is_relative_to(destination):
+                    raise SystemExit(f"unsafe archive path: {member.name}")
+                if member.issym():
+                    link_target = (target_path.parent / member.linkname).resolve()
+                    if not link_target.is_relative_to(destination):
+                        raise SystemExit(f"unsafe archive symlink: {member.name}")
+                elif member.islnk():
+                    link_path = Path(member.linkname)
+                    if link_path.is_absolute() or ".." in link_path.parts:
+                        raise SystemExit(f"unsafe archive hardlink: {member.name}")
+                elif not (member.isdir() or member.isreg()):
+                    raise SystemExit(f"unsupported archive member: {member.name}")
+                member.mode &= 0o777
+                members.append(member)
+            tar.extractall(root, members=members)
 print(target)
 PY
