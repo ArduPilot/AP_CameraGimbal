@@ -130,6 +130,29 @@ def inside(binary):
         state.write_text('corrupt')
         configure('198.51.100.25/24')
         expect(['198.51.100.25/24'])
+        # Recreating an address creates a kernel subnet route. Recovery must
+        # restore the saved custom route's attributes, not silently accept
+        # EEXIST and lose its MTU/protocol/preferred source.
+        ip('route', 'replace', '198.51.100.0/24', 'dev', INTERFACE, 'proto', 'static',
+           'src', '198.51.100.25', 'mtu', '1200')
+        custom_before = all_routes()
+        configure('', '192.0.2.25/24', '203.0.113.1', ok=False)
+        assert all_routes() == custom_before, 'rollback lost custom subnet route attributes'
+        configure('198.51.100.25/24', '198.51.100.26/24', '198.51.100.1')
+        subnet = next(r for r in json.loads(ip('-j', 'route', 'show')) if r['dst'] == '198.51.100.0/24')
+        assert subnet['protocol'] == 'static' and subnet['prefsrc'] == '198.51.100.25', subnet
+        assert subnet['metrics'][0]['mtu'] == 1200, subnet
+        # Idempotence must hold with ordinary, policy-table and custom subnet
+        # routes present, not just a default and generated connected route.
+        with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as monitor:
+            monitor.bind((0, 0x10 | 0x40))
+            monitor.settimeout(0.1)
+            configure('198.51.100.25/24', '198.51.100.26/24', '198.51.100.1')
+            try:
+                event = monitor.recv(65536)
+            except TimeoutError:
+                event = b''
+            assert not event, 'unchanged restart modified static routes'
     print('PASS primary selection, restart without route flaps, static/policy route recovery, removal and interface isolation')
 
 
