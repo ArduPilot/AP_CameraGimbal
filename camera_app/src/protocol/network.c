@@ -52,7 +52,7 @@ static int open_netlink(void)
     }
     return fd;
 }
-static int transact(struct nlmsghdr *h, unsigned type)
+static int transact_flags(struct nlmsghdr *h, unsigned type, unsigned create_flags)
 {
     int fd = open_netlink();
     if (fd < 0)
@@ -63,7 +63,7 @@ static int transact(struct nlmsghdr *h, unsigned type)
     h->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
     bool add = type == RTM_NEWADDR || type == RTM_NEWROUTE;
     if (add)
-        h->nlmsg_flags |= NLM_F_CREATE | NLM_F_EXCL;
+        h->nlmsg_flags |= NLM_F_CREATE | create_flags;
     int result = -1;
     if (send(fd, h, h->nlmsg_len, 0) == (ssize_t)h->nlmsg_len) {
         char data[8192];
@@ -85,6 +85,7 @@ static int transact(struct nlmsghdr *h, unsigned type)
     errno = saved;
     return result;
 }
+static int transact(struct nlmsghdr *h, unsigned type) { return transact_flags(h, type, NLM_F_EXCL); }
 static int snapshot(unsigned index, struct snapshot *s, bool routes)
 {
     int fd = open_netlink();
@@ -231,19 +232,77 @@ static bool route_gateway_matches(struct entry *entry, const char *text)
             return true;
     return false;
 }
-/* Connected/local routes are recreated by the kernel. Preserve user routes
- * if they remain reachable; otherwise fail and roll back the address change. */
-static int restore_routes(struct snapshot *s, bool rollback)
+struct route_key {
+    unsigned table, destination, priority, prefix, tos;
+};
+static struct route_key route_key(struct entry *entry)
 {
-    for (unsigned i = 0; i < s->nr; i++) {
-        struct nlmsghdr *h = (void *)s->routes[i].data;
-        struct rtmsg *r = NLMSG_DATA(h);
-        if (!rollback && (default_route(&s->routes[i]) || r->rtm_protocol == RTPROT_KERNEL))
+    struct nlmsghdr *h = (void *)entry->data;
+    struct rtmsg *r = NLMSG_DATA(h);
+    struct route_key key = {.table = r->rtm_table, .prefix = r->rtm_dst_len, .tos = r->rtm_tos};
+    int length = RTM_PAYLOAD(h);
+    for (struct rtattr *a = RTM_RTA(r); RTA_OK(a, length); a = RTA_NEXT(a, length)) {
+        if (RTA_PAYLOAD(a) != sizeof(unsigned))
             continue;
-        if (transact(h, RTM_NEWROUTE) < 0 && errno != EEXIST)
-            return -1;
+        unsigned *field = a->rta_type == RTA_TABLE      ? &key.table
+                          : a->rta_type == RTA_DST      ? &key.destination
+                          : a->rta_type == RTA_PRIORITY ? &key.priority
+                                                        : NULL;
+        if (field)
+            memcpy(field, RTA_DATA(a), sizeof(*field));
     }
-    return 0;
+    return key;
+}
+static bool same_route(struct entry *a, struct entry *b)
+{
+    struct nlmsghdr *ha = (void *)a->data, *hb = (void *)b->data;
+    return ha->nlmsg_len == hb->nlmsg_len && !memcmp(NLMSG_DATA(ha), NLMSG_DATA(hb), NLMSG_PAYLOAD(ha, 0));
+}
+/* Address recreation installs fresh kernel subnet routes. They can collide
+ * with saved user routes (e.g. a subnet route with an explicit MTU). Remove
+ * only those generated collisions, then replay the complete saved route. */
+static int restore_user_routes(unsigned index, struct snapshot *before)
+{
+    struct snapshot *current = calloc(1, sizeof(*current));
+    if (!current)
+        return -1;
+    int result = -1;
+    if (snapshot(index, current, true) < 0)
+        goto done;
+    for (unsigned i = 0; i < before->nr; i++) {
+        struct entry *saved = &before->routes[i];
+        struct nlmsghdr *h = (void *)saved->data;
+        struct rtmsg *r = NLMSG_DATA(h);
+        if (default_route(saved) || r->rtm_protocol == RTPROT_KERNEL)
+            continue;
+        bool present = false;
+        for (unsigned j = 0; j < current->nr; j++)
+            present |= same_route(saved, &current->routes[j]);
+        if (present)
+            continue;
+        struct route_key key = route_key(saved);
+        for (unsigned j = 0; j < current->nr; j++) {
+            struct entry *candidate = &current->routes[j];
+            struct route_key other = route_key(candidate);
+            if (memcmp(&key, &other, sizeof(key)))
+                continue;
+            struct nlmsghdr *ch = (void *)candidate->data;
+            if (((struct rtmsg *)NLMSG_DATA(ch))->rtm_protocol != RTPROT_KERNEL) {
+                errno = EEXIST;
+                goto done;
+            }
+            if (transact(ch, RTM_DELROUTE) < 0)
+                goto done;
+        }
+        /* APPEND preserves aliases on other interfaces instead of replacing
+         * them or accepting a conflicting route as a successful restore. */
+        if (transact_flags(h, RTM_NEWROUTE, NLM_F_APPEND) < 0)
+            goto done;
+    }
+    result = 0;
+done:
+    free(current);
+    return result;
 }
 static int address(unsigned index, const char *text, bool add)
 {
@@ -451,7 +510,7 @@ int ca_network_configure(const struct ca_network_config *config, const char *sta
         goto rollback;
     if (address(index, config->secondary_address, true) < 0)
         goto rollback;
-    if (restore_routes(before, false) < 0 || configure_gateway(index, config, &previous) < 0)
+    if (restore_user_routes(index, before) < 0 || configure_gateway(index, config, &previous) < 0)
         goto rollback;
     if (rename(temporary, state_path) < 0)
         goto rollback;
@@ -475,9 +534,28 @@ rollback: {
     for (unsigned i = 0; i < before->na; i++)
         if (transact((void *)before->addresses[i].data, RTM_NEWADDR) < 0 && errno != EEXIST)
             restored = false;
-    for (unsigned i = 0; i < before->nr; i++)
-        if (transact((void *)before->routes[i].data, RTM_NEWROUTE) < 0 && errno != EEXIST)
+    /* Remove regenerated subnet routes before replaying the saved snapshot.
+     * EEXIST is not proof of equivalence: the generated route may have lost
+     * the original protocol, preferred source, metric or MTU. */
+    struct snapshot *generated = calloc(1, sizeof(*generated));
+    if (generated) {
+        if (snapshot(index, generated, true) < 0 ||
+            remove_entries(generated->routes, generated->nr, RTM_DELROUTE) < 0)
             restored = false;
+        free(generated);
+    } else
+        restored = false;
+    /* Direct routes first, then gateway routes that depend on them. */
+    for (unsigned pass = 0; pass < 2; pass++) {
+        for (unsigned i = 0; i < before->nr; i++) {
+            struct nlmsghdr *h = (void *)before->routes[i].data;
+            struct rtmsg *r = NLMSG_DATA(h);
+            if ((r->rtm_scope == RT_SCOPE_LINK) != (pass == 0))
+                continue;
+            if (transact_flags(h, RTM_NEWROUTE, NLM_F_APPEND) < 0)
+                restored = false;
+        }
+    }
     if (!restored)
         fprintf(stderr, "network: failed to restore all addresses/routes on %s after: %s\n",
                 config->interface, strerror(saved));
