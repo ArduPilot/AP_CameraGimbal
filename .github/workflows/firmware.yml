@@ -17,10 +17,10 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-      - name: Install compilers, SDKs and build tools
-        run: python3 tools/install_build_environment.py
       - name: Test legacy Python tar extraction safety
         run: python3 tests/test_safe_tar.py
+      - name: Install compilers, SDKs and build tools
+        run: python3 tools/install_build_environment.py
       - name: Build all camera release packages
         run: make -j4 release
       - name: Check packaging and UUID helpers

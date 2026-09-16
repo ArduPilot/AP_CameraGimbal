@@ -2,6 +2,7 @@
 """Extract pinned toolchain tarballs with equivalent safety on old Python."""
 import copy
 import inspect
+import os
 from pathlib import Path, PurePosixPath
 import sys
 import tarfile
@@ -9,9 +10,10 @@ import tarfile
 
 def _inside(path, root):
     try:
-        resolved = path.resolve()
-        return resolved != root and resolved.is_relative_to(root)
-    except (OSError, RuntimeError):
+        resolved = os.path.realpath(str(path))
+        root = os.path.realpath(str(root))
+        return resolved != root and os.path.commonpath((resolved, root)) == root
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -32,7 +34,11 @@ def safe_extract(archive, destination):
         for original in tar:
             member = copy.copy(original)
             name = PurePosixPath(member.name)
-            if name.is_absolute() or '..' in name.parts or not name.parts:
+            if name.is_absolute() or '..' in name.parts:
+                raise RuntimeError(f'Unsafe path in toolchain archive: {member.name}')
+            if not name.parts:
+                if member.isdir():
+                    continue
                 raise RuntimeError(f'Unsafe path in toolchain archive: {member.name}')
             target = destination.joinpath(*name.parts)
             if not _inside(target, destination):
@@ -59,12 +65,12 @@ def safe_extract(archive, destination):
             # exist, and reject replacing a symlink itself.
             if target.is_symlink() or not _inside(target, destination):
                 raise RuntimeError(f'Unsafe archive member: {member.name}')
-            if member.isdir():
-                member.mode = (member.mode | 0o700) & 0o755
-            else:
-                member.mode = (member.mode | 0o600) & 0o755
-            member.uid = member.gid = None
-            member.uname = member.gname = None
+            member.mode &= 0o755
+            if member.isreg() and not (member.mode & 0o100):
+                member.mode &= 0o644
+            member.uid = getattr(os, 'getuid', lambda: 0)()
+            member.gid = getattr(os, 'getgid', lambda: 0)()
+            member.uname = member.gname = ''
             if 'filter' in inspect.signature(tar.extract).parameters:
                 tar.extract(member, destination, filter='fully_trusted')
             else:

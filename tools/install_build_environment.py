@@ -13,7 +13,6 @@ import platform
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from safe_tar import safe_extract
 
