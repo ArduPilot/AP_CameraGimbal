@@ -141,3 +141,7 @@ z1mini-web: mt11-web.c z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM
 
 $(Z1MINI_MAVLINK)/all/mavlink.h:
 	$(MAKE) -C ../camera_app CAMERA_BACKEND=z1mini build/mavlink/all/include/all/mavlink.h
+
+.PHONY: network-status-test
+network-status-test: $(VERSION_HEADER) $(ICON_HEADER)
+	python3 tests/test_network_status.py

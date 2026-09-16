@@ -14,12 +14,13 @@
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/mavlink_server.h"
-#include "camera_app/support_network.h"
+#include "camera_app/network.h"
 
 #include "camera_app/siyi.h"
 #include "camera_app/siyi_server.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -413,14 +414,19 @@ int main(int argc, char **argv)
         .bit_rate_kbps = 4096,
         .settings = app_config,
     };
+    char network_error[256] = "";
 #ifdef CAMERA_APP_SITL
-    if (app_config.support.enabled &&
-        (app_config.support.network_address[0] || app_config.support.network_gateway[0]))
-        ca_log("SupportProxy network configuration skipped in SITL");
+    if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
+        ca_log("network configuration skipped in SITL (uses host networking)");
 #else
-    if (ca_support_network_configure(&app_config.support) < 0)
-        ca_log("SupportProxy network configuration failed: %s", strerror(errno));
+    char network_state[PATH_MAX];
+    if (snprintf(network_state, sizeof(network_state), "%s.network", ready_path()) >= (int)sizeof(network_state)) {
+        snprintf(network_error, sizeof(network_error), "Network configuration failed: ready-file path is too long. Restart to retry.");
+    } else if (ca_network_configure(&app_config.network, network_state) < 0) {
+        snprintf(network_error, sizeof(network_error), "Network configuration failed on %s: %s. Restart to retry.", app_config.network.interface, strerror(errno));
+    }
 #endif
+    if (network_error[0]) ca_log("%s", network_error);
     if (ca_media_open(&media, &media_config) < 0) {
         ca_log("cannot open media backend %s: %s", backend_name, strerror(errno));
         goto done;
@@ -484,6 +490,7 @@ int main(int argc, char **argv)
     ca_metadata_set_model(APCAM_MODEL_NAME);
     struct ca_mavlink_server_config mavlink_config = {
         .config_path = config_path,
+        .network_error = network_error,
         .tcp_port = mavlink_tcp_port,
         .udp_port = mavlink_udp_port,
         .uart_device = app_config.uart_protocol == CA_UART_MAVLINK

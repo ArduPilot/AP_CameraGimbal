@@ -1,7 +1,6 @@
 # TODO
 
 - Re-calibrate thermal.
-- Allow configuring the camera's main IP address, a secondary IP address, and the default route ([#6](https://github.com/ArduPilot/AP_CameraGimbal/issues/6)).
 - Provide parameter descriptions/metadata for regular GCS parameter editors; basic MAVLink parameter fetch/get/set is implemented ([#1](https://github.com/ArduPilot/AP_CameraGimbal/issues/1)).
 - Ensure recordings have correct dates and sortable, zero-padded, hyphen-separated filenames ([#2](https://github.com/ArduPilot/AP_CameraGimbal/issues/2)).
 - Check compliance with the [MAVLink camera protocol](https://mavlink.io/en/services/camera.html).

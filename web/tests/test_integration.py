@@ -650,9 +650,10 @@ try:
         "proxy_video2_port": "40002",
         "proxy_video2_name": "video2",
         "proxy_publish_password": "",
-        "proxy_network_interface": "eth0",
-        "proxy_network_address": "",
-        "proxy_network_gateway": "",
+        "network_interface": "eth0",
+        "network_primary_address": "",
+        "network_secondary_address": "",
+        "network_gateway": "",
         "action": "save",
     }
     status, body, _ = form(
@@ -682,7 +683,7 @@ try:
     valid_proxy = dict(replacement_parameters, proxy_enabled="true", proxy_host="localhost",
                        proxy_signing="true", proxy_signing_passphrase=" a signing phrase ",
                        proxy_publish_password="publish&?=secret", proxy_video1_name="Front Camera",
-                       proxy_network_address="192.0.2.25/24", proxy_network_gateway="192.0.2.1")
+                       network_secondary_address="192.0.2.25/24", network_gateway="192.0.2.1")
     status, proxy_body, _ = form("/parameters", "initial-password", csrf, valid_proxy)
     assert status == 200 and b"Parameters saved" in proxy_body
     proxy_config = (root / "app" / "camera.ini").read_text()
@@ -710,17 +711,22 @@ try:
     _, saved_proxy, _ = form("/parameters", "initial-password", csrf, browser_proxy)
     assert b"Parameters saved" in saved_proxy
     assert (root / "app" / "camera.ini").read_text() == proxy_config
-    assert b'Additional IPv4 address/prefix' in loaded_proxy
+    assert b'Secondary IPv4 address/prefix' in loaded_proxy
     assert b'placeholder="192.168.2.97/24" pattern=' in loaded_proxy
-    for changes in ({"proxy_network_address": "192.168.2.97"},
-                    {"proxy_network_address": "192.0.2.25/33"},
-                    {"proxy_network_gateway": "bad"}, {"proxy_host": "bad/host"},
+    for changes in ({"network_primary_address": "192.168.2.97"},
+                    {"network_primary_address": "192.0.2.0/24"},
+                    {"network_primary_address": "192.0.2.255/24"},
+                    {"network_primary_address": "192.0.2.25/24"},
+                    {"network_primary_address": "198.51.100.27/24", "network_gateway": "203.0.113.1"},
+                    {"network_secondary_address": "192.168.2.97"},
+                    {"network_secondary_address": "192.0.2.25/33"},
+                    {"network_gateway": "bad"}, {"proxy_host": "bad/host"},
                     {"proxy_signing_passphrase": ""}, {"proxy_video2_port": "40001"},
                     {"proxy_video1_name": ""}, {"proxy_mavlink_port": "65536"}):
         _, invalid_body, _ = form("/parameters", "initial-password", csrf, dict(valid_proxy, **changes))
         assert b"Parameters saved" not in invalid_body
-        if "proxy_network_address" in changes:
-            assert b"Optional address/prefix, for example 192.168.20.25/24" in invalid_body
+        if "network_secondary_address" in changes:
+            assert b"Optional second address, for example 192.168.20.25/24" in invalid_body
         assert (root / "app" / "camera.ini").read_text() == proxy_config
         for name, value in dict(valid_proxy, **changes).items():
             if name.startswith("proxy_") and name not in ("proxy_enabled", "proxy_signing"):
@@ -734,6 +740,27 @@ try:
     assert input_value(rejected_body, "proxy_video1_name") == rejected["proxy_video1_name"]
     assert b'<script>alert("camera")</script>' not in rejected_body
     assert (root / "app" / "camera.ini").read_text() == proxy_config
+    # Network configuration is independent of SupportProxy and survives a reload.
+    network_parameters = dict(replacement_parameters, network_primary_address="198.51.100.27/24",
+                              network_secondary_address="192.0.2.25/24", network_gateway="192.0.2.1")
+    _, network_body, _ = form("/parameters", "initial-password", csrf, network_parameters)
+    assert b"Parameters saved" in network_body
+    _, network_body, _ = request("GET", "/parameters", "initial-password")
+    for name in ("network_primary_address", "network_secondary_address", "network_gateway"):
+        assert input_value(network_body, name) == network_parameters[name]
+    # Old enabled SupportProxy fields appear in the new Network panel, but
+    # explicit empty new fields must suppress legacy fallback after removal.
+    legacy = "[support_proxy]\nenabled=true\nhost=localhost\nnetwork_interface=eth1\nnetwork_address=192.0.2.25/24\nnetwork_gateway=192.0.2.1\n"
+    (root / "app" / "camera.ini").write_text(legacy)
+    _, legacy_body, _ = request("GET", "/parameters", "initial-password")
+    assert input_value(legacy_body, "network_interface") == "eth1"
+    assert input_value(legacy_body, "network_secondary_address") == "192.0.2.25/24"
+    assert input_value(legacy_body, "network_gateway") == "192.0.2.1"
+    (root / "app" / "camera.ini").write_text(legacy + '[network]\nsecondary_address=""\ngateway=""\n')
+    _, legacy_body, _ = request("GET", "/parameters", "initial-password")
+    assert input_value(legacy_body, "network_secondary_address") == ""
+    assert input_value(legacy_body, "network_gateway") == ""
+    (root / "app" / "camera.ini").write_text(proxy_config)
     # Restore disabled defaults, including clearing both optional secrets.
     status, _, _ = form("/parameters", "initial-password", csrf, replacement_parameters)
     assert status == 200 and (root / "app" / "camera.ini").read_text() == saved_config

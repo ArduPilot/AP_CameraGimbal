@@ -392,14 +392,14 @@ Camera SITL skips network address/route changes. Test the production network
 configuration code separately inside a disposable network namespace:
 
 ```sh
-python3 sitl/test_support_network.py
+python3 sitl/test_network.py
 # If unprivileged network namespaces are unavailable:
-python3 sitl/test_support_network.py --sudo
+python3 sitl/test_network.py --sudo
 ```
 
-This creates a dummy interface, verifies that its existing address survives,
-adds the configured address and default route, and checks repeated setup and
-invalid settings. The `--sudo` variant requires passwordless sudo for
+This creates dummy interfaces and checks primary address replacement, optional
+secondary addressing, default routes, removal, repeated startup and rollback
+after failure. IPv6 and other interfaces must remain unchanged. The `--sudo` variant requires passwordless sudo for
 `unshare`; neither variant changes the host network.
 
 SITL preserves the selected backend's `runtime/app/camera.ini` across builds,

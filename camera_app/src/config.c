@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "apcam/network.h"
 #include "apcam/target.h"
 #include "camera_app/config.h"
 
@@ -266,6 +267,18 @@ static const struct config_field config_fields[] = {
     {"support_proxy", "network_gateway", CONFIG_STRING,
      offsetof(struct ca_config, support.network_gateway),
      sizeof(((struct ca_config *)0)->support.network_gateway), NULL, 0U, 0, 15, NULL},
+    {"network", "interface", CONFIG_STRING,
+     offsetof(struct ca_config, network.interface),
+     sizeof(((struct ca_config *)0)->network.interface), NULL, 0U, 1, 15, NULL},
+    {"network", "primary_address", CONFIG_STRING,
+     offsetof(struct ca_config, network.primary_address),
+     sizeof(((struct ca_config *)0)->network.primary_address), NULL, 0U, 0, 31, NULL},
+    {"network", "secondary_address", CONFIG_STRING,
+     offsetof(struct ca_config, network.secondary_address),
+     sizeof(((struct ca_config *)0)->network.secondary_address), NULL, 0U, 0, 31, NULL},
+    {"network", "gateway", CONFIG_STRING,
+     offsetof(struct ca_config, network.gateway),
+     sizeof(((struct ca_config *)0)->network.gateway), NULL, 0U, 0, 15, NULL},
 };
 
 static bool support_valid(const struct ca_support_config *support)
@@ -313,13 +326,13 @@ static int set_field(struct ca_config *config, const struct config_field *field,
             if (c < 32U || c > 126U || c == '"') return -1;
         }
         if (strcmp(field->key, "host") == 0 ||
-            strcmp(field->key, "network_interface") == 0) {
+            strcmp(field->key, "network_interface") == 0 || strcmp(field->key, "interface") == 0) {
             for (size_t i = 0; i < length; i++) {
                 unsigned char c = (unsigned char)value[i];
                 if (!isalnum(c) && c != '.' && c != '-' && c != '_') return -1;
             }
         }
-        if (length != 0U && strcmp(field->key, "network_gateway") == 0) {
+        if (length != 0U && (strcmp(field->key, "network_gateway") == 0 || strcmp(field->key, "gateway") == 0)) {
             struct in_addr address;
             if (inet_pton(AF_INET, value, &address) != 1) return -1;
         }
@@ -334,6 +347,11 @@ static int set_field(struct ca_config *config, const struct config_field *field,
             long prefix = strtol(slash, &end, 10);
             if (end == slash || *end != '\0' || prefix < 1 || prefix > 32 ||
                 inet_pton(AF_INET, address, &parsed) != 1) return -1;
+        }
+        if (length && (!strcmp(field->key, "primary_address") || !strcmp(field->key, "secondary_address"))) {
+            struct in_addr address;
+            unsigned prefix;
+            if (!apcam_ipv4_prefix(value, &address, &prefix)) return -1;
         }
         memcpy(destination, value, length + 1U);
         return 0;
@@ -424,6 +442,7 @@ void ca_config_defaults(struct ca_config *config)
     strcpy(config->support.video1_name, "video1");
     strcpy(config->support.video2_name, "video2");
     strcpy(config->support.network_interface, "eth0");
+    strcpy(config->network.interface, "eth0");
 }
 
 const char *ca_mount_orientation_name(enum ca_mount_orientation orientation)
@@ -567,6 +586,23 @@ int ca_config_load(struct ca_config *config, const char *path,
     }
     if (!support_valid(&parsed.support)) {
         snprintf(error, error_size, "SupportProxy needs a host, distinct enabled video ports, stream names and a passphrase when signing is enabled");
+        errno = EINVAL;
+        goto fail;
+    }
+    /* New Network keys take precedence even when explicitly empty. Legacy
+     * proxy network settings retain their old enabled-only behavior until saved. */
+    if (parsed.support.enabled) {
+        for (size_t i = 0; i < sizeof(config_fields) / sizeof(config_fields[0]); i++) {
+            const struct config_field *f = &config_fields[i];
+            if (seen[i] || strcmp(f->section, "network")) continue;
+            const char *legacy = !strcmp(f->key, "interface") ? parsed.support.network_interface :
+                !strcmp(f->key, "secondary_address") ? parsed.support.network_address :
+                !strcmp(f->key, "gateway") ? parsed.support.network_gateway : NULL;
+            if (legacy) snprintf((char *)&parsed + f->offset, f->size, "%s", legacy);
+        }
+    }
+    if (!apcam_network_valid(parsed.network.primary_address, parsed.network.secondary_address, parsed.network.gateway)) {
+        snprintf(error, error_size, "Network needs distinct host addresses and a gateway reachable through either configured subnet");
         errno = EINVAL;
         goto fail;
     }
