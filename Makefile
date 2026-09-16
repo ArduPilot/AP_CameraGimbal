@@ -3,7 +3,7 @@
 
 # Check before any recipes run, including parallel release builds. Host tests,
 # SITL, source downloads and clean targets do not need hardware toolchains.
-HARDWARE_BUILD_GOALS := all release mt11_tools mt11_package _mt11_package \
+HARDWARE_BUILD_GOALS := all release mt11_package _mt11_package \
 	a8_package zr10 zr10_dependencies zr10_package zr10_firmware \
 	z1mini z1mini_package z1mini_native_package packaging/mt11/thermal_socket
 ifneq ($(filter $(HARDWARE_BUILD_GOALS),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
@@ -33,7 +33,6 @@ MT11_WEB_PASSWORD ?= ardupilot
 MT11_ROOT_PASSWORD ?= ardupilot
 MT11_ROOT_PASSWORD_HASH_FILE ?=
 MT11_TOOLS_ROOT ?= $(DEPS_ROOT)/mt11-tools
-MT11_TOOLS_STAMP := $(MT11_TOOLS_ROOT)/.built
 MT11_RSYNC := $(MT11_TOOLS_ROOT)/bin/rsync
 MT11_STRACE := $(MT11_TOOLS_ROOT)/bin/strace
 MT11_TCPDUMP := $(MT11_TOOLS_ROOT)/bin/tcpdump
@@ -93,6 +92,7 @@ release: camera-definitions
 release-test:
 	python3 tests/test_release.py
 	python3 tests/test_build_dependencies.py
+	python3 tests/test_prebuilt_tools.py
 
 .PHONY: platform-test
 platform-test:
@@ -113,10 +113,10 @@ build-dependencies: mavlink-dependencies
 dependencies: mavlink-dependencies
 	tools/bootstrap_dependencies.sh '$(DEPS_ROOT)'
 
-mt11_tools: $(MT11_TOOLS_STAMP)
-
-$(MT11_TOOLS_STAMP): tools/build_mt11_tools.sh
-	tools/build_mt11_tools.sh '$(MT11_TOOLS_ROOT)' '$(CROSS_COMPILE)'
+# Verify on every invocation: also repair deleted/corrupt cached binaries.
+# No cross compiler, source download or build-environment setup is needed.
+mt11_tools:
+	python3 tools/prebuilt_mt11_tools.py --output '$(MT11_TOOLS_ROOT)'
 
 sitl: $(SITL_BUILD)/rgb.h264 $(SITL_BUILD)/thermal.h264 \
 	$(SITL_BUILD)/photo.jpg
@@ -315,13 +315,12 @@ mt11_package:
 		echo 'Cannot determine the six-character Git commit hash' >&2; exit 1; \
 	}
 	$(MAKE) build-dependencies
-	$(MAKE) mt11_tools
 	$(MAKE) _mt11_package
 
 _mt11_package: all packaging/mt11/thermal_socket \
 	packaging/mt11/mt11-timesync.sh packaging/mt11/app_init.sh \
 	packaging/mt11/app_selection.sh packaging/mt11/start-dropbear.sh \
-	$(MT11_TOOLS_STAMP)
+	mt11_tools
 	tools/build_mt11_package.sh \
 		'$(MT11_KERNEL)' '$(MT11_ROOTFS)' '$(MT11_UPDATE_CONFIG)' \
 		'$(MT11_PACKAGE_OUT)' \

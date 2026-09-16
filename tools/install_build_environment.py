@@ -90,6 +90,8 @@ def ax_headers():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-system', action='store_true')
+    parser.add_argument('--with-tool-build-deps', action='store_true',
+                        help='also install prerequisites for rebuilding the prebuilt MT11 tools')
     parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
                         default=['mt11', 'a8', 'zr10', 'z1mini'])
     args = parser.parse_args()
@@ -100,12 +102,13 @@ def main():
         if shutil.which('apt-get') is None:
             parser.error('Use Debian/Ubuntu, or install prerequisites yourself and use --skip-system')
         run(*prefix, 'apt-get', 'update')
+        tool_build_deps = (['autoconf', 'automake', 'libtool', 'pkg-config',
+                            'bison', 'flex', 'gawk'] if args.with_tool_build_deps else [])
         run(*prefix, 'apt-get', 'install', '-y', 'build-essential', 'gcc-aarch64-linux-gnu',
             'g++-aarch64-linux-gnu', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
-            'autoconf', 'automake', 'libtool', 'pkg-config', 'bison', 'flex', 'gawk',
             'mtd-utils', 'fakeroot', 'zlib1g-dev', 'liblzo2-dev', 'libzstd-dev', 'liblzma-dev',
             'openssl', 'patch', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
-            'python3-av', 'python3-opencv')
+            'python3-av', 'python3-opencv', *tool_build_deps)
     BUILD.mkdir(exist_ok=True)
     env = BUILD / 'environment'
     if not (env / 'bin/python3').exists():
