@@ -6,7 +6,6 @@ Toolchains/SDKs are pinned and installed under build/; no shell setup is needed
 for subsequent top-level make commands.
 """
 import argparse
-import copy
 import hashlib
 import os
 from pathlib import Path
@@ -16,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from safe_tar import safe_extract
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -46,35 +46,7 @@ def sha256(path):
 
 # Unpack the downloaded compiler archive into a temporary directory
 def extract_toolchain(archive, destination):
-    with tarfile.open(archive) as tar:
-        # PEP 706 was backported to several maintained Python security
-        # branches, so test for the capability rather than the version.
-        if hasattr(tarfile, 'data_filter'):
-            tar.extractall(destination, filter='data')
-            return
-        members = []
-        destination = Path(destination).resolve()
-        for original in tar.getmembers():
-            member = copy.copy(original)
-            member_path = Path(member.name)
-            if member_path.is_absolute() or '..' in member_path.parts:
-                raise RuntimeError(f'Unsafe path in toolchain archive: {member.name}')
-            target = destination / member_path
-            if not target.resolve().is_relative_to(destination):
-                raise RuntimeError(f'Unsafe path in toolchain archive: {member.name}')
-            if member.issym():
-                link_target = (target.parent / member.linkname).resolve()
-                if not link_target.is_relative_to(destination):
-                    raise RuntimeError(f'Unsafe symlink in toolchain archive: {member.name}')
-            elif member.islnk():
-                link_path = Path(member.linkname)
-                if link_path.is_absolute() or '..' in link_path.parts:
-                    raise RuntimeError(f'Unsafe hardlink in toolchain archive: {member.name}')
-            elif not (member.isdir() or member.isreg()):
-                raise RuntimeError(f'Unsupported archive member: {member.name}')
-            member.mode &= 0o777
-            members.append(member)
-        tar.extractall(destination, members=members)
+    safe_extract(archive, destination)
 
 
 def toolchain(name):
