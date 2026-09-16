@@ -11,9 +11,13 @@
   cameras. It never downloads camera firmware bundles.
 - `bootstrap_dependencies.sh` downloads and verifies the pinned public SS928
   MPP sample tree and minimp4 header used by target and SITL builds.
-- `build_mt11_tools.sh` downloads, verifies and cross-compiles static AArch64
+- `prebuilt_mt11_tools.py` verifies and unpacks the stripped, compressed MT11
+  support tools from `packaging/mt11/tools/`. Normal release builds use these
+  binaries without downloading or compiling their sources.
+- `build_mt11_tools.sh` is the maintainer rebuild recipe: it downloads, verifies
+  and cross-compiles static AArch64
   `rsync`, `strace`, `ltrace`, `tcpdump`, Dropbear and `dropbearkey` binaries for
-  `/app/bin` in MT11 packages.
+  `/app/bin` in MT11 packages. See [refresh instructions](../packaging/mt11/tools/README.md).
 - `build_mt11_package.sh` creates an MT11 application update from the supported
   in-repository kernel, rootfs and update descriptor. It is normally invoked
   through `make mt11_package`; web and root passwords default to `ardupilot`
