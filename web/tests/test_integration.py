@@ -712,7 +712,8 @@ try:
     assert b"Parameters saved" in saved_proxy
     assert (root / "app" / "camera.ini").read_text() == proxy_config
     assert b'Secondary IPv4 address/prefix' in loaded_proxy
-    assert b'placeholder="192.168.2.97/24" pattern=' in loaded_proxy
+    assert b'placeholder="192.168.2.97/24"' not in loaded_proxy
+    assert b'For example 192.168.144.27/24' in loaded_proxy
     for changes in ({"network_primary_address": "192.168.2.97"},
                     {"network_primary_address": "192.0.2.0/24"},
                     {"network_primary_address": "192.0.2.255/24"},
