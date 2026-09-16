@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the legacy safe tar extraction path independently of host Python."""
 import io
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -38,12 +39,15 @@ class SafeTar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'out'
             self.extract_legacy(make_tar([
+                ('.', 'dir', b'', 0o777, None),
                 ('tool/bin/compiler', 'file', b'compiler', 0o4777, None),
+                ('tool/bin/nonexec', 'file', b'data', 0o055, None),
                 ('tool/link', 'symlink', b'', 0o777, 'bin/compiler'),
             ]), root)
             self.assertEqual((root / 'tool/bin/compiler').read_bytes(), b'compiler')
             self.assertEqual((root / 'tool/bin/compiler').stat().st_mode & 0o777, 0o755)
-            self.assertEqual((root / 'tool/link').readlink(), Path('bin/compiler'))
+            self.assertEqual((root / 'tool/bin/nonexec').stat().st_mode & 0o777, 0o044)
+            self.assertEqual(os.readlink(root / 'tool/link'), 'bin/compiler')
 
     def test_chained_symlink_escape_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -58,6 +62,7 @@ class SafeTar(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.extract_legacy(archive, root)
             self.assertFalse((Path(directory) / 'pwned').exists())
+            self.assertFalse((root / 'inside/pwned').exists())
 
 
 if __name__ == '__main__':
