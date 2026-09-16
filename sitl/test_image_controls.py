@@ -205,6 +205,27 @@ def integration(backend):
                 if 'IMG_BRIGHTNESS' in definition.parameters:
                     write(link, definition, 'REC_AUTOSTART', 1)
                     viewer.frame()
+                    # Issue #8: still capture must not stop or reject an active
+                    # video recording, including a timed photogrammetry series.
+                    before = set((root / 'capture').glob('*.jpg'))
+                    link.mav.command_long_send(42, 100, M.MAV_CMD_IMAGE_START_CAPTURE,
+                                               0, 0, .2, 3, 100, 0, 0, 0)
+                    ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_IMAGE_START_CAPTURE)
+                    assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                    expected = 9 if backend == 'mt11' else 3
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        new = set((root / 'capture').glob('*.jpg')) - before
+                        if len(new) == expected and all(cv2.imread(str(p)) is not None for p in new):
+                            break
+                        time.sleep(.05)
+                    else:
+                        raise AssertionError(f'{backend}: expected {expected} readable JPEGs, got {new}')
+                    link.mav.command_long_send(42, 100, M.MAV_CMD_REQUEST_CAMERA_CAPTURE_STATUS,
+                                               0, 1, 0, 0, 0, 0, 0, 0)
+                    status = receive(link, 'CAMERA_CAPTURE_STATUS')
+                    assert status.video_status == 1, status
+                    print('PASS interval photos while video remains recording (issue #8)', flush=True)
                     write(link, definition, 'IMG_BRIGHTNESS', 20)
                     viewer.frame()
                     write(link, definition, 'REC_AUTOSTART', 0)
