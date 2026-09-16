@@ -51,6 +51,10 @@ jobs:
       - name: Fetch pinned build sources
         run: make dependencies
       - name: Test ISP decoding, native IPC and background polling
-        run: make -C camera_app exposure-test
+        run: make -C camera_app exposure-test manual-control-test
+      - name: Test exclusive manual gimbal control and restart
+        run: |
+          make -C camera_app host
+          python3 camera_app/tests/test_manual_mavlink.py camera_app/tests/camera-app-host sitl/gimbal_sim.py
       - name: Test exposure BIN logs and live controls on all four simulated cameras
         run: make sitl-image-controls-test

@@ -46,6 +46,7 @@
 #define APCAM_WEB_BUILD 1
 #include "../include/apcam/target.h"
 #include "../include/apcam/gimbal_transform.h"
+#include "../include/apcam/manual_control.h"
 #define SERVER_NAME APCAM_NAME "-web/2.0"
 #define PRODUCT_NAME APCAM_PRODUCT_NAME
 #define WEB_HAVE_THERMAL APCAM_HAVE_THERMAL
@@ -1165,7 +1166,7 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_LIVE_HELP] = {"This uses the camera's encoded H.264 frames directly; no video proxy or transcoder is installed. Set the selected stream codec to H.264 if it is unavailable.", "此功能直接使用相机编码的 H.264 帧，未安装视频代理或转码器。若无法播放，请将所选视频流的编码格式设为 H.264。", "カメラがエンコードした H.264 フレームをそのまま使用します。映像プロキシやトランスコーダーはインストールされていません。表示できない場合は、選択したストリームのコーデックを H.264 に設定してください。"},
     [S_LIVE_PTZ] = {"Pan, tilt and zoom", "水平转动、俯仰与变焦", "パン・チルト・ズーム"},
     [S_LIVE_ENABLE_MANUAL] = {"Enable manual gimbal control", "启用手动云台控制", "ジンバルの手動操作を有効にする"},
-    [S_LIVE_MANUAL_NOTICE] = {"Manual commands can conflict with an aircraft or Lua script controlling the same gimbal. Direction buttons send bounded 180 ms pulses and always issue a stop.", "手动命令可能与控制同一云台的飞行器或 Lua 脚本冲突。方向按钮发送限定为 180 ms 的脉冲，并且始终会随后发送停止命令。", "手動コマンドは、同じジンバルを制御している機体や Lua スクリプトと競合することがあります。方向ボタンは 180 ms に制限したパルスを送り、必ず停止コマンドを送信します。"},
+    [S_LIVE_MANUAL_NOTICE] = {"Manual control temporarily blocks other gimbal commands and pauses ROI tracking. It clears on camera app restart or reboot, and expires if this page disconnects. Direction buttons send bounded 180 ms pulses and always issue a stop.", "手动控制会暂时阻止其他云台命令并暂停 ROI 跟踪。重启相机应用或相机后将清除，页面断开连接后会过期。方向按钮发送限定为 180 ms 的脉冲，并且始终会随后发送停止命令。", "手動操作中は他のジンバルコマンドと ROI 追跡を一時停止します。アプリやカメラの再起動、ページの切断で解除されます。方向ボタンは 180 ms に制限したパルスを送り、必ず停止コマンドを送信します。"},
     [S_LIVE_CENTRE] = {"Centre", "回中", "センター"},
     [S_LIVE_RATE] = {"Command rate", "控制速率", "操作速度"},
     [S_LIVE_ZOOM] = {"Zoom", "变焦", "ズーム"},
@@ -4454,150 +4455,75 @@ static int open_camera_api_socket(const struct timeval *timeout)
 }
 
 static bool send_live_control(const struct request *request, char *error,
-                              size_t error_size)
+                              size_t error_size, char acquired[33])
 {
-#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
-    size_t n = 0;
-    char *action = form_value(request, "action", &n);
-    char *value = form_value(request, "value", &n);
-    bool ok = z1_web_control(camera_api_port(), action, value);
-    free(action); free(value);
-    if (!ok) snprintf(error, error_size, "MAVLink control unavailable or unsupported");
-    return ok;
-#else
-    const struct timeval timeout = {.tv_sec = 1, .tv_usec = 0};
-    const uint8_t stop[] = {0U, 0U};
-    size_t action_length = 0U;
-    char *action = form_value(request, "action", &action_length);
-    uint8_t payload[2] = {0U, 0U};
-    uint8_t opcode = 0U;
-    int yaw_direction = 0;
-    int pitch_direction = 0;
-    bool pulse = false;
-    bool ok = false;
-    int fd = -1;
-
-    if (action == NULL) {
-        snprintf(error, error_size, "%s", T(S_E_MISSING_ACTION));
-        goto done;
-    }
-    if (action_length == 4U && memcmp(action, "left", 4U) == 0) {
-        opcode = 0x07U;
-        yaw_direction = -1;
-        pulse = true;
-    } else if (action_length == 5U && memcmp(action, "right", 5U) == 0) {
-        opcode = 0x07U;
-        yaw_direction = 1;
-        pulse = true;
-    } else if (action_length == 2U && memcmp(action, "up", 2U) == 0) {
-        opcode = 0x07U;
-        pitch_direction = 1;
-        pulse = true;
-    } else if (action_length == 4U && memcmp(action, "down", 4U) == 0) {
-        opcode = 0x07U;
-        pitch_direction = -1;
-        pulse = true;
-    } else if (action_length == 6U && memcmp(action, "center", 6U) == 0) {
-        opcode = 0x08U;
-        payload[0] = APCAM_WEB_CENTER_COMMAND;
-    } else if (action_length == 4U && memcmp(action, "zoom", 4U) == 0) {
-        size_t value_length = 0U;
-        char *value = form_value(request, "value", &value_length);
+    size_t n=0;
+    char *action=form_value(request,"action",&n);
+    char *value=form_value(request,"value",&n);
+    char *lease=form_value(request,"lease",&n);
+    struct apcam_manual_packet packet={.magic=APCAM_MANUAL_MAGIC};
+    bool ok=false;
+    int fd=-1;
+    acquired[0]='\0';
+    const char *actions[]={"acquire","renew","release","left","right","up","down","center","zoom"};
+    for (unsigned i=0; action && i<sizeof(actions)/sizeof(actions[0]); i++)
+        if (!strcmp(action,actions[i])) packet.action=i+1;
+    if (!packet.action) { snprintf(error,error_size,"%s",T(S_E_UNKNOWN_ACTION)); goto done; }
+    bool pulse=packet.action>=APCAM_MANUAL_LEFT && packet.action<=APCAM_MANUAL_DOWN;
+    if (pulse || packet.action==APCAM_MANUAL_ZOOM) {
+        if (!value) { snprintf(error,error_size,"%s",T(pulse ? S_E_MISSING_RATE : S_E_MISSING_ZOOM)); goto done; }
         char *end;
-        double zoom;
-
-        (void)value_length;
-        if (value == NULL) {
-            snprintf(error, error_size, "%s", T(S_E_MISSING_ZOOM));
-            goto done;
+        errno=0; packet.value=strtof(value,&end);
+        if (errno || end==value || *end || !isfinite(packet.value) ||
+            packet.value<(pulse ? 5 : 1) || packet.value>(pulse ? 60 : APCAM_ZOOM_CONTROL_MAX)) {
+            snprintf(error,error_size,"%s",T(pulse ? S_E_RATE_RANGE : S_E_ZOOM_RANGE)); goto done;
         }
-        errno = 0;
-        zoom = strtod(value, &end);
-        if (errno != 0 || *end != '\0' || !isfinite(zoom) || zoom < 1.0 ||
-            zoom > APCAM_ZOOM_CONTROL_MAX) {
-            free(value);
-            snprintf(error, error_size, "%s", T(S_E_ZOOM_RANGE));
-            goto done;
+    }
+    if (packet.action!=APCAM_MANUAL_ACQUIRE) {
+        if (!lease || strlen(lease)!=32 || strspn(lease,"0123456789abcdef")!=32) {
+            snprintf(error,error_size,"%s",T(S_JS_ENABLE_FIRST)); goto done;
         }
-        unsigned tenths = (unsigned)(zoom * 10.0 + 0.5);
-        payload[0] = (uint8_t)(tenths / 10U);
-        payload[1] = (uint8_t)(tenths % 10U);
-        opcode = 0x0fU;
-        free(value);
-    } else {
-        snprintf(error, error_size, "%s", T(S_E_UNKNOWN_ACTION));
+        for (unsigned i=0;i<16;i++) {
+            char hex[3]={lease[2*i],lease[2*i+1],0};
+            packet.token[i]=(uint8_t)strtoul(hex,NULL,16);
+        }
+    }
+    size_t size=0;
+    char *ready=read_file(CAMERA_READY_PATH,4096,&size);
+    unsigned port=0;
+    if (ready) {
+        const char *line=strstr(ready,"\nmanual_port=");
+        if (line) { char *end; unsigned long v=strtoul(line+13,&end,10);
+            if ((*end=='\n' || !*end) && v>0 && v<=65535) port=(unsigned)v; }
+        free(ready);
+    }
+    if (!port) { snprintf(error,error_size,"%s",T(S_E_CAMERA_NOT_RUNNING)); goto done; }
+    struct sockaddr_in address={.sin_family=AF_INET,.sin_addr.s_addr=htonl(INADDR_LOOPBACK),.sin_port=htons(port)};
+    const struct timeval timeout={.tv_sec=1};
+    fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
+    if (fd<0 || setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout))<0 ||
+        connect(fd,(struct sockaddr *)&address,sizeof(address))<0 ||
+        send(fd,&packet,sizeof(packet),0)!=(ssize_t)sizeof(packet)) {
+        snprintf(error,error_size,T(S_E_CAMERA_API),strerror(errno)); goto done;
+    }
+    struct apcam_manual_packet reply;
+    ssize_t received=recv(fd,&reply,sizeof(reply),0);
+    if (received!=sizeof(reply) || reply.magic!=packet.magic || reply.action!=packet.action) {
+        snprintf(error,error_size,"%s",T(S_E_CAMERA_NOT_RUNNING)); goto done;
+    }
+    if (reply.result) {
+        snprintf(error,error_size,"%s",reply.result==-EBUSY ? "Manual gimbal control is in use by another live view." :
+                 reply.result==-EACCES ? "Manual control expired or the camera app restarted. Enable it again." :
+                 "Camera could not apply manual control.");
         goto done;
     }
-    if (pulse) {
-        size_t value_length = 0U;
-        char *value = form_value(request, "value", &value_length);
-        char *end;
-        double rate;
-        unsigned units;
-
-        (void)value_length;
-        if (value == NULL) {
-            snprintf(error, error_size, "%s", T(S_E_MISSING_RATE));
-            goto done;
-        }
-        errno = 0;
-        rate = strtod(value, &end);
-        if (errno != 0 || *end != '\0' || !isfinite(rate) || rate < 5.0 ||
-            rate > 60.0) {
-            free(value);
-            snprintf(error, error_size, "%s", T(S_E_RATE_RANGE));
-            goto done;
-        }
-        units = (unsigned)(rate / 0.6 + 0.5);
-        payload[0] = (uint8_t)(int8_t)(yaw_direction * (int)units);
-        payload[1] = (uint8_t)(int8_t)(pitch_direction * (int)units);
-        free(value);
-    }
-#ifndef MT11_WEB_TEST
-    if (current_camera_kind() == CAMERA_NONE) {
-        snprintf(error, error_size, "%s", T(S_E_CAMERA_NOT_RUNNING));
-        goto done;
-    }
-#endif
-    fd = open_camera_api_socket(&timeout);
-    if (fd < 0) {
-        snprintf(error, error_size, T(S_E_CAMERA_API), strerror(errno));
-        goto done;
-    }
-    if (pulse) {
-        uint8_t status[16]; size_t length = 0;
-        bool inverted = vendor_siyi_exchange(fd, 0x7400U, 0x0aU, NULL, 0U,
-                                             status, sizeof(status), &length) && length >= 6U && status[5] == 2U;
-        float rates[3] = {0, (int8_t)payload[1], (int8_t)payload[0]};
-        apcam_transform(&apcam_rate_command[inverted], rates, rates, true);
-        payload[0] = (uint8_t)(int8_t)rates[2];
-        payload[1] = (uint8_t)(int8_t)rates[1];
-    }
-    /* Clear any older rate command before one-shot center/zoom actions. */
-    if (!pulse) (void)vendor_siyi_send(fd, 0x7400U, 0x07U, stop, sizeof(stop));
-    if (!vendor_siyi_send(fd, 0x7401U, opcode, payload,
-                          opcode == 0x08U ? 1U : sizeof(payload))) {
-        snprintf(error, error_size, T(S_E_SEND_CONTROL), strerror(errno));
-        goto done;
-    }
-    if (pulse) {
-        const struct timespec movement = {.tv_sec = 0, .tv_nsec = 180000000L};
-        const struct timespec retry = {.tv_sec = 0, .tv_nsec = 20000000L};
-        (void)nanosleep(&movement, NULL);
-        /* The stop is server-side and repeated, so a lost browser connection
-         * cannot leave the gimbal moving indefinitely. */
-        for (unsigned attempt = 0; attempt < 3U; attempt++) {
-            (void)vendor_siyi_send(fd, (uint16_t)(0x7402U + attempt), 0x07U,
-                                   stop, sizeof(stop));
-            if (attempt != 2U) (void)nanosleep(&retry, NULL);
-        }
-    }
-    ok = true;
+    if (packet.action==APCAM_MANUAL_ACQUIRE)
+        for (unsigned i=0;i<16;i++) snprintf(acquired+2*i,3,"%02x",reply.token[i]);
+    ok=true;
 done:
-    if (fd >= 0) close(fd);
-    free(action);
+    if (fd>=0) close(fd);
+    free(action); free(value); free(lease);
     return ok;
-#endif
 }
 
 #if WEB_HAVE_THERMAL
@@ -7348,17 +7274,67 @@ static const char live_script[] =
     "  };\n"
     "  window.setInterval(catchUp, 250);\n"
     "  stream.addEventListener('change', start); start();\n"
-    "  const sendControl = async (action, value) => {\n"
-    "    if (!enable.checked) { controlStatus.textContent = L.enableFirst; return false; }\n"
-    "    const body = new URLSearchParams({csrf: script.dataset.csrf, action}); if (value !== undefined) body.set('value', value);\n"
+    "  let lease = '', held = null, renewing = false, leaving = false;\n"
+    "  const controls = [...document.querySelectorAll('[data-direction]'), document.getElementById('live-center'), rate, zoom];\n"
+    "  const refreshControls = () => { controls.forEach(control => { control.disabled = !lease; }); };\n"
+    "  enable.checked = false; refreshControls();\n"
+    "  const controlRequest = async (action, token, value) => {\n"
+    "    const body = new URLSearchParams({csrf: script.dataset.csrf, action, lease: token});\n"
+    "    if (value !== undefined) body.set('value', value);\n"
+    "    const controller = new AbortController();\n"
+    "    const timeout = window.setTimeout(() => controller.abort(), 1500);\n"
     "    try {\n"
-    "      const response = await fetch('/live/control', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body});\n"
-    "      const message = (await response.text()).trim(); if (!response.ok) throw new Error(message || ('HTTP ' + response.status));\n"
-    "      controlStatus.textContent = message || L.commandSent; return true;\n"
-    "    } catch (error) { controlStatus.textContent = L.controlFailed + (error && error.message ? error.message : L.unknownError); return false; }\n"
+    "      const response = await fetch('/live/control', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body, signal: controller.signal});\n"
+    "      const message = (await response.text()).trim();\n"
+    "      if (!response.ok) throw new Error(message || ('HTTP ' + response.status));\n"
+    "      return message;\n"
+    "    } finally { window.clearTimeout(timeout); }\n"
     "  };\n"
-    "  enable.addEventListener('change', () => { rate.disabled = zoom.disabled = !enable.checked; controlStatus.textContent = enable.checked ? L.manualEnabled : L.manualDisabled; });\n"
-    "  let held = null;\n"
+    "  const dropControl = () => {\n"
+    "    const previous = lease; lease = ''; held = null; enable.checked = false; refreshControls();\n"
+    "    if (previous) fetch('/live/control', {method: 'POST', keepalive: true,\n"
+    "      body: new URLSearchParams({csrf: script.dataset.csrf, action: 'release', lease: previous})}).catch(() => {});\n"
+    "  };\n"
+    "  enable.addEventListener('change', async () => {\n"
+    "    enable.disabled = true;\n"
+    "    try {\n"
+    "      if (enable.checked) {\n"
+    "        const token = await controlRequest('acquire', '');\n"
+    "        if (!/^[0-9a-f]{32}$/.test(token)) throw new Error(L.unknownError);\n"
+    "        lease = token;\n"
+    "        if (leaving) dropControl();\n"
+    "        else controlStatus.textContent = L.manualEnabled;\n"
+    "      } else {\n"
+    "        const previous = lease; lease = ''; held = null; refreshControls();\n"
+    "        if (previous) await controlRequest('release', previous);\n"
+    "        controlStatus.textContent = L.manualDisabled;\n"
+    "      }\n"
+    "    } catch (error) {\n"
+    "      dropControl(); controlStatus.textContent = L.controlFailed + error.message;\n"
+    "    } finally { enable.checked = !!lease; enable.disabled = false; refreshControls(); }\n"
+    "  });\n"
+    "  window.setInterval(async () => {\n"
+    "    if (!lease || renewing) return;\n"
+    "    const previous = lease; renewing = true;\n"
+    "    try { await controlRequest('renew', previous); }\n"
+    "    catch (error) { if (lease === previous) { dropControl(); controlStatus.textContent = L.controlFailed + error.message; } }\n"
+    "    finally { renewing = false; }\n"
+    "  }, 1000);\n"
+    "  window.addEventListener('pagehide', () => { leaving = true; dropControl(); });\n"
+    "  window.addEventListener('pageshow', () => { leaving = false; });\n"
+    "  const sendControl = async (action, value) => {\n"
+    "    if (!lease) { controlStatus.textContent = L.enableFirst; return false; }\n"
+    "    const previous = lease;\n"
+    "    try {\n"
+    "      const message = await controlRequest(action, previous, value);\n"
+    "      controlStatus.textContent = message || L.commandSent;\n"
+    "      await new Promise(resolve => window.setTimeout(resolve, 200));\n"
+    "      return lease === previous;\n"
+    "    } catch (error) {\n"
+    "      if (lease === previous) dropControl();\n"
+    "      controlStatus.textContent = L.controlFailed + error.message; return false;\n"
+    "    }\n"
+    "  };\n"
     "  const release = () => { held = null; };\n"
     "  document.querySelectorAll('[data-direction]').forEach(button => button.addEventListener('pointerdown', async event => {\n"
     "    event.preventDefault(); if (!enable.checked || held) return; held = button.dataset.direction; button.setPointerCapture(event.pointerId);\n"
@@ -8284,9 +8260,9 @@ static void handle_request(int fd, const char *peer)
             free(lang);
             free(next);
         } else if (strcmp(request.path, "/live/control") == 0) {
-            if (send_live_control(&request, error, sizeof(error))) {
-                log_message("bounded live gimbal control sent by %s", peer);
-                send_text_errorf(fd, 200, "OK", S_COMMAND_SENT);
+            char acquired[33];
+            if (send_live_control(&request, error, sizeof(error), acquired)) {
+                send_text_error(fd,200,"OK",acquired[0] ? acquired : T(S_COMMAND_SENT),NULL);
             } else {
                 log_message("live gimbal control failed for %s: %s", peer,
                             error);

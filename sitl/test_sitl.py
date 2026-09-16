@@ -16,6 +16,8 @@ import time
 import urllib.request
 import urllib.parse
 
+from gimbal_sim import Gimbal
+
 
 def crc16(data):
     value = 0
@@ -109,6 +111,7 @@ def main():
     gimbal_script = pathlib.Path(args.gimbal_sim).resolve()
     runtime = pathlib.Path(args.runtime).resolve()
     build = camera_binary.parent
+    expected_vendor_rate = Gimbal(1, args.backend).vendor_rate_response("yaw", 10)
     gimbal_port = reserve_port(socket.SOCK_DGRAM)
     camera_port = reserve_port(socket.SOCK_DGRAM)
     rtsp_port = reserve_port(socket.SOCK_STREAM)
@@ -117,12 +120,7 @@ def main():
     gimbal_ready = runtime / "run/test-gimbal.ready"
     ready.unlink(missing_ok=True)
     gimbal_ready.unlink(missing_ok=True)
-    expected_captures = [
-        runtime / f"mnt/DCIM/capture/SITL_000001_{suffix}.jpg"
-        for suffix in ("C", "Z", "I")
-    ]
-    for capture in expected_captures:
-        capture.unlink(missing_ok=True)
+    captures_before = set((runtime / "mnt/DCIM/capture").rglob("*.jpg"))
     processes = []
     logs = []
     try:
@@ -209,7 +207,7 @@ def main():
             moved_yaw /= 10.0
             moved_yaw_rate /= 10.0
             assert yaw_sign * (moved_yaw - initial_yaw) > 1.0, (initial_yaw, moved_yaw)
-            assert abs(moved_yaw_rate - yaw_sign * 6.0) < 0.2, moved_yaw_rate
+            assert abs(moved_yaw_rate - yaw_sign * expected_vendor_rate) < 0.2, moved_yaw_rate
             client.send(siyi(4, 0x07, b"\x00\x00"))
         else:
             request(client, 2, 0x0E, struct.pack("<hh", 100, -50))
@@ -227,7 +225,9 @@ def main():
             client.send(siyi(5, 0x0C, b"\x00"))
             feedback = request(client, 6, 0x0B)
             assert feedback == b"\x00"
-            assert all(path.stat().st_size > 0 for path in expected_captures)
+            captured = set((runtime / "mnt/DCIM/capture").rglob("*.jpg")) - captures_before
+            assert {p.stem[-1] for p in captured} == {"C", "Z", "I"}, captured
+            assert all(p.stat().st_size > 0 for p in captured)
         client.close()
 
         web_log = open(runtime / "run/test-web.log", "w", encoding="utf-8")
@@ -271,16 +271,19 @@ def main():
         time.sleep(0.15)
         with web_request(web_port, "/live/attitude.json") as response:
             moving = json.load(response)
-        assert abs(moving["yaw_rate_dps"] - 6.0) < 0.2, moving
+        assert abs(moving["yaw_rate_dps"] - expected_vendor_rate) < 0.2, moving
         control.send(siyi(81, 0x07, b"\x00\x00"))
         control.close()
         time.sleep(0.15)
         with web_request(web_port, "/live/attitude.json") as response:
             pulse_start = json.load(response)
+        with web_form(web_port, "/live/control", csrf, {"action": "acquire"}) as response:
+            lease = response.read().decode().strip()
+        assert re.fullmatch("[0-9a-f]{32}", lease), lease
         with web_form(web_port, "/live/control", csrf,
-                      {"action": "right", "value": "30"}) as response:
+                      {"action": "right", "value": "30", "lease": lease}) as response:
             assert response.status == 200
-        time.sleep(0.15)
+        time.sleep(0.25)
         with web_request(web_port, "/live/attitude.json") as response:
             moved = json.load(response)
         assert moved["yaw_deg"] > pulse_start["yaw_deg"] + 3.0, \
@@ -290,6 +293,24 @@ def main():
             settled = json.load(response)
         assert abs(settled["yaw_deg"] - moved["yaw_deg"]) < 0.3, \
             (moved, settled)
+        # Incoming vendor movement cannot override the manual lease; attitude
+        # queries still work, and control resumes immediately after release.
+        control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        control.connect(("127.0.0.1", camera_port))
+        control.send(siyi(90, 0x07, bytes((50, 0))))
+        time.sleep(0.25)
+        with web_request(web_port, "/live/attitude.json") as response:
+            blocked = json.load(response)
+        assert abs(blocked["yaw_deg"] - settled["yaw_deg"]) < 0.3, (blocked, settled)
+        with web_form(web_port, "/live/control", csrf, {"action": "release", "lease": lease}):
+            pass
+        control.send(siyi(91, 0x07, bytes((50, 0))))
+        time.sleep(0.25)
+        control.send(siyi(92, 0x07, bytes((0, 0))))
+        control.close()
+        with web_request(web_port, "/live/attitude.json") as response:
+            unlocked = json.load(response)
+        assert unlocked["yaw_deg"] > blocked["yaw_deg"] + 2, (unlocked, blocked)
         with web_request(web_port, "/live/video1.mp4") as response:
             video = response.read(1024)
         assert b"ftyp" in video

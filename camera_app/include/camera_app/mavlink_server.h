@@ -8,6 +8,7 @@ struct ca_media;
 struct ca_mavlink_server;
 
 struct ca_mavlink_server_config {
+    const bool *manual_control;
     unsigned tcp_port;
     unsigned udp_port;
     const char *uart_device;
@@ -24,6 +25,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **server,
                            const struct ca_mavlink_server_config *config);
 int ca_mavlink_server_fd(const struct ca_mavlink_server *server);
 int ca_mavlink_server_handle(struct ca_mavlink_server *server);
+void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server);
 void ca_mavlink_server_periodic(struct ca_mavlink_server *server);
 void ca_mavlink_server_close(struct ca_mavlink_server *server);
 

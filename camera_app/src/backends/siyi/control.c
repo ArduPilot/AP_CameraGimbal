@@ -64,6 +64,7 @@
 #define A8_LINK_MAX_FRAME (A8_LINK_OVERHEAD + A8_LINK_MAX_PAYLOAD)
 
 struct ca_backend {
+    const bool *manual_control, *manual_command;
     int uart_fd;
     bool datagram_transport;
 #if APCAM_TARGET == APCAM_TARGET_ZR10
@@ -520,6 +521,8 @@ int ca_backend_open(struct ca_backend **result,
     device = config->uart_device != NULL ? config->uart_device : A8_DEFAULT_UART;
     backend = calloc(1, sizeof(*backend));
     if (backend == NULL) return -1;
+    backend->manual_control=config->manual_control;
+    backend->manual_command=config->manual_command;
     backend->datagram_transport = strncmp(device, "udp://", 6U) == 0;
     backend->uart_fd = backend->datagram_transport
                            ? ca_open_udp_transport(device)
@@ -613,6 +616,8 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         errno = EPROTO;
         return -1;
     }
+    if (ca_backend_manual_blocked(backend->manual_control,backend->manual_command,
+                                  packet.opcode,packet.payload,packet.payload_length)) return 0;
     ca_binlog_vendor(packet.opcode, packet.payload, packet.payload_length);
     ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode,
                                      packet.payload, packet.payload_length);

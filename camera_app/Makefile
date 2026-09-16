@@ -85,7 +85,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.c) src/main.c \
 	src/config.c \
-	src/log.c src/recording/binlog.c \
+	src/log.c src/recording/binlog.c src/protocol/manual_control.c \
 	src/media/autofocus.c src/media/media.c \
 	src/protocol/mavlink.c \
 	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
@@ -506,7 +506,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.c \
 		src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
 		src/log.c src/recording/video_metadata.c src/recording/metadata.c -lpthread -lm
 
-test: tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -578,7 +578,7 @@ clean:
 	rm -f tests/test_gimbal_rate
 	rm -f tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
-	rm -f $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
+	rm -f tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \
 		tests/test.ffprobe.err tests/test.fragmented.ffprobe.err
 	rm -rf build
@@ -653,3 +653,10 @@ tests/test_exposure: tests/test_exposure.c include/camera_app/sigmastar_exposure
 
 tests/test_exposure_native: tests/test_z1mini_native.c src/backends/z1mini/native.c src/backends/z1mini/native.h include/camera_app/exposure.h src/log.c
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/test_z1mini_native.c src/backends/z1mini/native.c src/log.c -lpthread -lm
+
+.PHONY: manual-control-test
+manual-control-test: tests/test_manual_control
+	./tests/test_manual_control
+
+tests/test_manual_control: tests/test_manual_control.c src/protocol/manual_control.c include/camera_app/manual_control.h ../include/apcam/manual_control.h include/camera_app/backend.h
+	$(HOST_CC) -Wall -Wextra -Werror -std=c11 -DAPCAM_TARGET=APCAM_TARGET_MT11 -I../include -Iinclude -o $@ $< -lm

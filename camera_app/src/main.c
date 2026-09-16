@@ -7,6 +7,7 @@
 #include "backends/z1mini/native.h"
 #endif
 #include "camera_app/backend.h"
+#include "camera_app/manual_control.h"
 #include "camera_app/config.h"
 #include "camera_app/log.h"
 #include "camera_app/binlog.h"
@@ -250,7 +251,7 @@ static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
 
 static int write_ready(const struct ca_backend *backend, unsigned port,
                        unsigned mavlink_tcp_port, unsigned mavlink_udp_port,
-                       enum ca_uart_protocol uart_protocol)
+                       enum ca_uart_protocol uart_protocol, unsigned manual_port)
 {
     int fd = open(ready_path(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     char text[256];
@@ -260,7 +261,7 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
     length = snprintf(text, sizeof(text),
                       "backend=%s\npid=%ld\nudp_port=%u\ntcp_port=%u\n"
                       "mavlink_tcp_port=%u\nmavlink_udp_port=%u\n"
-                      "uart_protocol=%s\nrecording=%u\n",
+                      "uart_protocol=%s\nrecording=%u\nmanual_port=%u\n",
                       ca_backend_name(backend), (long)getpid(), port,
 #if APCAM_HAVE_XFROBOT
                       port == APCAM_VENDOR_PORT ? APCAM_VENDOR_TCP_PORT : port,
@@ -269,7 +270,7 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
 #endif
                       mavlink_tcp_port, mavlink_udp_port,
                       ca_uart_protocol_name(uart_protocol),
-                      ca_backend_recording(backend) ? 1U : 0U);
+                      ca_backend_recording(backend) ? 1U : 0U, manual_port);
     if (length < 0 || (size_t)length >= sizeof(text) ||
         write(fd, text, (size_t)length) != length) {
         int saved_errno = errno;
@@ -302,6 +303,7 @@ int main(int argc, char **argv)
     struct ca_xfrobot_server *xfrobot = NULL;
 #endif
     struct ca_mavlink_server *mavlink_server = NULL;
+    struct ca_manual_control manual = {.fd=-1};
     struct ca_backend *backend = NULL;
     struct ca_media *media = NULL;
     struct ca_backend_config config;
@@ -423,6 +425,8 @@ int main(int argc, char **argv)
         ca_log("cannot open media backend %s: %s", backend_name, strerror(errno));
         goto done;
     }
+    config.manual_control=&manual.active;
+    config.manual_command=&manual.executing;
     config.name = backend_name;
     config.uart_device = uart_device;
 #if APCAM_HAVE_XFROBOT
@@ -490,12 +494,15 @@ int main(int argc, char **argv)
         .photo_scope = app_config.photo_scope,
         .settings = app_config,
         .backend = backend,
+        .manual_control = &manual.active,
         .media = media,
     };
     if (ca_mavlink_server_open(&mavlink_server, &mavlink_config) < 0) {
         ca_log("cannot initialize MAVLink: %s", strerror(errno));
         goto done;
     }
+    if (ca_manual_control_open(&manual,backend,mavlink_server)<0)
+        ca_log("web manual control unavailable: %s",strerror(errno));
     if (app_config.autorecord == CA_AUTORECORD_ENABLED &&
         ca_media_set_recording(media, true) < 0) {
         ca_log("automatic recording could not start: %s", strerror(errno));
@@ -504,7 +511,7 @@ int main(int argc, char **argv)
      * Restore application-owned shutdown handling once all of them are loaded. */
     install_signal_handlers();
     if (write_ready(backend, port, mavlink_tcp_port, mavlink_udp_port,
-                    app_config.uart_protocol) < 0) {
+                    app_config.uart_protocol, manual.port) < 0) {
         ca_log("cannot publish readiness: %s", strerror(errno));
         goto done;
     }
@@ -524,20 +531,22 @@ int main(int argc, char **argv)
         }
 #endif
 #if APCAM_HAVE_XFROBOT
-        ca_xfrobot_server_update(xfrobot, backend, media);
+        ca_xfrobot_server_update(xfrobot, backend, media, manual.active);
 #endif
         if (++loops % 50U == 0U) restore_signal_handlers();
-        struct pollfd items[3] = {
+        struct pollfd items[4] = {
             {.fd = ca_siyi_server_fd(server), .events = POLLIN},
             {.fd = ca_backend_fd(backend), .events = POLLIN},
             {.fd = ca_mavlink_server_fd(mavlink_server), .events = POLLIN},
+            {.fd = manual.fd, .events = POLLIN},
         };
-        int ready = poll(items, 3, 20);
+        int ready = poll(items, 4, 20);
         if (ready < 0) {
             if (errno == EINTR) continue;
             ca_log("poll failed: %s", strerror(errno));
             goto done;
         }
+        ca_manual_control_update(&manual);
         if ((items[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
             ca_log("backend descriptor failed");
             goto done;
@@ -573,6 +582,7 @@ int main(int argc, char **argv)
 
 done:
     (void)unlink(ready_path());
+    ca_manual_control_close(&manual);
     ca_mavlink_server_close(mavlink_server);
     ca_backend_close(backend);
     ca_media_close(media);

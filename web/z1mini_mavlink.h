@@ -58,44 +58,4 @@ static bool z1_web_attitude(unsigned port, float *roll, float *pitch, float *yaw
 done:
     close(fd); return ok;
 }
-static bool z1_web_rate(int fd, float pitch, float yaw, bool neutral)
-{
-    mavlink_message_t message;
-    const float q[4] = {NAN, NAN, NAN, NAN};
-    mavlink_msg_gimbal_device_set_attitude_pack(255, 191, &message, 0, 154,
-        neutral ? GIMBAL_DEVICE_FLAGS_NEUTRAL : GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME,
-        q, NAN, pitch, yaw);
-    return z1_web_send(fd, &message);
-}
-static bool z1_web_control(unsigned port, const char *action, const char *value)
-{
-    if (!action) return false;
-    bool neutral = !strcmp(action, "center");
-    float pitch = 0, yaw = 0;
-    if (!neutral) {
-        if (!value) return false;
-        char *end; errno = 0;
-        float rate = strtof(value, &end);
-        if (errno || end == value || *end || !isfinite(rate) || rate < 5 || rate > 60) return false;
-        rate *= 0.01745329252f;
-        if (!strcmp(action, "left")) yaw = -rate;
-        else if (!strcmp(action, "right")) yaw = rate;
-        else if (!strcmp(action, "up")) pitch = rate;
-        else if (!strcmp(action, "down")) pitch = -rate;
-        else return false;
-    }
-    float r, p, y;
-    if (!z1_web_attitude(port, &r, &p, &y)) return false;
-    int fd = z1_web_socket(port);
-    if (fd < 0) return false;
-    bool ok = z1_web_rate(fd, pitch, yaw, neutral);
-    if (!neutral) {
-        usleep(180000);
-        for (unsigned i = 0; i < 3; i++) {
-            ok = z1_web_rate(fd, 0, 0, false) && ok;
-            usleep(20000);
-        }
-    }
-    close(fd); return ok;
-}
 #endif

@@ -323,9 +323,14 @@ def main():
             assert json.loads(attitude)['yaw_rate_dps'] is None
             live = request('/live')
             token = re.search(r'data-csrf="([a-f0-9]+)"', live)[1]
+            connection = http.client.HTTPConnection('127.0.0.1', webport, timeout=5)
+            connection.request('POST', '/live/control', urlencode({'csrf':token, 'action':'acquire'}),
+                {'Authorization':auth, 'Content-Type':'application/x-www-form-urlencoded'})
+            response = connection.getresponse(); lease = response.read().decode().strip(); connection.close()
+            assert response.status == 200, lease
             before = struct.unpack_from('<h', mcu.frames[-1], 11)[0]
             connection = http.client.HTTPConnection('127.0.0.1', webport, timeout=5)
-            connection.request('POST', '/live/control', urlencode({'csrf':token, 'action':'right', 'value':'10'}),
+            connection.request('POST', '/live/control', urlencode({'csrf':token, 'action':'right', 'value':'10', 'lease':lease}),
                 {'Authorization':auth, 'Content-Type':'application/x-www-form-urlencoded'})
             response = connection.getresponse(); body = response.read(); connection.close()
             assert response.status == 200, (response.status, body)

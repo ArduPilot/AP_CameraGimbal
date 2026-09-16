@@ -33,6 +33,7 @@
 #define THERMAL_RANGE_INTERVAL_MS 200U
 
 struct ca_backend {
+    const bool *manual_control, *manual_command;
     int uart_fd;
     bool datagram_transport;
     uint16_t private_sequence;
@@ -482,6 +483,8 @@ int ca_backend_open(struct ca_backend **result,
     device = config->uart_device != NULL ? config->uart_device : "/dev/ttyAMA3";
     backend = calloc(1, sizeof(*backend));
     if (backend == NULL) return -1;
+    backend->manual_control=config->manual_control;
+    backend->manual_command=config->manual_command;
     backend->datagram_transport = strncmp(device, "udp://", 6U) == 0;
     backend->uart_fd = backend->datagram_transport
                            ? open_udp_transport(device)
@@ -580,6 +583,8 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         errno = EPROTO;
         return -1;
     }
+    if (ca_backend_manual_blocked(backend->manual_control,backend->manual_command,
+                                  packet.opcode,packet.payload,packet.payload_length)) return 0;
     if (packet.opcode == 0x0cU && packet.payload_length == 1U &&
         packet.payload[0] == 2U) {
         emit_feedback(backend, toggle_recording(backend));

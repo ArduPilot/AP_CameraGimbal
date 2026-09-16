@@ -97,6 +97,7 @@ $(HOST_TEST): mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 		-DSOC_TSENSOR_DEVICE='"$(TEST_ROOT)/soc-temperature"' \
 		-DSOC_TSENSOR_MAP_OFFSET=0 \
 		-DSESSION_PATH='"$(TEST_ROOT)/sessions"' \
+		-DCAMERA_READY_PATH='"$(TEST_ROOT)/camera-app.ready"' \
 		-o $@ $< -lm
 
 sitl: $(SITL_TARGET)

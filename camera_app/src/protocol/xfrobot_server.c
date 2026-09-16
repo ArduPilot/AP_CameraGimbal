@@ -18,7 +18,8 @@
 #define CLIENTS 4
 #define MAX_PACKET 256U
 struct client { int fd; uint8_t input[MAX_PACKET], output[73]; size_t used, sent, pending; };
-struct ca_xfrobot_server { int tcp, udp; bool inverted; struct client clients[CLIENTS]; };
+struct ca_xfrobot_server {
+    bool manual_control; int tcp, udp; bool inverted; struct client clients[CLIENTS]; };
 static uint16_t crc16(const uint8_t *data, size_t length)
 {
     uint16_t crc = 0;
@@ -64,7 +65,8 @@ static bool reply(struct ca_xfrobot_server *server, struct ca_backend *backend, 
     float command[3] = {(int16_t)get16(data + 5) * 0.01f, (int16_t)get16(data + 7) * 0.01f, (int16_t)get16(data + 9) * 0.01f};
     apcam_inverse_transform(&apcam_angle_command[server->inverted], command, command, false);
     float rad = 0.00017453292519943296f;
-    switch (data[69]) {
+    bool blocked=server->manual_control && (data[69]==0x03 || data[69]==0x10 || data[69]==0x13);
+    if (!blocked) switch (data[69]) {
     case 0: result = 0; break;
     case 0x03: result = ca_backend_set_gimbal_neutral(backend); break;
     case 0x10:
@@ -108,9 +110,10 @@ static void close_client(struct client *c)
     if (c->fd >= 0) close(c->fd);
     memset(c, 0, sizeof(*c)); c->fd = -1;
 }
-void ca_xfrobot_server_update(struct ca_xfrobot_server *s, struct ca_backend *backend, struct ca_media *media)
+void ca_xfrobot_server_update(struct ca_xfrobot_server *s, struct ca_backend *backend, struct ca_media *media, bool manual_control)
 {
     if (!s) return;
+    s->manual_control=manual_control;
     if (s->tcp >= 0) {
         int fd = accept4(s->tcp, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd >= 0) {

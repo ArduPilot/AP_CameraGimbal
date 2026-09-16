@@ -42,6 +42,7 @@ struct ca_gimbal_attitude {
 };
 
 struct ca_backend_config {
+    const bool *manual_control, *manual_command;
     const char *name;
     const char *uart_device;
     ca_siyi_emit_fn emit;
@@ -76,6 +77,16 @@ struct ca_backend_config {
     ca_inverted_set_fn inverted_set;
     void *inverted_opaque;
 };
+
+/* Incoming vendor motion must not override the web's temporary lease. */
+static inline bool ca_backend_manual_blocked(const bool *active, const bool *command,
+                                             uint8_t opcode, const uint8_t *payload, size_t length)
+{
+    if (!active || !*active || (command && *command)) return false;
+    return opcode==0x07 || opcode==0x08 || opcode==0x0e || opcode==0x40 ||
+           opcode==0x55 || opcode==0x56 ||
+           (opcode==0x0c && length==1 && payload[0]>=3 && payload[0]<=5);
+}
 
 int ca_backend_open(struct ca_backend **backend,
                     const struct ca_backend_config *config);

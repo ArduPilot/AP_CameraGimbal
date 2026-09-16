@@ -70,6 +70,7 @@ struct ext_parameter_list {
 };
 
 struct ca_mavlink_server {
+    const bool *manual_control;
     struct ca_support_mavlink *support;
     struct route flight_controller_route;
     bool have_flight_controller_route;
@@ -976,6 +977,7 @@ static float bounded(float value, float limit)
 
 static void update_target_location(struct ca_mavlink_server *server, uint64_t now)
 {
+    if (server->manual_control && *server->manual_control) return;
     bool rate = server->settings.tracking_method == CA_TRACK_RATE;
     unsigned interval = rate ? 50U : TARGET_LOCATION_INTERVAL_MS;
     if (!server->target_location_active || !server->settings.position_targeting) {
@@ -1552,6 +1554,15 @@ static void handle_global_position_int(
     }
 }
 
+void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server)
+{
+    /* Preserve the ROI for release, but discard its controller history. */
+    if (!server) return;
+    stop_tracking_rate(server);
+    server->last_target_location_ms=0;
+    server->yaw_lock=false;
+}
+
 static bool clear_target_location(struct ca_mavlink_server *server)
 {
     bool was_active = server->target_location_active;
@@ -1575,6 +1586,11 @@ static void handle_command_int(struct ca_mavlink_server *server,
     }
     uint16_t command = request.command;
     uint8_t result = MAV_RESULT_UNSUPPORTED;
+    if (server->manual_control && *server->manual_control &&
+        (command==MAV_CMD_DO_SET_ROI_LOCATION || command==MAV_CMD_DO_SET_ROI_NONE)) {
+        send_ack(server,route,CA_GIMBAL_COMPONENT_ID,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
+        return;
+    }
     if (command == MAV_CMD_DO_SET_ROI_LOCATION) {
         uint8_t frame = request.frame;
         int32_t lat_e7 = request.x;
@@ -1616,6 +1632,7 @@ static void handle_command_int(struct ca_mavlink_server *server,
 static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
                                        const mavlink_message_t *message)
 {
+    if (server->manual_control && *server->manual_control) return;
     mavlink_gimbal_device_set_attitude_t request;
     if (message->len < MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_MIN_LEN) return;
     mavlink_msg_gimbal_device_set_attitude_decode(message, &request);
@@ -2461,6 +2478,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     }
     memcpy(server->capture_root, config->capture_root,
            strlen(config->capture_root) + 1U);
+    server->manual_control = config->manual_control;
     server->backend = config->backend;
     server->media = config->media;
     server->settings = config->settings;

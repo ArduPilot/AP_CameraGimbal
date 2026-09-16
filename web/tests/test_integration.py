@@ -144,6 +144,27 @@ def camera_api_mock():
 camera_thread = threading.Thread(target=camera_api_mock, daemon=True)
 camera_thread.start()
 
+# Mock the private camera-app control endpoint independently of SIYI.
+manual_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+manual_socket.bind(("127.0.0.1", 0))
+(root / "camera-app.ready").write_text(
+    f"backend=mt11\nmanual_port={manual_socket.getsockname()[1]}\n")
+manual_events = []
+manual_token = bytes(range(16))
+
+
+def manual_mock():
+    while True:
+        data, peer = manual_socket.recvfrom(1024)
+        magic, action, token, value, result = struct.unpack("=II16sfi", data)
+        assert magic == 0x4d434131
+        assert action == 1 or token == manual_token
+        manual_events.append((action, value))
+        manual_socket.sendto(struct.pack("=II16sfi", magic, action, manual_token, value, 0), peer)
+
+
+threading.Thread(target=manual_mock, daemon=True).start()
+
 live_socket = socket.socket()
 live_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 live_socket.bind(("127.0.0.1", 0))
@@ -854,27 +875,17 @@ try:
     )
     assert status == 400 and b"Missing gimbal rate" in body
     assert not camera_events["controls"]
-    status, body, _ = form(
-        "/live/control", "initial-password", csrf,
-        {"action": "left", "value": "30"},
-    )
-    assert status == 200 and b"Command sent" in body
-    deadline = time.monotonic() + 1
-    while len(camera_events["controls"]) < 4 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert camera_events["controls"][0] == (0x07, b"\xce\x00")
-    assert camera_events["controls"][-3:] == [(0x07, b"\x00\x00")] * 3
-    before = len(camera_events["controls"])
-    assert form(
-        "/live/control", "initial-password", csrf,
-        {"action": "zoom", "value": "3.7"},
-    )[0] == 200
-    deadline = time.monotonic() + 1
-    while len(camera_events["controls"]) < before + 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert camera_events["controls"][before:] == [
-        (0x07, b"\x00\x00"), (0x0F, b"\x03\x07")
-    ]
+    assert form("/live/control", "initial-password", csrf,
+                {"action": "left", "value": "30"})[0] == 400
+    status, body, _ = form("/live/control", "initial-password", csrf,
+                           {"action": "acquire"})
+    assert status == 200 and body.strip().decode() == manual_token.hex()
+    for action, value in (("left", "30"), ("zoom", "3.7"), ("renew", "0"), ("release", "0")):
+        assert form("/live/control", "initial-password", csrf,
+                    {"action": action, "value": value, "lease": manual_token.hex()})[0] == 200
+    assert [a for a, v in manual_events] == [1, 4, 9, 2, 3]
+    assert manual_events[1][1] == 30
+    assert not camera_events["controls"]
 
     status, _, _ = form("/sensors/capture", "initial-password", "0" * 64, {})
     assert status == 400 and camera_events["captures"] == 0
