@@ -285,15 +285,26 @@ def main():
              100000.0],
         )
         initial = wait_attitude(connection, lambda _angles: True)
-        command(
-            connection, mavutil.mavlink.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
-            [-5.0, 0.0, math.nan, math.nan, 0, 0, 0],
-        )
-        final = wait_attitude(
-            connection,
-            lambda angles: abs(angles[1] - -5.0) < 2.0,
-        )
-        print(f"AP_Mount: attitude moved from {initial} to {final}")
+        # AP_Mount_Siyi uses P=1.5 and 90 deg/s full scale, truncating its
+        # command to an integer. The measured MT11 dead zone is +/-5 command
+        # units, so it can stop up to 6 * 90 / (100 * 1.5) = 3.6 degrees
+        # short. See docs/mt11-rate-calibration.md. Preserve the real plant;
+        # check substantial motion in both directions within that bound.
+        tolerance = 3.6 + 0.1  # feedback is quantised to 0.1 degrees
+        previous = initial
+        for target_pitch in (-5.0, -35.0):
+            command(
+                connection, mavutil.mavlink.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
+                [target_pitch, 0.0, math.nan, math.nan, 0, 0, 0],
+            )
+            final = wait_attitude(
+                connection,
+                lambda angles: abs(angles[1] - target_pitch) <= tolerance,
+            )
+            assert abs(final[1] - previous[1]) > 5.0, (previous, final)
+            assert abs(final[2]) < 2.0, final
+            print(f"AP_Mount: target pitch {target_pitch}, attitude moved from {previous} to {final}")
+            previous = final
 
         command(
             connection, mavutil.mavlink.MAV_CMD_SET_CAMERA_ZOOM,

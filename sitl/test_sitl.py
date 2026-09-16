@@ -16,7 +16,10 @@ import time
 import urllib.request
 import urllib.parse
 
-from gimbal_sim import Gimbal
+if __package__:
+    from .gimbal_sim import Gimbal
+else:
+    from gimbal_sim import Gimbal
 
 
 def crc16(data):
