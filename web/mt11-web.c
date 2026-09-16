@@ -5753,8 +5753,7 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
                        parameter->kind == PARAM_PASSWORD ? "password" : "text",
                        parameter->minimum, parameter->maximum);
             if (!strcmp(parameter->form_name, "network_primary_address") || !strcmp(parameter->form_name, "network_secondary_address")) {
-                sb_append(page, " placeholder=\"192.168.2.97/24\""
-                                " pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
+                sb_append(page, " pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
                 sb_append_html(page, T(parameter->help));
                 sb_append(page, "\"");
             }
@@ -7170,7 +7169,7 @@ static const char parameters_script[] =
     "      panels[i].hidden = !selected;\n"
     "    });\n"
     "    const name = tab.id.slice(4);\n"
-    "    form.action = '/parameters#' + name;\n"
+    "    form.setAttribute('action', '/parameters#' + name);\n"
     "    try { history.replaceState(null, '', '#' + name); } catch (_) {}\n"
     "    if (focus) tab.focus();\n"
     "  }\n"
@@ -7305,7 +7304,9 @@ static const char parameters_script[] =
     "      body.set('action', 'save_restart');\n"
     "      const buttons = [...form.querySelectorAll('button[type=submit]')];\n"
     "      buttons.forEach(button => { button.disabled = true; });\n"
-    "      fetch(form.action, {method: 'POST', body, signal: AbortSignal.timeout(45000)})\n"
+    "      // Named submit buttons shadow form.action; read the HTML attribute.\n"
+    "      const endpoint = form.getAttribute('action').split('#')[0];\n"
+    "      fetch(endpoint, {method: 'POST', body, signal: AbortSignal.timeout(45000)})\n"
     "        .then(response => response.text()).then(page => {\n"
     "          document.open(); document.write(page); document.close();\n"
     "        }).catch(() => {\n"

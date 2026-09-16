@@ -122,6 +122,10 @@ CHECKS = r"""
     };
     form.requestSubmit(form.querySelector('button[value=save_restart]'));
     assert(blocked === true && restartRequest, 'restart navigated away from reconnect instructions');
+    assert(restartRequest.url === '/parameters', 'restart posted to wrong endpoint: ' + restartRequest.url);
+    assert(restartRequest.options.method === 'POST', 'restart used wrong HTTP method');
+    assert(!field('network_primary_address').hasAttribute('placeholder'), 'primary example looks like a configured value');
+    assert(!field('network_secondary_address').hasAttribute('placeholder'), 'secondary example looks like a configured value');
     assert(restartRequest.options.body.get('action') === 'save_restart', 'restart action missing');
     assert(restartRequest.options.body.get('network_primary_address') === '198.51.100.27/24', 'new address missing');
     assert(!document.getElementById('network-reconnect').hidden, 'reconnect link lost during request');
