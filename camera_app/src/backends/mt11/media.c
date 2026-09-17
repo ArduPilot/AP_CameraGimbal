@@ -6,6 +6,7 @@
 #include "thermal.h"
 
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
 #include "camera_app/autofocus.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/media_impl.h"
@@ -301,6 +302,7 @@ static void thermal_frame(const uint8_t *display_yuyv,
             CA_MT11_THERMAL_HEIGHT, &range)) {
         pthread_mutex_lock(&media->lock);
         range.frame_sequence = media->thermal_range.frame_sequence + 1U;
+        range.sampled_us = ca_binlog_time_us();
         media->thermal_range = range;
         media->thermal_range_valid = true;
         memcpy(media->thermal_latest, radiometric_y16,
@@ -715,8 +717,13 @@ bool ca_media_impl_thermal_range(struct ca_media_impl *media,
 
     if (media == NULL || range == NULL) return false;
     pthread_mutex_lock(&media->lock);
-    valid = media->thermal_range_valid;
-    if (valid) *range = media->thermal_range;
+    valid = media->thermal_range_valid &&
+            ca_thermal_range_fresh(&media->thermal_range, ca_binlog_time_us());
+    if (valid) {
+        *range = media->thermal_range;
+        /* pipeline.c rotates the thermal plane for upright mounting only. */
+        range->rotated_180 = !atomic_load(&media->inverted);
+    }
     pthread_mutex_unlock(&media->lock);
     return valid;
 }

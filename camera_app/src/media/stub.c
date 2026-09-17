@@ -49,7 +49,7 @@ struct ca_media_impl {
     _Atomic uint8_t thermal_gain;
     _Atomic uint8_t thermal_palette;
     _Atomic float defocus;
-    bool inverted;
+    atomic_bool inverted;
     char *capture_root;
 #ifdef CAMERA_APP_SITL
     struct ca_live_video_server *live_video;
@@ -67,6 +67,7 @@ struct ca_media_impl {
     pthread_mutex_t image_lock;
     struct ca_config image_settings;
     struct ca_exposure exposure;
+    uint64_t thermal_sampled_us, thermal_sequence;
     pthread_cond_t capture_changed;
     unsigned capture_mask;
     unsigned capture_generation;
@@ -211,6 +212,8 @@ static void *render_terrain_frames(void *opaque)
             exposure.lens=exposure_lens;
             pthread_mutex_lock(&media->image_lock);
             media->exposure=exposure;
+            media->thermal_sampled_us=exposure.time_us;
+            media->thermal_sequence++;
             pthread_mutex_unlock(&media->image_lock);
         }
         if (image.capture_mask) {
@@ -664,7 +667,6 @@ int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
 bool ca_media_impl_thermal_range(struct ca_media_impl *media,
                             struct ca_thermal_range *range)
 {
-    (void)media;
     if (range == NULL) return false;
     *range = (struct ca_thermal_range) {
         .maximum_centi_c = 4200,
@@ -674,7 +676,32 @@ bool ca_media_impl_thermal_range(struct ca_media_impl *media,
         .minimum_x = 10,
         .minimum_y = 20,
         .frame_sequence = 1,
+        .sampled_us = ca_binlog_time_us(),
+        .rotated_180 = !media->inverted,
     };
+#ifdef CAMERA_APP_SITL
+    pthread_mutex_lock(&media->image_lock);
+    range->sampled_us = media->thermal_sampled_us;
+    range->frame_sequence = media->thermal_sequence;
+    pthread_mutex_unlock(&media->image_lock);
+#else
+    /* Host protocol tests can freeze a sample to exercise thermal dropout. */
+    const char *fixture = getenv("CAMERA_APP_TEST_THERMAL_RANGE");
+    if (fixture) {
+        FILE *input = fopen(fixture, "r");
+        if (!input) return false;
+        long long sampled;
+        unsigned rotated;
+        int fields = fscanf(input, "%d %d %hu %hu %hu %hu %lld %u",
+                            &range->maximum_centi_c, &range->minimum_centi_c,
+                            &range->maximum_x, &range->maximum_y,
+                            &range->minimum_x, &range->minimum_y, &sampled, &rotated);
+        fclose(input);
+        if (fields != 8 || sampled < 0) return false;
+        range->sampled_us = (uint64_t)sampled;
+        range->rotated_180 = rotated != 0;
+    }
+#endif
     return true;
 }
 

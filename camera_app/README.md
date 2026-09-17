@@ -371,7 +371,11 @@ thermal range and reject its request/interval commands as unsupported.
 
 Reports contain minimum and maximum temperatures in degrees Celsius and their
 normalized positions in the thermal image. The positions use the radiometric
-sensor dimensions, not the upscaled RTSP resolution. The report's stream ID
+sensor dimensions, not the upscaled RTSP resolution, and follow the image's
+mounting rotation. MAVLink preserves negative temperatures and values above
+655.35°C; SIYI's legacy unsigned fields retain their saturating encoding.
+Samples expire after 250 ms without a new frame, including when a SITL renderer
+stops. The report's stream ID
 and `VIDEO_STREAM_STATUS_FLAGS_THERMAL_RANGE_ENABLED` follow the thermal image
 when main/secondary sources are swapped. No report is sent before thermal
 data is available; a one-shot request then returns temporarily rejected.

@@ -84,6 +84,10 @@ jobs:
           python3 sitl/test_network.py --sudo
           python3 camera_app/tests/test_network_status.py camera_app/tests/camera-app-host
           make -C web network-status-test
+      - name: Test thermal conversion and MAVLink telemetry
+        run: |
+          make -C camera_app tests/test_thermal thermal-mavlink-test
+          camera_app/tests/test_thermal
       - name: Test ISP decoding, native IPC and background polling
         run: make -C camera_app exposure-test manual-control-test
       - name: Test exclusive manual gimbal control and restart

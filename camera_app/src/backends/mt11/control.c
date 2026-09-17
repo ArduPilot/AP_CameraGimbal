@@ -336,8 +336,8 @@ static bool emit_thermal_range(struct ca_backend *backend)
         }
         return false;
     }
-    put_u16_le(payload + 0, range.maximum_centi_c);
-    put_u16_le(payload + 2, range.minimum_centi_c);
+    put_u16_le(payload + 0, ca_thermal_legacy_centi_c(range.maximum_centi_c));
+    put_u16_le(payload + 2, ca_thermal_legacy_centi_c(range.minimum_centi_c));
     put_u16_le(payload + 4, range.maximum_x);
     put_u16_le(payload + 6, range.maximum_y);
     put_u16_le(payload + 8, range.minimum_x);
