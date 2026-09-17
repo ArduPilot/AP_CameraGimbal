@@ -24,8 +24,14 @@ def make_tar(entries):
                 member.size = len(data)
                 archive.addfile(member, io.BytesIO(data))
             else:
-                member.type = tarfile.SYMTYPE if kind == 'symlink' else tarfile.DIRTYPE
+                member.type = {
+                    'symlink': tarfile.SYMTYPE, 'hardlink': tarfile.LNKTYPE,
+                    'fifo': tarfile.FIFOTYPE, 'chardev': tarfile.CHRTYPE,
+                    'dir': tarfile.DIRTYPE,
+                }[kind]
                 member.linkname = linkname or ''
+                if kind == 'chardev':
+                    member.devmajor, member.devminor = 1, 3
                 archive.addfile(member)
     return output.getvalue()
 
@@ -40,13 +46,20 @@ class SafeTar(unittest.TestCase):
             root = Path(directory) / 'out'
             self.extract_legacy(make_tar([
                 ('.', 'dir', b'', 0o777, None),
+                ('tool/readonly/', 'dir', b'', 0o555, None),
+                ('tool/readonly/child', 'file', b'child', 0o644, None),
                 ('tool/bin/compiler', 'file', b'compiler', 0o4777, None),
                 ('tool/bin/nonexec', 'file', b'data', 0o055, None),
                 ('tool/link', 'symlink', b'', 0o777, 'bin/compiler'),
             ]), root)
             self.assertEqual((root / 'tool/bin/compiler').read_bytes(), b'compiler')
             self.assertEqual((root / 'tool/bin/compiler').stat().st_mode & 0o777, 0o755)
-            self.assertEqual((root / 'tool/bin/nonexec').stat().st_mode & 0o777, 0o044)
+            self.assertEqual((root / 'tool/bin/compiler').stat().st_uid,
+                             getattr(os, 'getuid', lambda: 0)())
+            self.assertEqual((root / 'tool/bin/compiler').stat().st_gid,
+                             getattr(os, 'getgid', lambda: 0)())
+            self.assertEqual((root / 'tool/bin/nonexec').stat().st_mode & 0o777, 0o644)
+            self.assertEqual((root / 'tool/readonly/child').read_bytes(), b'child')
             self.assertEqual(os.readlink(root / 'tool/link'), 'bin/compiler')
 
     def test_chained_symlink_escape_rejected(self):
@@ -54,15 +67,27 @@ class SafeTar(unittest.TestCase):
             root = Path(directory) / 'out'
             archive = make_tar([
                 ('NAME/', 'dir', b'', 0o777, None),
-                ('inside/', 'dir', b'', 0o777, None),
-                ('NAME/up', 'symlink', b'', 0o777, '../inside'),
+                ('NAME/up', 'symlink', b'', 0o777, '..'),
                 ('NAME/up/up2', 'symlink', b'', 0o777, '..'),
                 ('NAME/up/up2/pwned', 'file', b'bad', 0o666, None),
             ])
             with self.assertRaises(RuntimeError):
                 self.extract_legacy(archive, root)
             self.assertFalse((Path(directory) / 'pwned').exists())
-            self.assertFalse((root / 'inside/pwned').exists())
+
+    def test_rejects_hostile_members(self):
+        hostile = [
+            ('/absolute', 'file', b'x', 0o644, None),
+            ('../traversal', 'file', b'x', 0o644, None),
+            ('escape', 'symlink', b'', 0o777, '../../outside'),
+            ('hardlink', 'hardlink', b'', 0o644, '../outside'),
+            ('pipe', 'fifo', b'', 0o644, None),
+            ('device', 'chardev', b'', 0o644, None),
+        ]
+        for entry in hostile:
+            with self.subTest(name=entry[0]), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(RuntimeError):
+                    self.extract_legacy(make_tar([entry]), Path(directory) / 'out')
 
 
 if __name__ == '__main__':

@@ -65,9 +65,16 @@ def safe_extract(archive, destination):
             # exist, and reject replacing a symlink itself.
             if target.is_symlink() or not _inside(target, destination):
                 raise RuntimeError(f'Unsafe archive member: {member.name}')
-            member.mode &= 0o755
-            if member.isreg() and not (member.mode & 0o100):
-                member.mode &= 0o644
+            if member.isdir() or member.issym():
+                # data_filter deliberately ignores directory and symlink
+                # modes; retaining read-only directory modes breaks extraction
+                # of children on Python versions without that filter.
+                member.mode = None
+            else:
+                member.mode &= 0o755
+                if not (member.mode & 0o100):
+                    member.mode &= ~0o111
+                member.mode |= 0o600
             member.uid = getattr(os, 'getuid', lambda: 0)()
             member.gid = getattr(os, 'getgid', lambda: 0)()
             member.uname = member.gname = ''

@@ -25,12 +25,16 @@ if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
     raise SystemExit("toolchain SHA-256 mismatch")
 target = root / "armv7-eabihf--uclibc--stable-2018.11-1"
 stamp = target / ".apcam-sha256"
+def remove_path(path):
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
 if not target.is_dir() or not stamp.is_file() or stamp.read_text().strip() != expected:
     sys.path.insert(0, str(repo / "tools"))
     from safe_tar import safe_extract
     backup = root / (target.name + ".old")
-    if backup.exists():
-        shutil.rmtree(backup)
+    remove_path(backup)
     with tempfile.TemporaryDirectory(prefix="zr10-toolchain-", dir=root) as temporary:
         temporary = Path(temporary)
         safe_extract(archive, temporary)
@@ -47,7 +51,6 @@ if not target.is_dir() or not stamp.is_file() or stamp.read_text().strip() != ex
             if had_target and backup.exists():
                 os.replace(backup, target)
             raise
-    if backup.exists():
-        shutil.rmtree(backup)
+    remove_path(backup)
 print(target)
 PY
