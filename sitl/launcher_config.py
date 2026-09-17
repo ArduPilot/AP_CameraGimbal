@@ -45,3 +45,13 @@ def initial_config(text, instance):
         lines.extend(('', '[mavlink]'))
         lines.extend(f'{key} = {value}' for key, value in values.items())
     return '\n'.join(lines) + '\n'
+
+
+def vendor_stride(target):
+    """Leave the vendor's fixed reply port available to local UDP clients."""
+    return 10 if target.get('vendor_reply_port') else 1
+
+
+def vendor_ports(target, command_port):
+    tcp = target.get('vendor_tcp_port', command_port) if command_port == target['vendor_port'] else command_port
+    return int(tcp), command_port

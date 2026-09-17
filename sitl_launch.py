@@ -4,7 +4,7 @@ import codecs
 import os
 from pathlib import Path
 from sitl.target_properties import TARGETS
-from sitl.launcher_config import MAX_SIMULATORS, mavlink_settings
+from sitl.launcher_config import vendor_ports, vendor_stride, MAX_SIMULATORS, mavlink_settings
 import signal
 import subprocess
 import sys
@@ -133,8 +133,10 @@ class SimulatorPanel(QtWidgets.QWidget):
             settings = mavlink_settings(build, self.instance, self.clear_parameters.isChecked())
             tcp = env.get(prefix + 'MAVLINK_TCP_PORT', settings['tcp_port'])
             udp = env.get(prefix + 'MAVLINK_UDP_PORT', settings['udp_port'])
+            vendor_tcp, vendor_udp = vendor_ports(TARGETS[self.camera.currentData()],
+                                                  int(env[prefix + 'CAMERA_PORT']))
             hint += (f"\nWeb: {env[prefix + 'WEB_PORT']} · MAVLink TCP/UDP: {tcp}/{udp}"
-                     f" · Vendor: {env[prefix + 'CAMERA_PORT']} · RTSP: {env[prefix + 'RTSP_PORT']}"
+                     f" · Vendor TCP/UDP: {vendor_tcp}/{vendor_udp} · RTSP: {env[prefix + 'RTSP_PORT']}"
                      f"\nCamera component: {settings['camera_component_id']} · Data: {build / 'runtime'}")
         except (ValueError, OSError) as error:
             hint += f'\nInvalid configuration: {error}'
@@ -157,7 +159,7 @@ class SimulatorPanel(QtWidgets.QWidget):
                    PYTHONUNBUFFERED='1')
         prefix = backend.upper() + '_SITL_'
         for name, default, stride in (('WEB_PORT', 8081, 1), ('RTSP_PORT', 8554, 10),
-                                      ('CAMERA_PORT', int(TARGETS[backend]['vendor_port']), 1)):
+                                      ('CAMERA_PORT', int(TARGETS[backend]['vendor_port']), vendor_stride(TARGETS[backend]))):
             env[prefix + name] = str(int(env.get(prefix + name, default)) + (self.instance - 1) * stride)
         # Explicit environment overrides remain supported, with slot offsets.
         for name in ('MAVLINK_TCP_PORT', 'MAVLINK_UDP_PORT'):
@@ -451,6 +453,9 @@ class Launcher(QtWidgets.QWidget):
 
     def validate(self):
         endpoints, identities, builds = {}, {}, set()
+        reply_ports = {int(TARGETS[p.camera.currentData()]['vendor_reply_port'])
+                       for p in self.simulators[:self.count.value()]
+                       if TARGETS[p.camera.currentData()].get('vendor_reply_port')}
         for panel in self.simulators[:self.count.value()]:
             env, build = panel.environment()
             if build in builds:
@@ -466,9 +471,11 @@ class Launcher(QtWidgets.QWidget):
             identities[component] = panel.instance
             prefix = panel.camera.currentData().upper() + '_SITL_'
             rtsp = int(env[prefix + 'RTSP_PORT'])
+            vendor_tcp, vendor_udp = vendor_ports(TARGETS[panel.camera.currentData()],
+                                                   int(env[prefix + 'CAMERA_PORT']))
             ports = [('web', int(env[prefix + 'WEB_PORT']), ('TCP',)),
                      ('RTSP', rtsp, ('TCP',)), ('live video', rtsp + 1, ('TCP',)),
-                     ('vendor', int(env[prefix + 'CAMERA_PORT']), ('TCP', 'UDP'))]
+                     ('vendor TCP', vendor_tcp, ('TCP',)), ('vendor UDP', vendor_udp, ('UDP',))]
             for transport in ('TCP', 'UDP'):
                 port = int(env.get(prefix + 'MAVLINK_' + transport + '_PORT', settings[transport.lower() + '_port']))
                 if port:
@@ -480,6 +487,8 @@ class Launcher(QtWidgets.QWidget):
                 if not 1 <= port <= 65535:
                     raise ValueError(f'Simulator {panel.instance}: invalid {name} port {port}')
                 for protocol in protocols:
+                    if protocol == 'UDP' and port in reply_ports:
+                        raise ValueError(f'Simulator {panel.instance}: UDP port {port} is reserved for vendor replies')
                     key = (protocol, port)
                     if key in endpoints:
                         raise ValueError(f'{protocol} port {port} is shared by {endpoints[key]} '

@@ -93,10 +93,14 @@ def main():
     web_port = int(os.environ.get(prefix + 'WEB_PORT', '8081'))
     # Refuse an occupied endpoint before resetting any saved settings.
     import socket
-    for port in (web_port, int(os.environ.get(prefix + 'CAMERA_PORT', str(int(TARGETS[backend]['vendor_port'])))),
-                 int(os.environ.get(prefix + 'RTSP_PORT', '8554')),
-                 int(os.environ.get(prefix + 'RTSP_PORT', '8554')) + 1):
-        with socket.socket() as probe:
+    from sitl.launcher_config import vendor_ports
+    vendor_tcp, vendor_udp = vendor_ports(TARGETS[backend],
+        int(os.environ.get(prefix + 'CAMERA_PORT', str(int(TARGETS[backend]['vendor_port'])))))
+    for port, kind in ((web_port, socket.SOCK_STREAM), (vendor_tcp, socket.SOCK_STREAM),
+                       (vendor_udp, socket.SOCK_DGRAM),
+                       (int(os.environ.get(prefix + 'RTSP_PORT', '8554')), socket.SOCK_STREAM),
+                       (int(os.environ.get(prefix + 'RTSP_PORT', '8554')) + 1, socket.SOCK_STREAM)):
+        with socket.socket(socket.AF_INET, kind) as probe:
             probe.bind(('127.0.0.1', port))
     sys.argv = ['prepare_runtime', str(root), str(bundle / 'configs' / (backend + '.ini'))]
     if os.environ.get('CAMERA_GIMBAL_SITL_RESET_PARAMETERS') == '1':
