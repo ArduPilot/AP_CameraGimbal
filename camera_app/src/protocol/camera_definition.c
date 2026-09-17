@@ -84,6 +84,7 @@ bool ca_camera_param_info(size_t index, struct ca_camera_parameter *parameter)
         const char *name = parameter->operation == CA_CAMERA_PALETTE ? "THERMAL_PALETTE" : parameter->name;
         parameter->config_index = ca_config_param_find(name);
         if (parameter->config_index < 0) return false;
+        if (ca_config_param_is_bool((size_t)parameter->config_index)) parameter->type = 1;
         int minimum, maximum;
         parameter->option_count = ca_config_param_options((size_t)parameter->config_index,
             &parameter->options, &minimum, &maximum);
@@ -136,7 +137,7 @@ char *ca_camera_definition(size_t *length)
         struct ca_camera_parameter p;
         if (!ca_camera_param_info(i, &p)) { fclose(out); free(xml); return NULL; }
         fprintf(out, "    <parameter name=\"%s\" type=\"%s\" default=\"%.9g\"",
-                p.name, p.type == 9 ? "float" : "int32", (double)p.initial);
+                p.name, p.type == 9 ? "float" : p.type == 1 ? "bool" : "int32", (double)p.initial);
         if (!p.option_count) {
             fprintf(out, " min=\"%.9g\" max=\"%.9g\"", (double)p.minimum, (double)p.maximum);
             if (p.type != 9) fputs(" step=\"1\"", out);

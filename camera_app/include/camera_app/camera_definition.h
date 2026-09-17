@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 /* XML document revision; MAVLink cache version is derived from the XML CRC. */
-#define CA_CAMERA_DEFINITION_VERSION 4
+#define CA_CAMERA_DEFINITION_VERSION 6
 #define CA_CAMERA_DEFINITION_PATH "/camera.xml"
 
 enum ca_camera_operation {
@@ -20,7 +20,7 @@ struct ca_camera_parameter {
     const char *name;
     const char *description;
     enum ca_camera_operation operation;
-    /* MAV_PARAM_EXT_TYPE: INT32=6, REAL32=9. */
+    /* MAV_PARAM_EXT_TYPE: UINT8=1 (boolean), INT32=6, REAL32=9. */
     unsigned type;
     float initial, minimum, maximum;
     const struct ca_config_option *options;

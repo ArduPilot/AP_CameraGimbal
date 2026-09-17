@@ -31,6 +31,13 @@ class Definitions(unittest.TestCase):
                     self.assertEqual({o.get('value') for o in params['REC_RESOLUTION'].findall('options/option')}, {'1', '2'})
                     self.assertEqual({o.get('value') for o in params['CAM_MODE'].findall('options/option')}, {'1'})
                 for name, p in params.items():
+                    boolean = name in {'OSD_CROSS', 'OSD_RECORD', 'OSD_THERMAL_FOV',
+                                       'LOG_DISARMED', 'MAV_POS_TARGET'}
+                    self.assertEqual(p.get('type'), 'bool' if boolean else
+                                     'float' if name == 'CAM_ZOOM' else 'int32')
+                    if boolean:
+                        self.assertEqual((p.get('min'), p.get('max')), ('0', '1'))
+                        self.assertIn(p.get('default'), ('0', '1'))
                     self.assertTrue(name.isupper() and len(name) <= 16)
                     self.assertNotIn('PROXY_', name)
                     for update in p.findall('updates/update'):

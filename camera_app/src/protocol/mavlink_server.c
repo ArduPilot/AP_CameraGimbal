@@ -1968,15 +1968,20 @@ static void handle_parameter(struct ca_mavlink_server *server,
  * independently of the original C-cast PARAM_* configuration service. */
 static void ext_encode(char output[128], unsigned type, float value)
 {
+    memset(output, 0, 128);
+    if (type == MAV_PARAM_EXT_TYPE_UINT8) {
+        output[0] = (char)(uint8_t)value;
+        return;
+    }
     uint32_t bits;
     if (type == MAV_PARAM_EXT_TYPE_REAL32) memcpy(&bits, &value, sizeof(bits));
     else bits = (uint32_t)(int32_t)value;
-    memset(output, 0, 128);
     for (unsigned i = 0; i < 4; i++) output[i] = (char)(bits >> (8 * i));
 }
 
 static float ext_decode(const char input[128], unsigned type)
 {
+    if (type == MAV_PARAM_EXT_TYPE_UINT8) return (float)(uint8_t)input[0];
     uint32_t bits = 0;
     for (unsigned i = 0; i < 4; i++) bits |= (uint32_t)(uint8_t)input[i] << (8 * i);
     if (type == MAV_PARAM_EXT_TYPE_REAL32) {
