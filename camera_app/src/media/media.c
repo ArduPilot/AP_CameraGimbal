@@ -31,7 +31,7 @@ struct ca_media {
 static void apply_overlay_after_control(struct ca_media *media, const char *control)
 {
     if (ca_media_impl_apply_overlay(media->impl, &media->config.settings) < 0) {
-        ca_log("video overlay update failed after %s; control completed: %s",
+        ca_log("video overlay update failed after %s; %s",
                control, strerror(errno));
     }
 }
@@ -278,8 +278,8 @@ int ca_media_set_zoom(struct ca_media *media, float zoom)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_zoom(IMPL, zoom);
     int saved=errno;
-    if (result<0) { errno=saved; return result; }
     apply_overlay_after_control(media, "zoom");
+    if (result<0) { errno=saved; return result; }
     return 0;
 }
 float ca_media_zoom(const struct ca_media *media)
@@ -293,8 +293,8 @@ int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
     REQUIRE_IMPL;
     int result=ca_media_impl_set_lens(IMPL, lens);
     int saved=errno;
-    if (result<0) { errno=saved; return result; }
     apply_overlay_after_control(media, "lens change");
+    if (result<0) { errno=saved; return result; }
     return 0;
 }
 enum ca_media_lens ca_media_lens(const struct ca_media *media)
