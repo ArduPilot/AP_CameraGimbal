@@ -109,11 +109,18 @@ def main(real=False):
         (repo / 'sitl/terrain_video.py').write_text("print('terrain dependencies available')\n")
         (repo / 'sitl/run.sh').write_text('exec python3 "$(dirname "$0")/fake.py"\n')
         (repo / 'sitl/fake.py').write_text('''
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, signal, subprocess, sys, time
 root = pathlib.Path(os.environ['CAMERA_GIMBAL_SITL_BUILD'])
 root.mkdir(parents=True, exist_ok=True)
+pidfile = root / 'runtime/run/launcher.pid'
+pidfile.parent.mkdir(parents=True, exist_ok=True)
+pidfile.write_text(str(os.getpid()))
+def stop(signum, frame):
+    pidfile.unlink(missing_ok=True)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
 keys = ('CAMERA_GIMBAL_SITL_BACKEND', 'CAMERA_GIMBAL_SITL_VIDEO',
-        'MT11_SITL_ORIENTATION', 'A8_SITL_ORIENTATION')
+        'MT11_SITL_ORIENTATION', 'A8_SITL_ORIENTATION', 'CAMERA_GIMBAL_SITL_LAUNCH_ID')
 (root / 'selection.json').write_text(json.dumps({k: os.environ.get(k) for k in keys}))
 # A detached child models a web-triggered camera restart.
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
@@ -175,12 +182,15 @@ time.sleep(60)
                     tokens = [p.token for p in group.simulators]
                     builds = [p.runtime.parent.parent for p in group.simulators]
                     assert len(set(builds)) == 4
+                    assert all(builds[0] not in p.parents for p in builds[1:])
+                    assert all((p / 'runtime/run/launcher.pid').exists() for p in builds)
                     assert len({p.web_url for p in group.simulators}) == 4
                     for i, panel in enumerate(group.simulators):
                         selection = json.loads((builds[i] / 'selection.json').read_text())
                         assert selection['CAMERA_GIMBAL_SITL_BACKEND'] == backends[i]
                         assert selection['CAMERA_GIMBAL_SITL_VIDEO'] == ('simple', 'terrain')[i % 2]
                         assert len(owned_processes(tokens[i])) >= 2
+                        assert (builds[i] / 'runtime/run/launcher.pid').exists()
                     if backends[1] == 'a8':
                         group.close()
                     else:
@@ -194,10 +204,17 @@ time.sleep(60)
                 (repo / 'Makefile').write_text('sitl a8_sitl zr10_sitl z1mini_sitl:\n'
                     '\t@test "$$CAMERA_GIMBAL_SITL_INSTANCE" != 2\n')
                 group.start()
+                until(app, lambda: group.simulators[0].phase == 'running')
+                token = group.simulators[0].token
+                reached = group.simulators[0].runtime
+                assert (reached / 'launcher.pid').exists()
+                assert len(owned_processes(token)) >= 2
                 until(app, lambda: group.phase == 'idle')
                 assert 'Simulator 2 stopped' in group.status.text(), group.status.text()
                 assert all(p.phase == 'idle' for p in group.simulators)
-                assert not (builds[2] / 'launcher.pid').exists()
+                assert not (reached / 'launcher.pid').exists()
+                assert not owned_processes(token)
+                assert all(not owned_processes(p.token) for p in group.simulators[:2] if p.token)
                 print('PASS partial startup failure stops the whole group')
 
                 (repo / 'Makefile').write_text('sitl a8_sitl zr10_sitl z1mini_sitl:\n\t@sleep 60\n')

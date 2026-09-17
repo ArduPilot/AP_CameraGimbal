@@ -26,7 +26,7 @@ def main():
 
     def base_port(stride, adjacent=False):
         for _ in range(100):
-            base = random.randrange(20000, 45000)
+            base = random.randrange(20000, 32000)
             ports = {base + i * stride + n for i in range(4) for n in range(2 if adjacent else 1)}
             if ports & allocated:
                 continue
