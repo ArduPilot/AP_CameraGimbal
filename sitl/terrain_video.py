@@ -435,6 +435,7 @@ class Fixture:
         self.path = path
         self.container = None
         self.index = -1
+        self.loop_frames = None
         self.open()
 
     def open(self):
@@ -443,20 +444,38 @@ class Fixture:
         self.container = av.open(self.path)
         stream = self.container.streams.video[0]
         stream.thread_count = 2
-        self.rate = float(stream.average_rate or stream.guessed_rate or 10)
+        # Raw H264/HEVC has no container timestamps; average_rate can be the
+        # demuxer's 25 fps placeholder even when the bitstream specifies 20.
+        raw = self.container.format.name in ('h264', 'hevc')
+        self.rate = float((stream.guessed_rate if raw else stream.average_rate)
+                          or stream.guessed_rate or stream.average_rate or 10)
+        self.loop_index = 0
         self.frames = iter(self.container.decode(video=0))
 
     def at(self, seconds):
         target = int(seconds * self.rate)
+        latest = None
         while self.index < target:
+            # Once the loop length is known, whole missed loops have identical
+            # pixels. Skip them instead of making a slow renderer decode an
+            # ever-growing backlog after a scheduling pause.
+            if self.loop_frames:
+                self.index += ((target - self.index) // self.loop_frames) * self.loop_frames
+                if self.index == target:
+                    break
             frame = next(self.frames, None)
             if frame is None:
-                self.open()
-                frame = next(self.frames, None)
-                if frame is None:
+                if not self.loop_index:
                     raise ValueError(f'Empty video fixture: {self.path}')
-            self.image = frame.to_ndarray(format='rgb24')
+                self.loop_frames = self.loop_index
+                self.open()
+                continue
+            latest = frame
+            self.loop_index += 1
             self.index += 1
+        # Dropped frames still advance the decoder, but need no RGB conversion.
+        if latest is not None:
+            self.image = latest.to_ndarray(format='rgb24')
         return self.image
 
     def close(self):
