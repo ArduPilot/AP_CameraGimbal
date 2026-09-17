@@ -40,7 +40,6 @@
 #define CA_EVENT_UART UINT64_C(3)
 #define CA_EVENT_CLIENT_BASE UINT64_C(0x100)
 #define CA_MAVLINK_UART_OUTPUT (MAVLINK_MAX_PACKET_LEN * 16U)
-#define CA_GIMBAL_COMPONENT_ID MAV_COMP_ID_GIMBAL
 #define VEHICLE_ATTITUDE_TIMEOUT_MS 1000U
 #define VEHICLE_POSITION_TIMEOUT_MS 1500U
 #define VEHICLE_PREDICTION_MS 250U
@@ -97,6 +96,7 @@ struct ca_mavlink_server {
     char *config_path;
     uint8_t system_id;
     uint8_t camera_component_id;
+    uint8_t gimbal_component_id;
     size_t next_parameter;
     bool parameter_list_active;
     enum ca_photo_scope photo_scope;
@@ -188,8 +188,8 @@ static uint32_t boot_ms(const struct ca_mavlink_server *server)
 static mavlink_status_t *tx_status(struct ca_mavlink_server *server,
                                    uint8_t component_id)
 {
-    return component_id == CA_GIMBAL_COMPONENT_ID ? &server->gimbal_tx
-                                                  : &server->camera_tx;
+    return component_id == server->gimbal_component_id
+               ? &server->gimbal_tx : &server->camera_tx;
 }
 
 static int bind_socket(int type, unsigned port)
@@ -417,7 +417,7 @@ static void broadcast_heartbeats(struct ca_mavlink_server *server)
     mavlink_message_t message;
     pack_heartbeat(server, server->camera_component_id, MAV_TYPE_CAMERA, &message);
     broadcast_message(server, &message);
-    pack_heartbeat(server, CA_GIMBAL_COMPONENT_ID, MAV_TYPE_GIMBAL, &message);
+    pack_heartbeat(server, server->gimbal_component_id, MAV_TYPE_GIMBAL, &message);
     broadcast_message(server, &message);
 }
 
@@ -540,7 +540,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM |
                  CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM,
-        .gimbal_device_id = CA_GIMBAL_COMPONENT_ID,
+        .gimbal_device_id = server->gimbal_component_id,
     };
 #if !APCAM_HAVE_FOCUS
     info.flags &= ~CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS;
@@ -854,7 +854,7 @@ static void send_gimbal_information(struct ca_mavlink_server *server,
              APCAM_MODEL_NAME);
     put_text(info.custom_name, sizeof(info.custom_name), "AP CameraGimbal");
     (void)mavlink_msg_gimbal_device_information_encode_status(
-        server->system_id, CA_GIMBAL_COMPONENT_ID,
+        server->system_id, server->gimbal_component_id,
         &server->encode_status, &message, &info);
     if (route) (void)send_message(server, route, &message);
     else broadcast_message(server, &message);
@@ -953,7 +953,7 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
             .target_component = server->autopilot_component_id,
         };
         (void)mavlink_msg_command_long_encode_status(
-            server->system_id, CA_GIMBAL_COMPONENT_ID,
+            server->system_id, server->gimbal_component_id,
             &server->encode_status, &message, &command);
         (void)send_message(server, route, &message);
     }
@@ -1112,7 +1112,7 @@ static void pack_gimbal_status(struct ca_mavlink_server *server,
         .delta_yaw_velocity = NAN,
     };
     (void)mavlink_msg_gimbal_device_attitude_status_encode_status(
-        server->system_id, CA_GIMBAL_COMPONENT_ID,
+        server->system_id, server->gimbal_component_id,
         &server->encode_status, message, &status);
 }
 
@@ -1368,7 +1368,7 @@ static void handle_command_long(struct ca_mavlink_server *server,
     uint8_t target_system = request.target_system;
     uint8_t target_component = request.target_component;
     if (target_matches(server, target_system, target_component,
-                       CA_GIMBAL_COMPONENT_ID)) {
+                       server->gimbal_component_id)) {
         if (command == MAV_CMD_REQUEST_MESSAGE &&
             ((uint32_t)params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION ||
              (uint32_t)params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS)) {
@@ -1377,12 +1377,12 @@ static void handle_command_long(struct ca_mavlink_server *server,
             } else {
                 send_gimbal_status(server, route);
             }
-            send_ack(server, route, CA_GIMBAL_COMPONENT_ID, command,
+            send_ack(server, route, server->gimbal_component_id, command,
                      MAV_RESULT_ACCEPTED, message);
             return;
         }
-        if (target_component == CA_GIMBAL_COMPONENT_ID) {
-            send_ack(server, route, CA_GIMBAL_COMPONENT_ID, command,
+        if (target_component == server->gimbal_component_id) {
+            send_ack(server, route, server->gimbal_component_id, command,
                      MAV_RESULT_UNSUPPORTED, message);
             return;
         }
@@ -1419,7 +1419,7 @@ static void handle_autopilot_state_for_gimbal(
     }
     mavlink_msg_autopilot_state_for_gimbal_device_decode(message, &state);
     if (!target_matches(server, state.target_system, state.target_component,
-                        CA_GIMBAL_COMPONENT_ID)) {
+                        server->gimbal_component_id)) {
         return;
     }
     float q[4];
@@ -1581,14 +1581,14 @@ static void handle_command_int(struct ca_mavlink_server *server,
     if (message->len < 29U) return;
     mavlink_msg_command_int_decode(message, &request);
     if (!target_matches(server, request.target_system, request.target_component,
-                        CA_GIMBAL_COMPONENT_ID)) {
+                        server->gimbal_component_id)) {
         return;
     }
     uint16_t command = request.command;
     uint8_t result = MAV_RESULT_UNSUPPORTED;
     if (server->manual_control && *server->manual_control &&
         (command==MAV_CMD_DO_SET_ROI_LOCATION || command==MAV_CMD_DO_SET_ROI_NONE)) {
-        send_ack(server,route,CA_GIMBAL_COMPONENT_ID,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
+        send_ack(server,route,server->gimbal_component_id,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
         return;
     }
     if (command == MAV_CMD_DO_SET_ROI_LOCATION) {
@@ -1626,7 +1626,7 @@ static void handle_command_int(struct ca_mavlink_server *server,
         result = MAV_RESULT_ACCEPTED;
         if (was_active) ca_log("MAVLink location target cleared");
     }
-    send_ack(server, route, CA_GIMBAL_COMPONENT_ID, command, result, message);
+    send_ack(server, route, server->gimbal_component_id, command, result, message);
 }
 
 static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
@@ -1638,7 +1638,7 @@ static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
     mavlink_msg_gimbal_device_set_attitude_decode(message, &request);
     uint16_t flags = request.flags;
     if (!target_matches(server, request.target_system, request.target_component,
-                        CA_GIMBAL_COMPONENT_ID)) return;
+                        server->gimbal_component_id)) return;
     clear_target_location(server);
     if ((flags & (GIMBAL_DEVICE_FLAGS_RETRACT | GIMBAL_DEVICE_FLAGS_NEUTRAL)) !=
         0U) {
@@ -2388,7 +2388,7 @@ static int accept_clients(struct ca_mavlink_server *server)
                host, ntohs(address.sin_port));
         struct route route = {.kind = ROUTE_TCP, .client = slot};
         send_heartbeat(server, &route, server->camera_component_id, 30U);
-        send_heartbeat(server, &route, CA_GIMBAL_COMPONENT_ID, 26U);
+        send_heartbeat(server, &route, server->gimbal_component_id, 26U);
     }
 }
 
@@ -2486,6 +2486,14 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->rtsp_port = config->rtsp_port;
     server->system_id = (uint8_t)config->settings.mavlink_system_id;
     server->camera_component_id = (uint8_t)config->settings.mavlink_camera_component_id;
+    /* Gimbal component IDs are not contiguous: #1 is 154, #2-6 are 171-175.
+     * Snapshot both identities together; saved changes apply after restart. */
+    static const uint8_t gimbal_components[] = {
+        MAV_COMP_ID_GIMBAL, MAV_COMP_ID_GIMBAL2, MAV_COMP_ID_GIMBAL3,
+        MAV_COMP_ID_GIMBAL4, MAV_COMP_ID_GIMBAL5, MAV_COMP_ID_GIMBAL6,
+    };
+    server->gimbal_component_id =
+        gimbal_components[server->camera_component_id - MAV_COMP_ID_CAMERA];
     server->parameters = config->settings;
     const char *ready = getenv("CAMERA_APP_READY_PATH");
     if (!ready || !*ready) ready = "/run/camera-app.ready";

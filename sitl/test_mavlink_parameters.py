@@ -109,7 +109,8 @@ def check_identity(link, system, component=CAMERA):
         if message.get_type() == "HEARTBEAT":
             assert message.autopilot == M.MAV_AUTOPILOT_INVALID
             seen.add(message.get_srcComponent())
-    assert seen == {component, GIMBAL}, seen
+    gimbal = (154, 171, 172, 173, 174, 175)[component - CAMERA]
+    assert seen == {component, gimbal}, seen
 
 
 def check_telemetry_requests(link, system):
