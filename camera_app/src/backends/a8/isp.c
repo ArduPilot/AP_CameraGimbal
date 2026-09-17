@@ -57,6 +57,7 @@ struct isp_api {
     isp_attr_fn set_expo_mode;
     isp_attr_fn get_manual_expo, set_manual_expo;
     isp_attr_fn get_expo_limit, set_expo_limit;
+    isp_attr_fn get_expo_table;
     isp_attr_fn set_win_wgt_type;
     bool have_default_limit;
     uint32_t default_limit[2];
@@ -123,6 +124,9 @@ static int load_api(void)
         }
         memcpy((uint8_t *)&api + symbols[i].offset, &symbol, sizeof(symbol));
     }
+    /* Older SDKs can still use their inherited exposure limits. */
+    void *table = dlsym(api.handle, "MI_ISP_AE_GetPlainLongExpoTable");
+    memcpy(&api.get_expo_table, &table, sizeof(table));
     return 0;
 }
 
@@ -184,6 +188,33 @@ static int set_ev(int tenths)
     return result;
 }
 
+/* The A8 ISP can report a 5653 us floor even though its exposure table starts
+ * at 147 us. This stops AE compensating for bright scenes at minimum gain.
+ * Follow the table without raising an already lower limit. Its ABI is a u32
+ * count followed by up to 16 {fnumber, shutter_us, total_gain, sensor_gain}.
+ */
+static uint32_t auto_min_shutter(uint32_t inherited, uint32_t maximum)
+{
+    uint8_t table[ISP_ATTR_MAX] __attribute__((aligned(8))) = {0};
+    if (!api.get_expo_table || api.get_expo_table(ISP_DEV, ISP_CHN, table) != 0) {
+        ca_log("ISP exposure table unavailable; retaining minimum shutter %u us", inherited);
+        return inherited;
+    }
+    uint32_t count = get_u32(table, 0);
+    uint32_t minimum = inherited;
+    if (count == 0 || count > 16U) goto invalid;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t us = get_u32(table, 8U + i * 16U);
+        if (us == 0 || us > 1000000U) goto invalid;
+        if (us < minimum) minimum = us;
+    }
+    if (minimum == 0 || minimum > maximum) goto invalid;
+    return minimum;
+invalid:
+    ca_log("ISP exposure table invalid; retaining minimum shutter %u us", inherited);
+    return inherited;
+}
+
 static int set_exposure(const struct ca_config *config)
 {
     static const uint32_t exposure_us[] = {
@@ -199,8 +230,11 @@ static int set_exposure(const struct ca_config *config)
     if (result != 0) goto done;
     if (!api.have_default_limit) {
         api.have_default_limit = true;
-        api.default_limit[0] = get_u32(attr, LIMIT_MIN_SHUTTER);
+        uint32_t inherited = get_u32(attr, LIMIT_MIN_SHUTTER);
         api.default_limit[1] = get_u32(attr, LIMIT_MAX_SHUTTER);
+        api.default_limit[0] = auto_min_shutter(inherited, api.default_limit[1]);
+        ca_log("ISP auto shutter range=%u..%u us (inherited minimum=%u us)",
+               api.default_limit[0], api.default_limit[1], inherited);
     }
     put_u32(attr, LIMIT_MIN_SHUTTER,
             shutter != 0U ? shutter : api.default_limit[0]);

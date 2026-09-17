@@ -655,7 +655,7 @@ tests/test_thermal_monitor: tests/test_thermal_monitor.c src/media/media.c inclu
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.c src/media/media.c -lpthread -lm
 
 .PHONY: exposure-test
-exposure-test: thermal-monitor-test tests/test_exposure tests/test_exposure_native
+exposure-test: a8-exposure-test thermal-monitor-test tests/test_exposure tests/test_exposure_native
 	./tests/test_exposure
 	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_exposure_native"], check=True, timeout=10)'
 
@@ -691,3 +691,12 @@ build/tests/test_z1_overlay_race: tests/test_z1_overlay_race.c src/backends/z1mi
 	# Check the production translation unit without headers supplied by the harness.
 	$(HOST_CC) -Wall -Wextra -Werror -std=c11 -Iinclude -fsyntax-only src/backends/z1mini/native.c
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -o $@ $< -lpthread
+
+.PHONY: a8-exposure-test
+a8-exposure-test: build/tests/test_a8_exposure
+	./build/tests/test_a8_exposure
+
+build/tests/test_a8_exposure: tests/test_a8_exposure.c src/backends/a8/isp.c src/backends/a8/isp.h include/camera_app/config.h
+	mkdir -p $(dir $@)
+	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -fsyntax-only src/backends/a8/isp.c
+	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -o $@ $< -ldl
