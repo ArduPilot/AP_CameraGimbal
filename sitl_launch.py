@@ -15,11 +15,14 @@ import threading
 
 try:
     from PyQt6 import QtCore, QtGui, QtWidgets
-except ImportError:
+except ImportError as qt6_error:
     try:
         from PyQt5 import QtCore, QtGui, QtWidgets
-    except ImportError:
-        sys.exit('Install PyQt6 (for example: sudo apt install python3-pyqt6) to use this launcher.')
+    except ImportError as qt5_error:
+        sys.exit('Cannot load Qt for the SITL launcher.\n'
+                 f'PyQt6: {qt6_error}\nPyQt5: {qt5_error}\n'
+                 'Install PyQt6 and its native runtime libraries '
+                 '(for example: sudo apt install python3-pyqt6).')
 
 REPO = Path(__file__).resolve().parent
 OWNER_VARIABLE = 'CAMERA_GIMBAL_SITL_LAUNCH_ID'
