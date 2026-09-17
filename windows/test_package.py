@@ -14,6 +14,7 @@ def main():
     import faulthandler
     faulthandler.dump_traceback_later(180, repeat=True)
     from sitl.target_properties import TARGETS
+    from sitl.launcher_config import vendor_stride
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backend', choices=tuple(TARGETS) + ('all',), default='all')
     parser.add_argument('--video', choices=('simple', 'terrain'), default='simple')
@@ -332,7 +333,7 @@ def main():
                         break
                     except OSError:
                         pass
-                for name, value, stride in (('WEB_PORT', web_port, 1), ('CAMERA_PORT', camera_port, 1),
+                for name, value, stride in (('WEB_PORT', web_port, 1), ('CAMERA_PORT', camera_port, vendor_stride(TARGETS[backend])),
                                             ('RTSP_PORT', rtsp_port, 10), ('MAVLINK_TCP_PORT', mav_port, 10)):
                     os.environ[prefix + name] = str(value - index * stride)
                 os.environ[prefix + 'MAVLINK_UDP_PORT'] = '0'

@@ -77,8 +77,11 @@ Fresh simulator slots use these defaults:
 | 3 | 8083 | 14570 | 8574 | 8575 | 102 / 172 |
 | 4 | 8084 | 14580 | 8584 | 8585 | 103 / 173 |
 
-Vendor protocol ports start at 37260 for SIYI cameras or 2337 for Z1-Mini,
-plus the slot number minus one. Internal gimbal sockets use automatically
+SIYI vendor ports are 37260–37263. Z1-Mini UDP command ports are
+2337/2347/2357/2367; TCP uses 2332 for slot 1 and the command port for later
+slots. UDP 2338 is reserved for the XFRobot client's fixed reply endpoint.
+Multiple local Z1-Mini instances share that reply destination, so use TCP to
+keep their vendor telemetry separate. Internal gimbal sockets use automatically
 allocated ports. Existing MAVLink port and component settings are preserved;
 conflicting saved settings are reported before starting the group.
 
@@ -99,7 +102,10 @@ environment overrides described below still apply as slot-1 base ports, with
 the same offsets for later slots (MAVLink port 0 stays disabled). A8 launched
 from the GUI enables MAVLink; standalone `make a8_sitl-run` retains its existing
 disabled default. An explicit `CAMERA_GIMBAL_SITL_BUILD` directory is used for
-both build and launch, with numbered subdirectories for additional slots.
+both build and launch, with numbered sibling directories for additional slots.
+Terrain imagery download threads default to 16 per simulator (64 for four
+terrain slots). Set `CAMERA_GIMBAL_SITL_TILE_THREADS` to reduce this per-process
+limit; the environment override applies to every slot.
 Test the GUI without a display using
 `QT_QPA_PLATFORM=offscreen python3 sitl/test_launch.py`.
 Add `--real` to build and launch both real backends in isolated temporary

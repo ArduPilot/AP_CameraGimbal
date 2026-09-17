@@ -231,7 +231,8 @@ echo "$label SITL running"
 echo "  Web UI:   http://127.0.0.1:$web_port/ (admin / ardupilot)"
 echo "  SIYI API: 127.0.0.1:$camera_port (UDP and TCP)"
 echo "  Gimbal:   udp://$gimbal_host:$gimbal_port ($orientation)"
-if [ "$backend" = a8 ] && [ "${CAMERA_APP_MAVLINK_TCP_PORT:-0}" = 0 ] &&
+if [ "$backend" = a8 ] && [ -z "${CAMERA_GIMBAL_SITL_INSTANCE:-}" ] &&
+        [ "${CAMERA_APP_MAVLINK_TCP_PORT:-0}" = 0 ] &&
         [ "${CAMERA_APP_MAVLINK_UDP_PORT:-0}" = 0 ]; then
     echo "  MAVLink:  disabled (set ${label}_SITL_MAVLINK_TCP_PORT and/or ${label}_SITL_MAVLINK_UDP_PORT)"
 fi

@@ -232,6 +232,30 @@ time.sleep(60)
                     assert group.phase == 'idle' and 'shared' in group.status.text()
                 assert group.start_button.isEnabled()
                 print('PASS conflicting endpoints rejected before startup')
+                # Exercise actual Z1 defaults, including its distinct TCP port
+                # and the fixed client reply port missing from the old model.
+                group.count.setValue(4)
+                for panel in group.simulators:
+                    panel.camera.setCurrentIndex(panel.camera.findData('z1mini'))
+                from sitl.launcher_config import vendor_ports
+                from sitl.target_properties import TARGETS
+                for i, panel in enumerate(group.simulators):
+                    env, _ = panel.environment()
+                    assert int(env['Z1MINI_SITL_CAMERA_PORT']) == 2337 + 10*i
+                    assert vendor_ports(TARGETS['z1mini'],2337+10*i) == ((2332 if i==0 else 2337+10*i),2337+10*i)
+                group.validate()
+                for override, value in (('Z1MINI_SITL_WEB_PORT','2332'),
+                                        ('Z1MINI_SITL_CAMERA_PORT','2338'),
+                                        ('Z1MINI_SITL_MAVLINK_UDP_PORT','2338')):
+                    with mock.patch.dict(os.environ, {override:value}):
+                        try:
+                            group.validate()
+                        except ValueError:
+                            pass
+                        else:
+                            raise AssertionError(f'Missed vendor endpoint collision: {override}')
+                print('PASS Z1 default TCP/UDP endpoints and reserved reply port validation')
+
             finally:
                 group.close()
                 until(app, lambda: group.phase == 'idle')
