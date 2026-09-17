@@ -148,7 +148,7 @@ class SimulatorPanel(QtWidgets.QWidget):
             default_build = Path(env.get('LOCALAPPDATA', str(Path.home()))) / 'ArduPilot/CameraGimbalSITL' / backend
         build = Path(env.get('CAMERA_GIMBAL_SITL_BUILD', str(default_build))).resolve()
         if self.instance > 1:
-            build = build / f'instance-{self.instance}' / backend
+            build = build.with_name(f'{build.name}-instance-{self.instance}') / backend
         env.update(CAMERA_GIMBAL_SITL_BACKEND=backend,
                    CAMERA_GIMBAL_SITL_BUILD=str(build),
                    CAMERA_GIMBAL_SITL_INSTANCE=str(self.instance),

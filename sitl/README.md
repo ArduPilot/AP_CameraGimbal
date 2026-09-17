@@ -83,8 +83,9 @@ allocated ports. Existing MAVLink port and component settings are preserved;
 conflicting saved settings are reported before starting the group.
 
 Slot 1 keeps its existing build/runtime directory. Additional slots use
-`<build>/instance-<number>/<camera>/runtime`, with separate parameters, login
-settings, recordings and logs. **Clear parameters on launch** applies only to
+`<build>-instance-<number>/<camera>/runtime`, with separate parameters, login
+settings, recordings and logs. These are siblings of slot 1 so cleaning its
+build directory cannot delete another slot. **Clear parameters on launch** applies only to
 that tab. The launcher number seeds port and component defaults when creating
 or explicitly resetting a configuration, so web changes remain effective.
 
@@ -108,9 +109,10 @@ four MT11s, then all four camera types, checking concurrent web servers, video,
 MAVLink identities and cleanup on isolated test ports.
 
 Keep that command running and press Ctrl-C in the same terminal to stop all
-three processes. For MT11, another terminal can use `make sitl-kill`. The kill
-target matches this repository's exact MT11 SITL executable and script paths
-and is safe when SITL is already stopped. A per-model launcher lock prevents
+three processes. Use the GUI's Stop all button to stop a multi-simulator group.
+`make sitl-kill` is a repository-wide recovery command: its shared script matching
+can stop launchers and gimbal simulators from other slots and models too. It is
+safe when SITL is already stopped. Each runtime has a launcher lock to prevent
 accidental duplicate instances.
 
 The default endpoints are:

@@ -7,7 +7,7 @@ MAX_SIMULATORS = 4
 
 def defaults(instance):
     if not 1 <= instance <= MAX_SIMULATORS:
-        raise ValueError('Simulator number must be between 1 and 4')
+        raise ValueError(f'Simulator number must be between 1 and {MAX_SIMULATORS}')
     offset = instance - 1
     return {'tcp_port': 14550 + 10 * offset, 'udp_port': 14550 + 10 * offset,
             'camera_component_id': 100 + offset}
