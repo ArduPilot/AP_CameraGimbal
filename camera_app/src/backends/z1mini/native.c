@@ -78,7 +78,7 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             overlay_request=(struct ca_z1_overlay_request){
                 .sequence=next_overlay_sequence,
                 .desired=(uint8_t)atomic_load(&overlay->desired),
-                .reserved={0},
+                .reserved={CA_Z1_NATIVE_OVERLAY_VERSION,0,0},
             };
             overlay_request_offset=0;
             pending_overlay=true;

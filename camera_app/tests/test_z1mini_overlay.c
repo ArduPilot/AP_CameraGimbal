@@ -16,7 +16,7 @@ static int request_fd;
 
 static void request(unsigned sequence, bool enabled)
 {
-    struct ca_z1_overlay_request value={.sequence=sequence,.desired=enabled,.reserved={0}};
+    struct ca_z1_overlay_request value={.sequence=sequence,.desired=enabled,.reserved={CA_Z1_NATIVE_OVERLAY_VERSION,0,0}};
     assert(write(request_fd,&value,sizeof(value))==sizeof(value));
     read_overlay_request();
 }
@@ -81,6 +81,17 @@ int main(void)
     struct overlay_cache cache[2]={0};
     for (unsigned c=0;c<2;c++) overlay_frame(c,&frame,out,&cache[c]);
     assert(allocations==0 && mappings==0 && ftell(out)==0);
+    const uint8_t legacy[][8]={{1,0,1,0,1,0,1,0},{1,0,0,0,1,0,0,0}};
+    for (unsigned i=0;i<2;i++) {
+        assert(write(request_fd,legacy[i],8)==8);
+        read_overlay_request();
+        assert(atomic_load(&overlay_request)==0);
+    }
+    uint16_t pixel=0xffff;
+    struct ca_overlay_bitmap odd={.width=64,.height=45,.pixels=&pixel};
+    assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
+    odd.height=0;
+    assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
     request(1,true);
     fail_allocation=true;
     for (unsigned c=0;c<2;c++) overlay_frame(c,&frame,out,&cache[c]);

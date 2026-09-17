@@ -636,7 +636,7 @@ Z1MINI_AX_SDK_INCLUDE ?=
 .PHONY: z1mini-capture
 z1mini-capture: build/z1mini/ax-capture
 .PHONY: z1mini-overlay-test
-z1mini-overlay-test:
+z1mini-overlay-test: media-overlay-test
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p build/tests
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini tests/test_z1mini_overlay.c src/media/overlay.c -o build/tests/test_z1mini_overlay -ldl -pthread -lm
@@ -675,3 +675,9 @@ mavlink-components-test: host
 
 tests/test_manual_control: tests/test_manual_control.c src/protocol/manual_control.c include/camera_app/manual_control.h ../include/apcam/manual_control.h include/camera_app/backend.h
 	$(HOST_CC) -Wall -Wextra -Werror -std=c11 -DAPCAM_TARGET=APCAM_TARGET_MT11 -I../include -Iinclude -o $@ $< -lm
+
+.PHONY: media-overlay-test
+media-overlay-test:
+	mkdir -p build/tests
+	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude tests/test_media_overlay.c -o build/tests/test_media_overlay -pthread -lm
+	./build/tests/test_media_overlay

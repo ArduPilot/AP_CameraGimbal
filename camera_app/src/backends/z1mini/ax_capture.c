@@ -198,7 +198,8 @@ static int draw_cross(AX_VIDEO_FRAME_S *frame, const struct ca_overlay_bitmap *b
     AX_S32 (*unmap)(void *,AX_U32)=dlsym(RTLD_DEFAULT,"AX_SYS_Munmap");
     unsigned stride=frame->u32PicStride[0];
     unsigned uv_stride=frame->u32PicStride[1] ? frame->u32PicStride[1] : stride;
-    if (!map || !unmap || !b->pixels || stride<frame->u32Width || uv_stride<frame->u32Width ||
+    if (!map || !unmap || !b->pixels || !b->width || !b->height ||
+        ((b->x | b->y | b->width | b->height) & 1U) || stride<frame->u32Width || uv_stride<frame->u32Width ||
         frame->enCompressMode!=AX_COMPRESS_MODE_NONE || frame->u32LeftPadding ||
         b->x+b->width>frame->u32Width || b->y+b->height>frame->u32Height) return ENOTSUP;
     unsigned y_size=(b->height-1)*stride+b->width;
@@ -255,7 +256,7 @@ static void read_overlay_request(void)
     memcpy(&request,overlay_request_bytes,sizeof(request));
     overlay_request_length=0;
     if (!request.sequence || request.desired>1 ||
-        request.reserved[0] || request.reserved[1] || request.reserved[2]) return;
+        request.reserved[0]!=CA_Z1_NATIVE_OVERLAY_VERSION || request.reserved[1] || request.reserved[2]) return;
     pthread_mutex_lock(&output_lock);
     unsigned previous=atomic_load(&overlay_request);
     atomic_store(&overlay_error,0);
