@@ -510,7 +510,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.c \
 		src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
 		src/log.c src/recording/video_metadata.c src/recording/metadata.c -lpthread -lm
 
-test: manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -636,7 +636,7 @@ Z1MINI_AX_SDK_INCLUDE ?=
 .PHONY: z1mini-capture
 z1mini-capture: build/z1mini/ax-capture
 .PHONY: z1mini-overlay-test
-z1mini-overlay-test: media-overlay-test
+z1mini-overlay-test: media-overlay-test z1-overlay-race-test
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p build/tests
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini tests/test_z1mini_overlay.c src/media/overlay.c -o build/tests/test_z1mini_overlay -ldl -pthread -lm
@@ -681,3 +681,11 @@ media-overlay-test:
 	mkdir -p build/tests
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude tests/test_media_overlay.c -o build/tests/test_media_overlay -pthread -lm
 	./build/tests/test_media_overlay
+
+.PHONY: z1-overlay-race-test
+z1-overlay-race-test: build/tests/test_z1_overlay_race
+	$(PYTHON) -c 'import subprocess; subprocess.run(["./build/tests/test_z1_overlay_race"], check=True, timeout=10)'
+
+build/tests/test_z1_overlay_race: tests/test_z1_overlay_race.c src/backends/z1mini/native.c src/backends/z1mini/native.h
+	mkdir -p $(dir $@)
+	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -o $@ $< -lpthread

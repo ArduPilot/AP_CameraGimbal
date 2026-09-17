@@ -116,10 +116,14 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             if (!awaiting_overlay || header.pts!=awaiting_overlay_sequence) continue;
             if (overlay) {
                 int applied=header.key ? -(int)header.key : (int)header.stream;
-                /* The user may have changed the desired state while this
-                 * request was in flight; enqueue the new state after its ack. */
-                if ((int)header.stream!=atomic_load(&overlay->desired)) applied=-EINPROGRESS;
                 atomic_store(&overlay->applied,applied);
+                /* Re-read after publishing the ack: a control thread may have
+                 * changed desired and set EINPROGRESS just before this store.
+                 * A later control update leaves its own EINPROGRESS intact. */
+                if ((int)header.stream!=atomic_load(&overlay->desired))
+                    atomic_store(&overlay->applied,-EINPROGRESS);
+                if (header.key)
+                    ca_log("Z1 video overlay request failed: %s", strerror((int)header.key));
             }
             awaiting_overlay=false;
             overlay_wait_frames=0;

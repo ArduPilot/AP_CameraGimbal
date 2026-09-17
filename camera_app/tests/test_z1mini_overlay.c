@@ -90,6 +90,11 @@ int main(void)
     uint16_t pixel=0xffff;
     struct ca_overlay_bitmap odd={.width=64,.height=45,.pixels=&pixel};
     assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
+    odd.height=2; odd.width=4; odd.x=UINT32_MAX-1U;
+    assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
+    odd.x=0; odd.y=UINT32_MAX-1U;
+    assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
+    odd.y=0;
     odd.height=0;
     assert(draw_cross(&frame,&odd)==ENOTSUP && mappings==0);
     request(1,true);

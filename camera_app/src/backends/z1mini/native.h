@@ -23,7 +23,9 @@ _Static_assert(sizeof(struct ca_z1_overlay_request) == 8, "overlay request ABI")
 #define CA_Z1_NATIVE_OVERLAY_MAGIC UINT32_C(0x3144534f)
 /* Capability announcement in an overlay header's PTS, before any frames.
  * Outside the uint32 request sequence range. The existing header format lets
- * older receivers continue streaming even without this capability. */
+ * older receivers continue streaming even without this capability.
+ * READY and VERSION form one protocol revision: change both together whenever
+ * request interpretation changes. Unknown revisions leave video available. */
 #define CA_Z1_NATIVE_OVERLAY_READY (UINT64_MAX - 1U)
 /* Reject legacy one-byte toggles even when eight accumulate into a request. */
 #define CA_Z1_NATIVE_OVERLAY_VERSION 0xa5U

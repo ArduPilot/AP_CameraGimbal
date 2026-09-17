@@ -166,7 +166,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
                             image->settings.osd_cross && (stream<3 || image->settings.osd_recording),
                             image->settings.osd_thermal_fov && (stream<3 || image->settings.osd_recording) &&
                             !(has_thermal && (stream==1 || stream==4)), hfov[0]);
-        added=snprintf(request+used,sizeof(request)-used,"%s{\"scale\":%u,\"lines\":[",stream?",":"",geometry.scale);
+        added=snprintf(request+used,sizeof(request)-used,"%s{\"scale\":%.6f,\"lines\":[",stream?",":"",geometry.scale);
         if (added<0 || (size_t)added>=sizeof(request)-used) { errno=EOVERFLOW; return -1; }
         used+=added;
         for (unsigned i=0; i<geometry.count; i++) {
