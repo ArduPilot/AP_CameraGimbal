@@ -52,8 +52,10 @@ jobs:
           name: AP-CameraGimbal-camera-definitions
           path: build/camera-definitions/*.xml
           if-no-files-found: error
-      - name: Test Z1-Mini offline integration
-        run: build/environment/bin/python3 tests/test_z1mini.py
+      - name: Test Z1-Mini offline integration and separate 4K recording
+        run: |
+          build/environment/bin/python3 tests/test_z1mini.py
+          build/environment/bin/python3 tests/test_z1mini_4k.py
 
   exposure:
     runs-on: ubuntu-24.04
