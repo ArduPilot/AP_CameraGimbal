@@ -365,7 +365,7 @@ ffmpeg -i recording.mp4 -map 0:d:0 -c copy -f data telemetry.json
 ## MAVLink camera and gimbal services
 
 The app presents one MAVLink system with a camera component defaulting to ID
-100 (`MAV_COMP_ID_CAMERA`) and a gimbal-device component at component ID 154
+100 (`MAV_COMP_ID_CAMERA`) and a gimbal-device component defaulting to ID 154
 (`MAV_COMP_ID_GIMBAL`). Both use `mavlink.system_id`, configurable in the web
 Parameters page as **MAVLink system ID**. The default, 0, waits for the first
 flight controller HEARTBEAT and adopts its system ID for the lifetime of the
@@ -381,7 +381,13 @@ is `MAV_CAM_COMP_ID`, or `[mavlink] camera_component_id` in the INI file.
 Use a distinct camera component for each camera on the same vehicle. This
 setting applies after restart; the save acknowledgment uses the current ID.
 Camera heartbeats, commands, parameters and the MAVFTP camera-definition URI
-all use the selected component. The gimbal-device component remains 154.
+all use the selected component. The associated gimbal component changes with it:
+Camera 1–6 map to gimbal IDs **154, 171, 172, 173, 174, 175** respectively.
+`CAMERA_INFORMATION.gimbal_device_id`, gimbal heartbeats, telemetry requests,
+status messages and command addressing all use that gimbal component. The
+`gimbal_device_id` extension in `GIMBAL_DEVICE_INFORMATION` and
+`GIMBAL_DEVICE_ATTITUDE_STATUS` stays zero, as required for a device with its
+own MAVLink component.
 
 It accepts MAVLink 1 input for interoperability and
 emits MAVLink 2. TCP is a listening server with up to four clients. UDP learns

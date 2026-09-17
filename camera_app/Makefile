@@ -658,5 +658,9 @@ tests/test_exposure_native: tests/test_z1mini_native.c src/backends/z1mini/nativ
 manual-control-test: tests/test_manual_control
 	./tests/test_manual_control
 
+.PHONY: mavlink-components-test
+mavlink-components-test: host
+	$(PYTHON) tests/test_mavlink_components.py ./$(HOST_TARGET) ../sitl/gimbal_sim.py
+
 tests/test_manual_control: tests/test_manual_control.c src/protocol/manual_control.c include/camera_app/manual_control.h ../include/apcam/manual_control.h include/camera_app/backend.h
 	$(HOST_CC) -Wall -Wextra -Werror -std=c11 -DAPCAM_TARGET=APCAM_TARGET_MT11 -I../include -Iinclude -o $@ $< -lm
