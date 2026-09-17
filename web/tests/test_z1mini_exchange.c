@@ -39,6 +39,14 @@ static char marker(const char *directory)
 int main(int argc, char **argv)
 {
     assert(argc==2 && chdir(argv[1])==0);
+    unsetenv("MT11_WEB_LIVE_PORT");
+    unsetenv("CAMERA_APP_RTSP_PORT");
+    assert(live_video_port()==8555);
+    setenv("CAMERA_APP_RTSP_PORT","21000",1);
+    assert(live_video_port()==21001);
+    setenv("CAMERA_APP_RTSP_PORT","65535",1);
+    assert(live_video_port()==8555);
+    unsetenv("CAMERA_APP_RTSP_PORT");
     for (unsigned scenario=0; scenario<5; scenario++) {
         tree("stage",'N');
         if (scenario!=2) tree("live",'O');

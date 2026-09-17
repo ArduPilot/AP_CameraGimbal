@@ -41,9 +41,10 @@ while True:
     mavport=port()
     text=text.replace('tcp_port = 14550','tcp_port = 0').replace('udp_port = 14550',f'udp_port = {mavport}')
     config.write_text(text)
+    rtsp_port=port(adjacent=True)
     mcu=MCU();ready=root/'ready'
     env=dict(os.environ,CAMERA_APP_Z1_NATIVE_HELPER=str(helper),CAMERA_APP_RECORD_ROOT=str(records),
-             CAMERA_APP_CAPTURE_ROOT=str(root),CAMERA_APP_READY_PATH=str(ready),CAMERA_APP_RTSP_PORT=str(port()))
+             CAMERA_APP_CAPTURE_ROOT=str(root),CAMERA_APP_READY_PATH=str(ready),CAMERA_APP_RTSP_PORT=str(rtsp_port))
     log=open(root/'app.log','w')
     app=subprocess.Popen([str(ROOT/'camera_app/build/z1mini-host/camera-app'),'--uart',mcu.path,'--config',str(config)],
                          env=env,stdout=log,stderr=log)
@@ -74,7 +75,7 @@ while True:
         for _ in range(2):
             command(mav.MAV_CMD_VIDEO_START_CAPTURE)
             live=root/f'live-{_}.mp4'
-            with socket.create_connection(('127.0.0.1',8555),timeout=3) as connection, live.open('wb') as output:
+            with socket.create_connection(('127.0.0.1',rtsp_port+1),timeout=3) as connection, live.open('wb') as output:
                 connection.sendall(b'\0')
                 assert connection.recv(1)==b'\0'
                 end=time.monotonic()+2
