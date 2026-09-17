@@ -3,8 +3,26 @@
 #include "../src/media/media.c"
 #include <assert.h>
 static bool overlay_live;
+static unsigned closed, log_count;
 static int control_result, overlay_result;
-void ca_log(const char *format, ...) { (void)format; }
+void ca_log(const char *format, ...) { (void)format; log_count++; }
+int ca_media_impl_open(struct ca_media_impl **m, const struct ca_media_config *c)
+{ (void)c; *m=(struct ca_media_impl *)&overlay_live; return 0; }
+void ca_media_impl_close(struct ca_media_impl *m) { (void)m; closed++; }
+int ca_media_impl_get_thermal_gain(struct ca_media_impl *m, uint8_t *value)
+{ (void)m; *value=0; return 0; }
+int ca_media_impl_get_thermal_palette(struct ca_media_impl *m, uint8_t *value)
+{ (void)m; *value=0; return 0; }
+bool ca_media_impl_recording(const struct ca_media_impl *m) { (void)m; return false; }
+const char *ca_media_impl_recording_path(const struct ca_media_impl *m) { (void)m; return ""; }
+int ca_media_impl_set_recording(struct ca_media_impl *m, bool active)
+{ (void)m; (void)active; return 0; }
+bool ca_binlog_active(void) { return false; }
+uint64_t ca_binlog_time_us(void) { return 0; }
+void ca_binlog_emit(uint8_t id, const void *data, size_t size)
+{ (void)id; (void)data; (void)size; }
+int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exposure *e)
+{ (void)m; (void)lens; (void)e; return -1; }
 int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config *c)
 { (void)m; (void)c; overlay_live=overlay_result==0; errno=ENOSPC; return overlay_result; }
 static int control(void) { overlay_live=false; errno=EIO; return control_result; }
@@ -16,6 +34,13 @@ int ca_media_impl_set_thermal_main(struct ca_media_impl *m, bool v)
 { (void)m; (void)v; return control(); }
 int main(void)
 {
+    struct ca_media_config config={0};
+    struct ca_media *opened=NULL;
+    overlay_result=-1;
+    assert(ca_media_open(&opened,&config)==0);
+    assert(opened && !overlay_live && log_count==1 && closed==0);
+    ca_media_close(opened);
+    assert(closed==1);
     struct ca_media media={0};
     media.impl=(struct ca_media_impl *)&media;
     for (control_result=-1;control_result<=0;control_result++) {
