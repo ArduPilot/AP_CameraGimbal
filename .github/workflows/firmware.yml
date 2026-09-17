@@ -69,12 +69,15 @@ jobs:
       - name: Install SITL test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ffmpeg python3-venv iproute2
+          # PyQt wheels still require native GL/EGL libraries when using offscreen.
+          sudo apt-get install -y build-essential ffmpeg python3-venv iproute2 libegl1 libopengl0
           python3 -m venv build/terrain-venv
           build/terrain-venv/bin/pip install pymavlink numpy opencv-python-headless av pexpect defusedxml PyQt6
           # The live-control tests use MAVProxy's camera definition parser.
           build/terrain-venv/bin/pip install --no-deps 'MAVProxy @ git+https://github.com/ArduPilot/MAVProxy.git@13b1fb1cf6f594a026349e369576a8d11ce1d5b4'
           echo "$PWD/build/terrain-venv/bin" >> "$GITHUB_PATH"
+      - name: Check headless Qt runtime
+        run: QT_QPA_PLATFORM=offscreen python3 -c 'from PyQt6.QtWidgets import QApplication; app = QApplication([])'
       - name: Fetch pinned build sources
         run: make dependencies
       - name: Test multiple simulator launcher lifecycle
