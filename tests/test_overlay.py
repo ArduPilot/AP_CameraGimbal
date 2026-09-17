@@ -61,6 +61,18 @@ class Overlays(unittest.TestCase):
             self.assertEqual(self.geometry(cross=False, fov=invalid).count, 0)
         self.assertEqual(self.geometry(cross=False, box=False).count, 0)
 
+    def test_cross_proportions(self):
+        for width, height in ((1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)):
+            g = self.geometry(width, height, box=False)
+            self.assertEqual(g.count, 4)
+            for line in g.lines[:g.count]:
+                for coordinate, centre, fraction in (
+                        (line.x0, width // 2, 5 / 720),
+                        (line.y0, height // 2, 5 / 720),
+                        (line.x1, width // 2, 20 / 720),
+                        (line.y1, height // 2, 20 / 720)):
+                    self.assertAlmostEqual(abs(coordinate - centre), height * fraction, delta=.5)
+
     def test_terrain_thermal_projection(self):
         try:
             import vtk

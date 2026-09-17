@@ -10,12 +10,17 @@ void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned
     memset(g, 0, sizeof(*g));
     g->scale = height / 720;
     if (!g->scale) g->scale = 1;
-    int cx = width / 2, cy = height / 2, s = g->scale;
+    int cx = width / 2, cy = height / 2;
+    /* Scale arm geometry before rounding; 1080p must not truncate to 720p. */
+    int inner = (int)lround(height * (5.0 / 720.0));
+    int outer = (int)lround(height * (20.0 / 720.0));
+    if (inner < 1) inner = 1;
+    if (outer <= inner) outer = inner + 1;
     if (cross) {
         for (int y = -1; y <= 1; y += 2)
             for (int x = -1; x <= 1; x += 2)
                 g->lines[g->count++] = (struct ca_overlay_line){
-                    cx + x*5*s, cy + y*5*s, cx + x*20*s, cy + y*20*s, 0, false};
+                    cx + x*inner, cy + y*inner, cx + x*outer, cy + y*outer, 0, false};
     }
 #if APCAM_HAVE_THERMAL
     if (thermal_box && isfinite(rgb_hfov) && rgb_hfov > 0 && rgb_hfov < 180) {
