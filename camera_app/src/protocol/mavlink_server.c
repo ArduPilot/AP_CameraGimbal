@@ -45,6 +45,7 @@
 #define VEHICLE_PREDICTION_MS 250U
 #define TARGET_LOCATION_INTERVAL_MS 100U
 #define TELEMETRY_INTERVAL_REQUEST_MS 5000U
+#define THERMAL_DEFAULT_INTERVAL_MS 200U
 #define PI_F 3.14159265358979323846f
 
 struct mavlink_client {
@@ -110,6 +111,10 @@ struct ca_mavlink_server {
     uint8_t autopilot_component_id;
     uint8_t camera_mode;
     bool stream_enabled[APCAM_NUM_STREAMS];
+#if APCAM_HAVE_THERMAL
+    uint32_t thermal_interval_ms[APCAM_NUM_STREAMS];
+    uint64_t last_thermal_ms[APCAM_NUM_STREAMS];
+#endif
     float zoom_rate;
     float focus_percent;
     uint64_t started_ms;
@@ -544,6 +549,9 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM,
         .gimbal_device_id = server->gimbal_component_id,
     };
+#if APCAM_HAVE_THERMAL
+    info.flags |= CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE;
+#endif
 #if !APCAM_HAVE_FOCUS
     info.flags &= ~CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS;
 #endif
@@ -734,6 +742,9 @@ static void stream_properties(const struct ca_mavlink_server *server,
         *width = APCAM_THERMAL_STREAM_WIDTH;
         *height = APCAM_THERMAL_STREAM_HEIGHT;
         *flags |= VIDEO_STREAM_STATUS_FLAGS_THERMAL;
+#if APCAM_HAVE_THERMAL
+        *flags |= VIDEO_STREAM_STATUS_FLAGS_THERMAL_RANGE_ENABLED;
+#endif
     }
 }
 
@@ -824,6 +835,79 @@ static bool send_stream_selection(struct ca_mavlink_server *server,
     }
     return true;
 }
+
+#if APCAM_HAVE_THERMAL
+static unsigned thermal_stream_id(const struct ca_mavlink_server *server)
+{
+    return ca_media_thermal_main(server->media) ? 1U : 2U;
+}
+
+static bool thermal_selection_valid(float stream, float camera)
+{
+    return isfinite(stream) && stream >= 0 && stream <= APCAM_NUM_STREAMS &&
+           floorf(stream) == stream && camera == 0;
+}
+
+static float thermal_coordinate(unsigned pixel, unsigned size)
+{
+    return size > 1U && pixel < size ? (float)pixel / (size - 1U) : NAN;
+}
+
+static uint8_t send_thermal_range(struct ca_mavlink_server *server,
+                                 const struct route *route, unsigned selection)
+{
+    unsigned stream = thermal_stream_id(server);
+    if (selection != 0U && selection != stream) return MAV_RESULT_UNSUPPORTED;
+    struct ca_thermal_range range;
+    if (!ca_media_thermal_range(server->media, &range)) {
+        return MAV_RESULT_TEMPORARILY_REJECTED;
+    }
+    // Extrema use radiometric sensor pixels, not the upscaled RTSP dimensions.
+    mavlink_camera_thermal_range_t report = {
+        .time_boot_ms = boot_ms(server),
+        .stream_id = (uint8_t)stream,
+        .camera_device_id = 0,
+        .max = range.maximum_centi_c * 0.01f,
+        .min = range.minimum_centi_c * 0.01f,
+        .max_point_x = thermal_coordinate(range.maximum_x, APCAM_LENS3_WIDTH),
+        .max_point_y = thermal_coordinate(range.maximum_y, APCAM_LENS3_HEIGHT),
+        .min_point_x = thermal_coordinate(range.minimum_x, APCAM_LENS3_WIDTH),
+        .min_point_y = thermal_coordinate(range.minimum_y, APCAM_LENS3_HEIGHT),
+    };
+    mavlink_message_t message;
+    (void)mavlink_msg_camera_thermal_range_encode_status(server->system_id,
+        server->camera_component_id, &server->encode_status, &message, &report);
+    if (route != NULL) (void)send_message(server, route, &message);
+    else broadcast_message(server, &message);
+    return MAV_RESULT_ACCEPTED;
+}
+
+static uint8_t set_thermal_interval(struct ca_mavlink_server *server,
+                                   const float params[7])
+{
+    if (!thermal_selection_valid(params[2], params[3]) ||
+        !isfinite(params[1]) || params[1] < -1.0f ||
+        (params[1] < 0.0f && params[1] != -1.0f) ||
+        (double)params[1] > INT32_MAX) return MAV_RESULT_DENIED;
+    unsigned selection = (unsigned)params[2];
+    if (selection != 0U && selection != thermal_stream_id(server) && params[1] >= 0) {
+        return MAV_RESULT_UNSUPPORTED;
+    }
+    uint32_t interval = THERMAL_DEFAULT_INTERVAL_MS;
+    if (params[1] == -1.0f) interval = 0U;
+    else if (params[1] > 0.0f) {
+        // No useful data faster than the thermal sensor's frame rate.
+        float minimum = 1000.0f / APCAM_THERMAL_FRAME_RATE;
+        interval = (uint32_t)ceilf(fmaxf(minimum, params[1] * 0.001f));
+    }
+    for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
+        if (selection != 0U && selection != i + 1U) continue;
+        server->thermal_interval_ms[i] = interval;
+        server->last_thermal_ms[i] = 0;
+    }
+    return MAV_RESULT_ACCEPTED;
+}
+#endif
 
 static void send_gimbal_information(struct ca_mavlink_server *server,
                                     const struct route *route)
@@ -1236,7 +1320,15 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
 {
     switch (command) {
     case MAV_CMD_REQUEST_MESSAGE: {
+        if (!isfinite(params[0]) || params[0] < 0 || params[0] > 16777215 ||
+            floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
         uint32_t requested = (uint32_t)params[0];
+#if APCAM_HAVE_THERMAL
+        if (requested == MAVLINK_MSG_ID_CAMERA_THERMAL_RANGE) {
+            if (!thermal_selection_valid(params[1], params[2])) return MAV_RESULT_DENIED;
+            return send_thermal_range(server, route, (unsigned)params[1]);
+        }
+#endif
         unsigned instance = isfinite(params[1]) ? (unsigned)params[1] : 0U;
         if (requested == MAVLINK_MSG_ID_AUTOPILOT_VERSION) send_protocol_capabilities(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_INFORMATION) send_camera_information(server, route);
@@ -1252,6 +1344,11 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         else return MAV_RESULT_UNSUPPORTED;
         return MAV_RESULT_ACCEPTED;
     }
+#if APCAM_HAVE_THERMAL
+    case MAV_CMD_SET_MESSAGE_INTERVAL:
+        if (params[0] != MAVLINK_MSG_ID_CAMERA_THERMAL_RANGE) return MAV_RESULT_UNSUPPORTED;
+        return set_thermal_interval(server, params);
+#endif
     case MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES:
         send_protocol_capabilities(server, route);
         return MAV_RESULT_ACCEPTED;
@@ -2520,6 +2617,11 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
         server->definition_xml, server->definition_length);
     server->camera_mode = APCAM_HAVE_PHOTO ? 0 : 1;
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = true;
+#if APCAM_HAVE_THERMAL
+    for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
+        server->thermal_interval_ms[i] = THERMAL_DEFAULT_INTERVAL_MS;
+    }
+#endif
     server->next_image_index = 1;
     server->focus_percent = NAN;
     server->started_ms = monotonic_ms();
@@ -2628,6 +2730,15 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
     uint64_t now = monotonic_ms();
     reload_config(server, now);
+#if APCAM_HAVE_THERMAL
+    unsigned thermal_index = thermal_stream_id(server) - 1U;
+    uint32_t thermal_interval = server->thermal_interval_ms[thermal_index];
+    if (have_peer(server) && thermal_interval != 0U &&
+        now - server->last_thermal_ms[thermal_index] >= thermal_interval) {
+        server->last_thermal_ms[thermal_index] = now;
+        (void)send_thermal_range(server, NULL, thermal_index + 1U);
+    }
+#endif
     update_binlog(server, true);
     bool recording = ca_media_recording(server->media);
     if (recording != server->reported_recording) {
