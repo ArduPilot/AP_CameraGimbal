@@ -412,6 +412,11 @@ build/scene_setparam_inner.o: $(SCENE_ROOT)/src/core/scene_setparam_inner.c
 
 host: $(HOST_TARGET)
 
+.PHONY: thermal-mavlink-test
+thermal-mavlink-test: $(HOST_TARGET) $(A8_HOST_TARGET)
+	$(PYTHON) tests/test_thermal_mavlink.py ./$(HOST_TARGET) ../sitl/gimbal_sim.py thermal
+	$(PYTHON) tests/test_thermal_mavlink.py ./$(A8_HOST_TARGET) ../sitl/gimbal_sim.py rgb
+
 sitl: $(SITL_TARGET)
 
 $(SITL_TARGET): $(SITL_C_OBJECTS) $(SITL_CPP_OBJECTS) Makefile
@@ -510,7 +515,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.c \
 		src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
 		src/log.c src/recording/video_metadata.c src/recording/metadata.c -lpthread -lm
 
-test: media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \

@@ -364,6 +364,31 @@ ffmpeg -i recording.mp4 -map 0:d:0 -c copy -f data telemetry.json
 
 ## MAVLink camera and gimbal services
 
+Builds with `APCAM_HAVE_THERMAL` (MT11 hardware and MT11 SITL) advertise
+`CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE` and publish `CAMERA_THERMAL_RANGE` from
+the configured camera component. RGB-only targets do not advertise or send
+thermal range and reject its request/interval commands as unsupported.
+
+Reports contain minimum and maximum temperatures in degrees Celsius and their
+normalized positions in the thermal image. The positions use the radiometric
+sensor dimensions, not the upscaled RTSP resolution. The report's stream ID
+and `VIDEO_STREAM_STATUS_FLAGS_THERMAL_RANGE_ENABLED` follow the thermal image
+when main/secondary sources are swapped. No report is sent before thermal
+data is available; a one-shot request then returns temporarily rejected.
+
+The default rate is 5 Hz. `MAV_CMD_REQUEST_MESSAGE` with message ID 277 returns
+one sample (param2: stream ID, or 0 for the thermal stream; param3: camera
+device ID, which must be 0). `MAV_CMD_SET_MESSAGE_INTERVAL` uses message ID 277
+in param1, interval in microseconds in param2, stream ID (0 for all) in param3,
+and camera device ID 0 in param4. Interval -1 disables streaming, 0 restores
+the default, and positive intervals are limited to the thermal frame rate.
+These runtime settings do not change the SIYI thermal telemetry subscription.
+MT11 SITL currently supplies fixed synthetic extrema (12°C minimum, 42°C maximum).
+
+Run `make -C camera_app thermal-mavlink-test` for thermal/RGB protocol checks,
+or run `python3 camera_app/tests/test_thermal_mavlink.py build/sitl/camera-app sitl/gimbal_sim.py thermal`
+against an MT11 SITL build.
+
 The app presents one MAVLink system with a camera component defaulting to ID
 100 (`MAV_COMP_ID_CAMERA`) and a gimbal-device component defaulting to ID 154
 (`MAV_COMP_ID_GIMBAL`). Both use `mavlink.system_id`, configurable in the web

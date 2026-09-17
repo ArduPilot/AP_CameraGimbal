@@ -336,7 +336,8 @@ def full_capability_test(connection, siyi_port, capture_root, recording_state,
         mavutil.mavlink.CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE |
         mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM |
         mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
-        mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM
+        mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM |
+        mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE
     )
     assert camera.flags == expected_flags
     assert (camera.resolution_h, camera.resolution_v) == (1920, 1080)
