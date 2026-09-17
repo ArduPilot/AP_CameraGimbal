@@ -22,7 +22,7 @@ ROOT = WEB.parent
 MAVLINK = ROOT / 'camera_app/build/mavlink/all/include'
 
 
-def package(ap, ipc, sums=None, manifest=None):
+def package(ap, ipc, sums=None, manifest=None, force_zip64=False):
     """Build an overlay ZIP like tools/build_z1mini_package.py, with overrides."""
     ap = dict(ap)
     ap.setdefault('manifest.json', manifest or json.dumps({'target': 'xfrobot-z1mini',
@@ -32,10 +32,11 @@ def package(ap, ipc, sums=None, manifest=None):
     ap['SHA256SUMS'] = sums
     output = io.BytesIO()
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name, data in ap.items():
-            archive.writestr('gcu/ap/' + name, data)
-        for name, data in ipc.items():
-            archive.writestr('gcu/ipc/' + name, data)
+        entries = {'gcu/ap/' + name: data for name, data in ap.items()}
+        entries.update({'gcu/ipc/' + name: data for name, data in ipc.items()})
+        for name, data in entries.items():
+            with archive.open(name, 'w', force_zip64=force_zip64) as output_file:
+                output_file.write(data)
     return output.getvalue()
 
 
@@ -159,7 +160,10 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             assert request('/upgrade', b'x', headers | {'X-Firmware-Name': bad})[0] == 400, bad
         assert request('/upgrade', b'x', headers | {'X-CSRF-Token': 'no'})[0] == 403
         assert request('/upgrade', b'x', headers | {'Content-Type': 'text/plain'})[0] == 415
-        good = package(AP, IPC)
+        good = package(AP, IPC, manifest=json.dumps({
+            'target': 'xfrobot-z1mini', 'vendor_isp_required': False,
+            'metadata': {'vendor_isp_required': True, 'values': [None, -1.25e2, 'escaped " quote']},
+        }, separators=(',', ':')).encode())
         rejected_packages = {
             'not a zip': b'firmware upload fixture' * 4096,
             'entry outside gcu': raw_zip({'gcu/ap/x': b'1', 'etc/passwd': b'x'}),
@@ -175,6 +179,27 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
                 package(AP | {'camera-app': b'a' * 1200, 'z1mini-web': b'b' * 1200}, IPC),
                 ('gcu/ap/camera-app', 'gcu/ap/z1mini-web'), 100),
         }
+        manifests = {
+            'compact retained ISP': '{"target": "xfrobot-z1mini", "vendor_isp_required":true}',
+            'nested false cannot override true': '{"target":"xfrobot-z1mini","vendor_isp_required":true,"metadata":{"vendor_isp_required":false}}',
+            'nested field is not top-level': '{"target":"xfrobot-z1mini","metadata":{"vendor_isp_required":false}}',
+            'nested target': '{"metadata":{"target":"xfrobot-z1mini"},"vendor_isp_required":false}',
+            'duplicate ISP': '{"target":"xfrobot-z1mini","vendor_isp_required":true,"vendor_isp_required":false}',
+            'duplicate target': '{"target":"other","target":"xfrobot-z1mini","vendor_isp_required":false}',
+            'string boolean': '{"target":"xfrobot-z1mini","vendor_isp_required":"false"}',
+            'missing boolean': '{"target":"xfrobot-z1mini"}',
+            'trailing JSON': '{"target":"xfrobot-z1mini","vendor_isp_required":false}{}',
+            'trailing comma': '{"target":"xfrobot-z1mini","vendor_isp_required":false,}',
+            'truncated JSON': '{"target":"xfrobot-z1mini","vendor_isp_required":false',
+            'excess nesting': '{"target":"xfrobot-z1mini","vendor_isp_required":false,"extra":' + '['*20 + '0' + ']'*20 + '}',
+        }
+        for label, manifest in manifests.items():
+            rejected_packages[label] = package(AP, IPC, manifest=manifest.encode())
+        rejected_packages['local ZIP64'] = package(AP, IPC, force_zip64=True)
+        sentinel = bytearray(good)
+        position = sentinel.index(b'PK\x01\x02')
+        sentinel[position+20:position+24] = b'\xff'*4
+        rejected_packages['central ZIP64 compressed size'] = bytes(sentinel)
         for label, data in rejected_packages.items():
             status, message = request('/upgrade', data, headers)
             assert status == 400, (label, status, message)

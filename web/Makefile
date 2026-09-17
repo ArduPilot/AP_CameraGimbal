@@ -68,18 +68,18 @@ FORCE:
 
 all: mt11-web
 
-mt11-web: mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+mt11-web: mt11-web.c gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(CC) $(CFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
-a8-web: mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+a8-web: mt11-web.c gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(A8_CROSS_COMPILE)gcc $(CFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(A8_HOST_CHECK): mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+$(A8_HOST_CHECK): mt11-web.c gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(HOST_CC) $(CFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
-$(HOST_TEST): mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+$(HOST_TEST): mt11-web.c gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	$(HOST_CC) $(CFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST \
 		-DAPP_DIR='"$(TEST_ROOT)/app"' \
 		-DMEDIA_ROOT='"$(TEST_ROOT)/mnt"' \
@@ -106,12 +106,12 @@ sitl: $(SITL_TARGET)
 .PHONY: portable-sitl
 portable-sitl: $(SITL_BIN_ROOT)/mt11-web-portable
 
-$(SITL_BIN_ROOT)/mt11-web-portable: mt11-web.c $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+$(SITL_BIN_ROOT)/mt11-web-portable: mt11-web.c gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
 	$(HOST_CC) $(CFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST -DMT11_WEB_SITL \
 		-DWEB_PORTABLE_SITL -o $@ $< -lm
 
-$(SITL_TARGET): mt11-web.c Makefile $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
+$(SITL_TARGET): mt11-web.c gcu_manifest.h Makefile $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
 	$(HOST_CC) $(CFLAGS) $(APCAM_CPPFLAGS) $(SITL_DEFINES) $(SITL_EXTRA_DEFINES) -o $@ $< -lm
 
@@ -137,7 +137,7 @@ build/zr10_upgrade.h: ../tools/zr10_firmware.py ../packaging/zr10/upgrade_script
 
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
-z1mini-web: mt11-web.c z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS) $(Z1MINI_MAVLINK)/all/mavlink.h
+z1mini-web: mt11-web.c gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(APCAM_HEADERS) $(Z1MINI_MAVLINK)/all/mavlink.h
 	$(Z1MINI_CROSS_COMPILE)gcc $(CFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
 
 $(Z1MINI_MAVLINK)/all/mavlink.h:

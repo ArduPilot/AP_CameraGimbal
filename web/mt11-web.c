@@ -2132,6 +2132,18 @@ static unsigned live_video_port(void)
         }
     }
 #endif
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+    /* Z1 camera-app derives the private preview socket from its RTSP port. */
+    const char *rtsp = getenv("CAMERA_APP_RTSP_PORT");
+    if (rtsp != NULL && *rtsp != '\0') {
+        char *last;
+        errno = 0;
+        unsigned long port = strtoul(rtsp, &last, 10);
+        if (errno == 0 && *last == '\0' && port > 0 && port < 65535) {
+            return (unsigned)port + 1U;
+        }
+    }
+#endif
     return LIVE_VIDEO_PORT;
 }
 
@@ -7990,6 +8002,19 @@ static bool gcu_entry_name_ok(const char *name, size_t length)
     return false;
 }
 
+#include "gcu_manifest.h"
+
+static bool gcu_zip_extra_ok(const unsigned char *extra, size_t length)
+{
+    while (length) {
+        if (length<4) return false;
+        unsigned kind=zip_le16(extra), size=zip_le16(extra+2);
+        if (kind==1 || size>length-4) return false; /* ZIP64 */
+        extra+=4+size; length-=4+size;
+    }
+    return true;
+}
+
 struct gcu_package_index {
     unsigned count;
     char names[256][256];
@@ -8076,6 +8101,28 @@ static const char *check_gcu_package(int fd, size_t size, uint64_t *extracted,
         }
         if (!gcu_entry_name_ok(name, name_length)) {
             problem = "unexpected file in archive";
+            goto fail;
+        }
+        uint32_t local_offset=zip_le32(header+42);
+        unsigned char local[30], local_extra[1024];
+        if (zip_le32(header+20)==UINT32_MAX || uncompressed==UINT32_MAX ||
+            local_offset==UINT32_MAX || !gcu_zip_extra_ok(header+46+name_length, extra_length)) {
+            problem="ZIP64 or invalid extra fields";
+            goto fail;
+        }
+        if ((uint64_t)local_offset+sizeof(local)>directory_offset ||
+            pread(fd,local,sizeof(local),local_offset)!=(ssize_t)sizeof(local) ||
+            zip_le32(local)!=0x04034b50) {
+            problem="invalid local file header";
+            goto fail;
+        }
+        unsigned local_name=zip_le16(local+26), local_length=zip_le16(local+28);
+        if (zip_le32(local+18)==UINT32_MAX || zip_le32(local+22)==UINT32_MAX ||
+            local_length>sizeof(local_extra) ||
+            (uint64_t)local_offset+30+local_name+local_length>directory_offset ||
+            pread(fd,local_extra,local_length,(off_t)local_offset+30+local_name)!=(ssize_t)local_length ||
+            !gcu_zip_extra_ok(local_extra,local_length)) {
+            problem="ZIP64 or invalid local extra fields";
             goto fail;
         }
         for (unsigned previous = 0; previous < n; previous++) {
@@ -8276,12 +8323,11 @@ static int install_gcu_package(const char *package, const struct gcu_package_ind
     }
     manifest = join_path(path, sizeof(path), staged, "ap/manifest.json") ?
                read_file(path, 65536, &length) : NULL;
-    if (manifest == NULL || strstr(manifest, "\"target\": \"xfrobot-z1mini\"") == NULL) {
+    if (manifest == NULL || !gcu_manifest_valid(manifest, length, &needs_isp)) {
         free(manifest);
-        snprintf(error, error_size, "manifest is not for the " PRODUCT_NAME);
+        snprintf(error, error_size, "invalid " PRODUCT_NAME " package manifest");
         return 1;
     }
-    needs_isp = strstr(manifest, "\"vendor_isp_required\": true") != NULL;
     free(manifest);
     if (needs_isp) {
         snprintf(error, error_size, "retained-ISP packages cannot be installed from the web UI");
@@ -8309,6 +8355,15 @@ static int install_gcu_package(const char *package, const struct gcu_package_ind
     (void)remove_path_tree(stage);
     sync_firmware_storage();
     return 0;
+}
+
+/* Remove uploads before replying, so a completed request has no temporary file. */
+static void cleanup_gcu_upload(int *output, bool *created, const char *path)
+{
+    int saved=errno;
+    if (*output>=0) { close(*output); *output=-1; }
+    if (*created) { (void)unlink(path); *created=false; }
+    errno=saved;
 }
 
 static void handle_firmware_install(int fd, const struct request *request, const char *peer)
@@ -8365,6 +8420,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
     created = true;
     if (fstatvfs(output, &space) == 0 &&
         (uint64_t)space.f_bavail * space.f_frsize < request->content_length + 1024U * 1024U) {
+        cleanup_gcu_upload(&output, &created, package);
         send_text_errorf(fd, 507, "Insufficient Storage", S_E_FW_TMP_SPACE, RUNTIME_DIR);
         goto done;
     }
@@ -8372,11 +8428,13 @@ static void handle_firmware_install(int fd, const struct request *request, const
     problem = check_gcu_package(output, received, &extracted, &package_index);
     if (problem != NULL) {
         log_message("firmware %s from %s rejected: %s", filename, peer, problem);
+        cleanup_gcu_upload(&output, &created, package);
         send_text_errorf(fd, 400, "Bad Request", S_E_FW_PACKAGE, problem);
         goto done;
     }
     if (statvfs(GCU_ROOT, &space) == 0 &&
         (uint64_t)space.f_bavail * space.f_frsize < extracted + 1024U * 1024U) {
+        cleanup_gcu_upload(&output, &created, package);
         send_text_errorf(fd, 507, "Insufficient Storage", S_E_FW_TMP_SPACE, GCU_ROOT);
         goto done;
     }
@@ -8389,6 +8447,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
             (void)remove_path_tree(stage);
         }
         log_message("firmware %s from %s not installed: %s", filename, peer, error);
+        cleanup_gcu_upload(&output, &created, package);
         if (result == 1) {
             send_text_errorf(fd, 400, "Bad Request", S_E_FW_PACKAGE, error);
         } else {
@@ -8397,6 +8456,7 @@ static void handle_firmware_install(int fd, const struct request *request, const
         goto done;
     }
     log_message("firmware %s (%zu bytes) installed by %s; rebooting", filename, received, peer);
+    cleanup_gcu_upload(&output, &created, package);
     send_text_errorf(fd, 201, "Created", S_FW_INSTALLED_Z1, filename);
     schedule_reboot();
     goto done;
@@ -8404,12 +8464,13 @@ static void handle_firmware_install(int fd, const struct request *request, const
 receive_failed:
     log_message("firmware upload from %s failed after %zu bytes: %s", peer, received,
                 strerror(errno));
+    cleanup_gcu_upload(&output, &created, package);
     send_text_errorf(fd, 400, "Bad Request", S_E_FW_FAILED, received, strerror(errno));
 done:
-    if (output >= 0) close(output);
-    if (created) (void)unlink(package);
+    cleanup_gcu_upload(&output, &created, package);
     if (upgrade_lock >= 0) close(upgrade_lock);
 }
+
 #endif
 
 static void handle_firmware_upload(int fd, const struct request *request,

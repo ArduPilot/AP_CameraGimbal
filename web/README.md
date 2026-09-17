@@ -93,7 +93,9 @@ for the MT11's isolated management network.
 
 The ArduPilot camera app feeds its existing encoded H.264 access
 units to a small in-process fragmented-MP4 writer. Its private TCP service is
-bound only to `127.0.0.1:8555`; it is neither an additional public camera port
+bound only to `127.0.0.1:8555` by default. For Z1-Mini, setting
+`CAMERA_APP_RTSP_PORT` in both the camera app and web server environments moves
+the private service to that port plus one. It is neither an additional public camera port
 nor an RTSP proxy. `mt11-web` authenticates `/live/video1.mp4` and
 `/live/video2.mp4`, selects the corresponding private stream, and relays the
 bytes without decoding or transcoding. The native `<video>` element consumes
