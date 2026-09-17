@@ -20,6 +20,8 @@ def make_tar(entries):
         for name, kind, data, mode, linkname in entries:
             member = tarfile.TarInfo(name)
             member.mode = mode
+            member.uid = member.gid = 12345
+            member.uname = member.gname = 'archive-owner'
             if kind == 'file':
                 member.size = len(data)
                 archive.addfile(member, io.BytesIO(data))
@@ -38,7 +40,8 @@ def make_tar(entries):
 
 class SafeTar(unittest.TestCase):
     def extract_legacy(self, data, destination):
-        with mock.patch.object(tarfile, 'data_filter', None, create=True):
+        with mock.patch.object(tarfile, 'data_filter', None, create=True), \
+                mock.patch.object(tarfile.TarFile, 'chown', side_effect=AssertionError('archive chown')):
             safe_extract(io.BytesIO(data), destination)
 
     def test_hardened_modes_and_relative_symlink(self):
@@ -53,7 +56,7 @@ class SafeTar(unittest.TestCase):
                 ('tool/link', 'symlink', b'', 0o777, 'bin/compiler'),
             ]), root)
             self.assertEqual((root / 'tool/bin/compiler').read_bytes(), b'compiler')
-            self.assertEqual((root / 'tool/bin/compiler').stat().st_mode & 0o777, 0o755)
+            self.assertEqual((root / 'tool/bin/compiler').stat().st_mode & 0o7777, 0o755)
             self.assertEqual((root / 'tool/bin/compiler').stat().st_uid,
                              getattr(os, 'getuid', lambda: 0)())
             self.assertEqual((root / 'tool/bin/compiler').stat().st_gid,
@@ -61,6 +64,18 @@ class SafeTar(unittest.TestCase):
             self.assertEqual((root / 'tool/bin/nonexec').stat().st_mode & 0o777, 0o644)
             self.assertEqual((root / 'tool/readonly/child').read_bytes(), b'child')
             self.assertEqual(os.readlink(root / 'tool/link'), 'bin/compiler')
+
+    def test_existing_symlink_cannot_be_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'out'
+            archive = make_tar([
+                ('original', 'file', b'keep', 0o644, None),
+                ('link', 'symlink', b'', 0o777, 'original'),
+                ('link', 'file', b'overwrite', 0o644, None),
+            ])
+            with self.assertRaises(RuntimeError):
+                self.extract_legacy(archive, root)
+            self.assertEqual((root / 'original').read_bytes(), b'keep')
 
     def test_chained_symlink_escape_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

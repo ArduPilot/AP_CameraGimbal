@@ -31,6 +31,7 @@ def safe_extract(archive, destination):
 
         # Apply each member only after validating it against the filesystem
         # produced by prior members. This catches chained symlink escapes.
+        directories = []
         for original in tar:
             member = copy.copy(original)
             name = PurePosixPath(member.name)
@@ -65,23 +66,28 @@ def safe_extract(archive, destination):
             # exist, and reject replacing a symlink itself.
             if target.is_symlink() or not _inside(target, destination):
                 raise RuntimeError(f'Unsafe archive member: {member.name}')
-            if member.isdir() or member.issym():
-                # data_filter deliberately ignores directory and symlink
-                # modes; retaining read-only directory modes breaks extraction
-                # of children on Python versions without that filter.
-                member.mode = None
-            else:
+            if member.isdir():
+                # Ignore archive directory permissions like data_filter. Do
+                # not pass mode=None to old tarfile: its chmod cannot handle it.
+                target.mkdir(parents=True, exist_ok=True)
+                directories.append((member, target))
+                continue
+            if not member.issym():
                 member.mode &= 0o755
                 if not (member.mode & 0o100):
                     member.mode &= ~0o111
                 member.mode |= 0o600
-            member.uid = getattr(os, 'getuid', lambda: 0)()
-            member.gid = getattr(os, 'getgid', lambda: 0)()
-            member.uname = member.gname = ''
+            # Skip archive ownership entirely, including when run as root.
+            # Apply only the validated file mode and timestamp ourselves.
             if 'filter' in inspect.signature(tar.extract).parameters:
-                tar.extract(member, destination, filter='fully_trusted')
+                tar.extract(member, destination, set_attrs=False, filter='fully_trusted')
             else:
-                tar.extract(member, destination)
+                tar.extract(member, destination, set_attrs=False)
+            if not member.issym():
+                tar.chmod(member, target)
+                tar.utime(member, target)
+        for member, target in reversed(directories):
+            tar.utime(member, target)
 
 
 if __name__ == '__main__':
