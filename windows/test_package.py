@@ -354,8 +354,17 @@ def main():
                     assert info.gimbal_device_id == (154, 171, 172, 173)[index], info
                 finally:
                     connection.close()
-                with av.open(f'rtsp://127.0.0.1:{rtsp_port}/video1', options={'rtsp_transport': 'tcp'}, timeout=15) as video:
-                    assert next(video.decode(video=0)).width >= 1280
+                for stream in ('video1', 'video2'):
+                    with av.open(f'rtsp://127.0.0.1:{rtsp_port}/{stream}',
+                                 options={'rtsp_transport': 'tcp'}, timeout=15) as video:
+                        frames = 0
+                        for frame in video.decode(video=0):
+                            assert frame.width >= 1280
+                            frames += 1
+                            if frames == 12:
+                                break
+                        assert frames == 12, f'Simulator {index+1} {stream} stopped streaming'
+                print(f'Concurrent simulator {index+1}: both streams decoded 12 frames', flush=True)
             window.stop()
             pump_until(lambda: window.phase == 'idle', 20)
             assert all(not (p.runtime / 'camera-app.ready').exists() for p in window.simulators)
