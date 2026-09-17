@@ -688,4 +688,6 @@ z1-overlay-race-test: build/tests/test_z1_overlay_race
 
 build/tests/test_z1_overlay_race: tests/test_z1_overlay_race.c src/backends/z1mini/native.c src/backends/z1mini/native.h
 	mkdir -p $(dir $@)
+	# Check the production translation unit without headers supplied by the harness.
+	$(HOST_CC) -Wall -Wextra -Werror -std=c11 -Iinclude -fsyntax-only src/backends/z1mini/native.c
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -o $@ $< -lpthread
