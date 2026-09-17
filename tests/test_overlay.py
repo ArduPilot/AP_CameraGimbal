@@ -20,7 +20,7 @@ class Line(C.Structure):
 
 
 class Geometry(C.Structure):
-    _fields_ = [('lines', Line * 8), ('count', C.c_uint), ('scale', C.c_uint)]
+    _fields_ = [('lines', Line * 8), ('count', C.c_uint), ('scale', C.c_float)]
 
 
 class Bitmap(C.Structure):
@@ -65,6 +65,7 @@ class Overlays(unittest.TestCase):
         for width, height in ((1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)):
             g = self.geometry(width, height, box=False)
             self.assertEqual(g.count, 4)
+            self.assertAlmostEqual(g.scale, height / 720, places=5)
             for line in g.lines[:g.count]:
                 for coordinate, centre, fraction in (
                         (line.x0, width // 2, 5 / 720),

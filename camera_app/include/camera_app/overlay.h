@@ -8,7 +8,8 @@
 struct ca_overlay_line { int x0, y0, x1, y1; unsigned region; bool dashed; };
 struct ca_overlay_geometry {
     struct ca_overlay_line lines[CA_OVERLAY_LINES];
-    unsigned count, scale;
+    unsigned count;
+    float scale;
 };
 /* Coordinates refer to the final displayed image. Thermal FOV uses native
  * sensor aspect, not the aspect of a stretched thermal video stream. */

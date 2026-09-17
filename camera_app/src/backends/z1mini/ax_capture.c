@@ -201,7 +201,8 @@ static int draw_cross(AX_VIDEO_FRAME_S *frame, const struct ca_overlay_bitmap *b
     if (!map || !unmap || !b->pixels || !b->width || !b->height ||
         ((b->x | b->y | b->width | b->height) & 1U) || stride<frame->u32Width || uv_stride<frame->u32Width ||
         frame->enCompressMode!=AX_COMPRESS_MODE_NONE || frame->u32LeftPadding ||
-        b->x+b->width>frame->u32Width || b->y+b->height>frame->u32Height) return ENOTSUP;
+        b->x>frame->u32Width || b->y>frame->u32Height ||
+        b->width>frame->u32Width-b->x || b->height>frame->u32Height-b->y) return ENOTSUP;
     unsigned y_size=(b->height-1)*stride+b->width;
     unsigned uv_size=(b->height/2-1)*uv_stride+b->width;
     AX_U64 uv_base=frame->u64PhyAddr[1] ? frame->u64PhyAddr[1] :

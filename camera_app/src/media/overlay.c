@@ -8,8 +8,8 @@ void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned
                          bool cross, bool thermal_box, float rgb_hfov)
 {
     memset(g, 0, sizeof(*g));
-    g->scale = height / 720;
-    if (!g->scale) g->scale = 1;
+    g->scale = height / 720.0f;
+    if (g->scale < 1) g->scale = 1;
     int cx = width / 2, cy = height / 2;
     /* Scale arm geometry before rounding; 1080p must not truncate to 720p. */
     int inner = (int)lround(height * (5.0 / 720.0));
@@ -62,8 +62,10 @@ int ca_overlay_bitmaps(struct ca_overlay_bitmap out[CA_OVERLAY_REGIONS],
                       unsigned width, unsigned height, const struct ca_overlay_geometry *g)
 {
     memset(out,0,sizeof(*out)*CA_OVERLAY_REGIONS);
+    int radius=(int)lroundf(2*g->scale), core=(int)lroundf(g->scale)-1;
+    int dash=(int)lroundf(12*g->scale);
     for (unsigned region=0; region<CA_OVERLAY_REGIONS; region++) {
-        int x0=width,y0=height,x1=-1,y1=-1, radius=2*g->scale;
+        int x0=width,y0=height,x1=-1,y1=-1;
         for (unsigned i=0; i<g->count; i++) {
             const struct ca_overlay_line *l=&g->lines[i];
             if (l->region!=region) continue;
@@ -86,10 +88,10 @@ int ca_overlay_bitmaps(struct ca_overlay_bitmap out[CA_OVERLAY_REGIONS],
                 if (l->region!=region) continue;
                 int n=maximum(abs(l->x1-l->x0),abs(l->y1-l->y0));
                 for (int k=0; k<=n; k++) {
-                    if (l->dashed && (k/(12*g->scale))%2) continue;
+                    if (l->dashed && (k/dash)%2) continue;
                     int x=l->x0+(n ? (l->x1-l->x0)*k/n : 0);
                     int y=l->y0+(n ? (l->y1-l->y0)*k/n : 0);
-                    dot(b,x,y,pass ? (int)g->scale-1 : radius,pass ? 0xffff : 0x8000);
+                    dot(b,x,y,pass ? core : radius,pass ? 0xffff : 0x8000);
                 }
             }
         }

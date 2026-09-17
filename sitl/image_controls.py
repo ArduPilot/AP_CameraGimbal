@@ -119,11 +119,11 @@ def _overlay_pixels(width, height, scale, lines):
     groups = [[line for line in lines if not line[4]]]
     groups.extend([line] for line in lines if line[4])
     for group in groups:
-        for color, radius in ((0, 2 * scale), (255, scale - 1)):
+        for color, radius in ((0, int(2 * scale + .5)), (255, int(scale + .5) - 1)):
             for x0, y0, x1, y1, dashed in group:
                 n = max(abs(x1 - x0), abs(y1 - y0))
                 for k in range(n + 1):
-                    if dashed and k // (12 * scale) % 2:
+                    if dashed and k // int(12 * scale + .5) % 2:
                         continue
                     x = x0 + (int((x1 - x0) * k / n) if n else 0)
                     y = y0 + (int((y1 - y0) * k / n) if n else 0)
