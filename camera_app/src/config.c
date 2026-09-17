@@ -647,6 +647,12 @@ int ca_config_param_find(const char *name)
     return -1;
 }
 
+bool ca_config_param_is_bool(size_t index)
+{
+    const struct config_field *field = param_field(index);
+    return field && field->kind == CONFIG_BOOL;
+}
+
 size_t ca_config_param_options(size_t index, const struct ca_config_option **options,
                                 int *minimum, int *maximum)
 {

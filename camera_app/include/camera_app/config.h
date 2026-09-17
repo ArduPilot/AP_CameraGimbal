@@ -168,6 +168,7 @@ struct ca_config_option {
     int value;
 };
 /* Metadata from the same table used to validate persistent parameter writes. */
+bool ca_config_param_is_bool(size_t index);
 size_t ca_config_param_options(size_t index, const struct ca_config_option **options,
                                 int *minimum, int *maximum);
 const char *ca_config_param_name(size_t index);

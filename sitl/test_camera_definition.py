@@ -81,8 +81,27 @@ def protocol_checks(link, definition, target):
         message = receive(link, 'PARAM_EXT_VALUE')
         assert message.param_count == len(definition.parameters)
         assert message.get_srcComponent() == CAMERA and message.get_srcSystem() == 42
+        assert message.param_type == definition.parameters[message.param_id].wire_type, message
         values[message.param_id] = decode_value(message)
     assert set(values) == set(definition.parameters)
+    for name, parameter in definition.parameters.items():
+        if parameter.type != 'bool':
+            continue
+        assert parameter.wire_type == M.MAV_PARAM_EXT_TYPE_UINT8
+        for value in (0, 1):
+            assert write(link, definition, name, value) == value
+            assert read(link, name) == value
+        write(link, definition, name, 2, M.PARAM_ACK_VALUE_UNSUPPORTED)
+        write(link, definition, name, 0, M.PARAM_ACK_VALUE_UNSUPPORTED, M.MAV_PARAM_EXT_TYPE_INT32)
+        assert read(link, name) == 1
+        # Only the declared UINT8 byte is significant; unused bytes are padding.
+        link.mav.param_ext_set_send(42, CAMERA, name.encode(), b'\0' + b'\xff' * 127,
+                                   M.MAV_PARAM_EXT_TYPE_UINT8)
+        ack = receive(link, 'PARAM_EXT_ACK', lambda m: m.param_id == name and
+                      m.param_result != M.PARAM_ACK_IN_PROGRESS, timeout=30)
+        assert ack.param_result == M.PARAM_ACK_ACCEPTED and decode_value(ack) == 0, ack
+        assert read(link, name) == 0
+        write(link, definition, name, values[name])
     names = list(definition.parameters)
     assert read(link, '', len(names) - 1) == values[names[-1]]
     assert read(link, 'CAM_MODE') == (1 if target == 'z1mini' else 0)
@@ -253,8 +272,8 @@ def mavproxy_checks(endpoint, directory, link, definition):
             cli.close(force=True)
 
 
-def test_target(target, output):
-    build = ROOT / 'build' / ('sitl' if target == 'mt11' else target + '-sitl')
+def test_target(target, output, build_root=ROOT / 'build'):
+    build = build_root / ('sitl' if target == 'mt11' else target + '-sitl')
     directory = Path(tempfile.mkdtemp(prefix=target + '-', dir=output))
     config = directory / 'camera.ini'
     template = ROOT / ('camera_app/camera.ini' if target == 'mt11' else
@@ -317,9 +336,10 @@ if __name__ == '__main__':
     parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
                         default=['mt11', 'a8', 'zr10', 'z1mini'])
     parser.add_argument('--component', type=int, choices=range(100, 106), default=100)
+    parser.add_argument('--build-root', type=Path, default=ROOT / 'build')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/camera-definition-test')
     args = parser.parse_args()
     CAMERA = args.component
     args.output.mkdir(parents=True, exist_ok=True)
     for target in args.targets:
-        test_target(target, args.output.resolve())
+        test_target(target, args.output.resolve(), args.build_root.resolve())
