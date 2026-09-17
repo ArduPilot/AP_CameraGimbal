@@ -107,6 +107,35 @@ static void test_temperature_range(void)
     assert(range.minimum_centi_c == 810U);
     assert(range.maximum_x == 2U && range.maximum_y == 1U);
     assert(range.minimum_x == 0U && range.minimum_y == 2U);
+    /* The sensor uses 1/64 Kelvin: retain negative and >655.35C values. */
+    pixels[0] = 14922; /* -40C */
+    pixels[11] = 62282; /* 700C */
+    assert(ca_mt11_thermal_range_from_y16(pixels, 4, 3, &range));
+    assert(range.minimum_centi_c == -3999 && range.maximum_centi_c == 70001);
+    assert(ca_thermal_legacy_centi_c(range.minimum_centi_c) == 0);
+    assert(ca_thermal_legacy_centi_c(range.maximum_centi_c) == UINT16_MAX);
+    assert(ca_thermal_legacy_centi_c(3935) == 3935);
+    pixels[0] = 0; pixels[11] = UINT16_MAX;
+    assert(ca_mt11_thermal_range_from_y16(pixels, 4, 3, &range));
+    assert(range.minimum_centi_c == -27315 && range.maximum_centi_c == 75083);
+    /* Compare hotspot positions with the real thermal image converters. */
+    uint8_t yuyv[4*2*2] = {0}, y[8], uv[4];
+    yuyv[0] = 255;
+    for (unsigned rotated=0; rotated<2; rotated++) {
+        if (rotated) ca_mt11_yuyv_to_nv12_rotated_180(yuyv,4,2,y,4,uv,4);
+        else ca_mt11_yuyv_to_nv12(yuyv,4,2,y,4,uv,4);
+        unsigned x=ca_thermal_display_pixel(0,4,rotated);
+        unsigned row=ca_thermal_display_pixel(0,2,rotated);
+        assert(y[row*4+x] == 255);
+        assert(ca_thermal_display_pixel(4,4,rotated) == 4); /* invalid stays invalid */
+    }
+    range.sampled_us=1000000;
+    assert(ca_thermal_range_fresh(&range,1000000));
+    assert(ca_thermal_range_fresh(&range,1250000));
+    assert(!ca_thermal_range_fresh(&range,1250001));
+    assert(!ca_thermal_range_fresh(&range,999999));
+    range.sampled_us=0;
+    assert(!ca_thermal_range_fresh(&range,1));
     assert(!ca_mt11_thermal_range_from_y16(NULL, 4, 3, &range));
 }
 

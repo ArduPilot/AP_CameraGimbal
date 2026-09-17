@@ -40,13 +40,13 @@ def samples(link, count):
     return found
 
 
-def check_sample(m, stream):
+def check_sample(m, stream, rotated=True):
     assert m.stream_id == stream, m
     assert math.isclose(m.max, 42.0, abs_tol=0.001), m
     assert math.isclose(m.min, 12.0, abs_tol=0.001), m
     for actual, expected in ((m.max_point_x, 100 / 639), (m.max_point_y, 200 / 511),
                              (m.min_point_x, 10 / 639), (m.min_point_y, 20 / 511)):
-        assert math.isclose(actual, expected, abs_tol=1e-6), m
+        assert math.isclose(actual, 1-expected if rotated else expected, abs_tol=1e-6), m
 
 
 def check(link, thermal):
@@ -109,6 +109,26 @@ def check(link, thermal):
     interval(link, -1)
 
 
+def check_measurement_edges(link, fixture):
+    interval(link, -1)  # Isolate requested samples from queued broadcasts.
+    for rotated in (False, True):
+        fixture.write_text(f'70000 -4000 0 0 639 511 {time.monotonic_ns() // 1000} {int(rotated)}')
+        report = request_message(link, CAMERA, THERMAL, 'CAMERA_THERMAL_RANGE')
+        assert report.max == 700 and report.min == -40, report
+        assert report.max_point_x == report.max_point_y == int(rotated), report
+        assert report.min_point_x == report.min_point_y == int(not rotated), report
+    interval(link, 0)
+    time.sleep(.4)  # The frozen frame must expire while the app remains alive.
+    drain(link)
+    assert link.recv_match(type='CAMERA_THERMAL_RANGE', blocking=True, timeout=.4) is None
+    ack, _ = command(link, CAMERA, M.MAV_CMD_REQUEST_MESSAGE, [THERMAL])
+    assert ack.result == M.MAV_RESULT_TEMPORARILY_REJECTED, ack
+    fixture.write_text(f'70000 -4000 0 0 639 511 {time.monotonic_ns() // 1000} 0')
+    report = request_message(link, CAMERA, THERMAL, 'CAMERA_THERMAL_RANGE')
+    assert report.min == -40  # Publishing recovers on a fresh frame.
+    interval(link, -1)
+
+
 def main():
     if len(sys.argv) != 4 or sys.argv[3] not in ('thermal', 'rgb'):
         raise SystemExit('usage: test_thermal_mavlink.py CAMERA_APP GIMBAL_SIM thermal|rgb')
@@ -124,6 +144,8 @@ def main():
                    CAMERA_APP_MAVLINK_TCP_PORT=str(mav_port), CAMERA_APP_MAVLINK_UDP_PORT=str(mav_port),
                    CAMERA_APP_READY_PATH=str(ready), CAMERA_APP_LOG_ROOT=str(root / 'logs'),
                    CAMERA_APP_CAPTURE_ROOT=str(root / 'capture'), CAMERA_APP_RECORD_ROOT=str(root / 'record'))
+        fixture = root / 'thermal.range'
+        fixture.write_text(f'4200 1200 100 200 10 20 {time.monotonic_ns() // 1000} 1')
         camera = gimbal = link = udp = None
         with (root / 'test.log').open('w+') as log:
             try:
@@ -143,7 +165,17 @@ def main():
                 else:
                     ack, _ = command(udp, CAMERA, M.MAV_CMD_REQUEST_MESSAGE, [THERMAL])
                     assert ack.result == M.MAV_RESULT_UNSUPPORTED, ack
-                print(f'PASS {Path(binary).name}: thermal={thermal}, capability, requests, stream flags and TCP/UDP')
+                if thermal:
+                    link.close(); link = None
+                    udp.close(); udp = None
+                    terminate(camera); camera = None
+                    ready.unlink(missing_ok=True)
+                    env['CAMERA_APP_TEST_THERMAL_RANGE'] = str(fixture)
+                    camera = subprocess.Popen([binary], env=env, stdout=log, stderr=log)
+                    wait_path(ready, camera)
+                    link = mavutil.mavlink_connection(f'tcp:127.0.0.1:{mav_port}', source_system=42, source_component=190)
+                    check_measurement_edges(link, fixture)
+                print(f'PASS {Path(binary).name}: thermal={thermal}, capability, requests, rotation, signed range, freshness and TCP/UDP')
             except BaseException:
                 log.flush()
                 log.seek(0)

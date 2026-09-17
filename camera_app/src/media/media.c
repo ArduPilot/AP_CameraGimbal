@@ -317,7 +317,8 @@ int ca_media_manual_focus(struct ca_media *media, int direction)
 int ca_media_set_focus_percent(struct ca_media *media, float percent)
 { REQUIRE_IMPL; return ca_media_impl_set_focus_percent(IMPL, percent); }
 bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
-{ return IMPL && ca_media_impl_thermal_range(IMPL, range); }
+{ return IMPL && ca_media_impl_thermal_range(IMPL, range) &&
+         ca_thermal_range_fresh(range, ca_binlog_time_us()); }
 int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
 {
     REQUIRE_IMPL;

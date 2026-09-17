@@ -848,8 +848,9 @@ static bool thermal_selection_valid(float stream, float camera)
            floorf(stream) == stream && camera == 0;
 }
 
-static float thermal_coordinate(unsigned pixel, unsigned size)
+static float thermal_coordinate(unsigned pixel, unsigned size, bool rotated)
 {
+    pixel = ca_thermal_display_pixel(pixel, size, rotated);
     return size > 1U && pixel < size ? (float)pixel / (size - 1U) : NAN;
 }
 
@@ -862,17 +863,17 @@ static uint8_t send_thermal_range(struct ca_mavlink_server *server,
     if (!ca_media_thermal_range(server->media, &range)) {
         return MAV_RESULT_TEMPORARILY_REJECTED;
     }
-    // Extrema use radiometric sensor pixels, not the upscaled RTSP dimensions.
+    // Normalize sensor pixels after the same rotation as the displayed image.
     mavlink_camera_thermal_range_t report = {
         .time_boot_ms = boot_ms(server),
         .stream_id = (uint8_t)stream,
         .camera_device_id = 0,
         .max = range.maximum_centi_c * 0.01f,
         .min = range.minimum_centi_c * 0.01f,
-        .max_point_x = thermal_coordinate(range.maximum_x, APCAM_LENS3_WIDTH),
-        .max_point_y = thermal_coordinate(range.maximum_y, APCAM_LENS3_HEIGHT),
-        .min_point_x = thermal_coordinate(range.minimum_x, APCAM_LENS3_WIDTH),
-        .min_point_y = thermal_coordinate(range.minimum_y, APCAM_LENS3_HEIGHT),
+        .max_point_x = thermal_coordinate(range.maximum_x, APCAM_LENS3_WIDTH, range.rotated_180),
+        .max_point_y = thermal_coordinate(range.maximum_y, APCAM_LENS3_HEIGHT, range.rotated_180),
+        .min_point_x = thermal_coordinate(range.minimum_x, APCAM_LENS3_WIDTH, range.rotated_180),
+        .min_point_y = thermal_coordinate(range.minimum_y, APCAM_LENS3_HEIGHT, range.rotated_180),
     };
     mavlink_message_t message;
     (void)mavlink_msg_camera_thermal_range_encode_status(server->system_id,
@@ -898,7 +899,7 @@ static uint8_t set_thermal_interval(struct ca_mavlink_server *server,
     else if (params[1] > 0.0f) {
         // No useful data faster than the thermal sensor's frame rate.
         float minimum = 1000.0f / APCAM_THERMAL_FRAME_RATE;
-        interval = (uint32_t)ceilf(fmaxf(minimum, params[1] * 0.001f));
+        interval = (uint32_t)ceilf(fmaxf(minimum, params[1] / 1000.0f));
     }
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) {
         if (selection != 0U && selection != i + 1U) continue;

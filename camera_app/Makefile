@@ -489,8 +489,8 @@ $(MP4_ROLLOVER_TEST_TARGET): tests/test_mp4_rollover.c src/recording/mp4_minimp4
 recording-test: $(MP4_TEST_TARGET) $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
 	python3 tests/test_mp4_rollover.py --large
 
-$(THERMAL_TEST_TARGET): tests/test_thermal.c $(BACKEND_DIR)/thermal.c src/log.c
-	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^ -lpthread
+$(THERMAL_TEST_TARGET): tests/test_thermal.c $(BACKEND_DIR)/thermal.c src/log.c include/camera_app/thermal.h
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(filter %.c,$^) -lpthread
 
 $(MT11_IMX586_TEST_TARGET): tests/test_mt11_imx586.c $(BACKEND_DIR)/imx586.c \
 		$(BACKEND_DIR)/imx586.h $(BACKEND_DIR)/imx586_mode0_registers.inc
