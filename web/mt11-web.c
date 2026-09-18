@@ -636,6 +636,7 @@ enum string_id {
     S_TITLE_REBOOTING,
     S_REBOOTING_HEADING,
     S_REBOOTING_TEXT,
+    S_REBOOT_HOME,
     S_CSRF_RELOAD,
     S_CSRF_INVALID,
     S_UNKNOWN_POST,
@@ -1186,7 +1187,8 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_REBOOT_UNCONFIRMED] = {"Reboot confirmation was not checked", "未勾选重启确认", "再起動の確認にチェックが入っていません"},
     [S_TITLE_REBOOTING] = {"%s rebooting", "%s 正在重启", "%s 再起動中"},
     [S_REBOOTING_HEADING] = {"Camera rebooting", "相机正在重启", "カメラを再起動しています"},
-    [S_REBOOTING_TEXT] = {"Reconnect in about one minute.", "请在约一分钟后重新连接。", "約 1 分後に再接続してください。"},
+    [S_REBOOTING_TEXT] = {"Waiting for the camera to restart…", "正在等待相机重新启动…", "カメラの再起動を待っています…"},
+    [S_REBOOT_HOME] = {"Open main page", "打开主页", "メインページを開く"},
     [S_CSRF_RELOAD] = {"Invalid or expired form token; reload the page", "表单令牌无效或已过期，请刷新页面", "フォームトークンが無効または期限切れです。ページを再読み込みしてください"},
     [S_CSRF_INVALID] = {"Invalid or expired form token", "表单令牌无效或已过期", "フォームトークンが無効または期限切れです"},
     [S_UNKNOWN_POST] = {"Unknown action", "未知的操作", "不明な操作です"},
@@ -8902,6 +8904,44 @@ static void send_file_response_async(int client, const struct request *request,
     }
 }
 
+static const char reboot_script[] =
+    "(() => {\n"
+    "  const script = document.currentScript;\n"
+    "  const status = document.getElementById('reboot-status');\n"
+    "  const heading = document.getElementById('reboot-heading');\n"
+    "  if (!script || !status || !heading) return;\n"
+    "  const started = Date.now();\n"
+    "  const poll = () => {\n"
+    "    if (Date.now() - started >= 60000) {\n"
+    "      status.textContent = status.dataset.timeout;\n"
+    "      return;\n"
+    "    }\n"
+    "    const check = new XMLHttpRequest();\n"
+    "    check.open('GET', '/upgrade-status?t=' + Date.now());\n"
+    "    check.timeout = 2000;\n"
+    "    const retry = () => {\n"
+    "      status.textContent = status.dataset.wait;\n"
+    "      setTimeout(poll, 1000);\n"
+    "    };\n"
+    "    check.onload = () => {\n"
+    "      const token = check.responseText.trim();\n"
+    "      // A restart changes the server token, or invalidates the browser's\n"
+    "      // session. A response from the old server is not completion.\n"
+    "      if (check.status === 401 || (check.status === 200 &&\n"
+    "          /^[0-9a-f]{64}$/.test(token) && token !== script.dataset.csrf)) {\n"
+    "        heading.textContent = status.dataset.back;\n"
+    "        status.textContent = check.status === 401 ? status.dataset.login : status.dataset.back;\n"
+    "        window.location.replace('/');\n"
+    "        return;\n"
+    "      }\n"
+    "      retry();\n"
+    "    };\n"
+    "    check.onerror = check.ontimeout = retry;\n"
+    "    check.send();\n"
+    "  };\n"
+    "  poll();\n"
+    "})();\n";
+
 static void send_rebooting_page(int fd)
 {
     struct string_buffer body;
@@ -8909,18 +8949,28 @@ static void send_rebooting_page(int fd)
 
     snprintf(title, sizeof(title), T(S_TITLE_REBOOTING), PRODUCT_NAME);
     sb_init(&body);
-    sb_appendf(&body, "<!doctype html><html lang=%s><meta charset=utf-8><title>",
-               languages[current_language].html_lang);
-    sb_append_html(&body, title);
-    sb_appendf(&body, "</title><h1>%s</h1><p>%s</p>", T(S_REBOOTING_HEADING),
-               T(S_REBOOTING_TEXT));
+    append_head(&body, title, page_style, NULL);
+    sb_appendf(&body, "<main class=card><h1 id=reboot-heading>%s</h1>"
+                      "<p id=reboot-status role=status aria-live=polite data-wait=\"", T(S_REBOOTING_HEADING));
+    sb_append_html(&body, T(S_REBOOTING_TEXT));
+    sb_append(&body, "\" data-back=\"");
+    sb_append_html(&body, T(S_JS_FW_BACK));
+    sb_append(&body, "\" data-login=\"");
+    sb_append_html(&body, T(S_JS_FW_BACK_LOGIN));
+    sb_append(&body, "\" data-timeout=\"");
+    sb_append_html(&body, T(S_JS_FW_TIMEOUT));
+    sb_append(&body, "\">");
+    sb_append_html(&body, T(S_REBOOTING_TEXT));
+    sb_appendf(&body, "</p><p><a id=reboot-home href=/ class=button>%s</a></p></main>"
+                      "<script id=reboot-monitor src=/reboot.js data-csrf=\"%s\" defer></script></body></html>",
+               T(S_REBOOT_HOME), csrf_token);
     send_response(fd, 200, "OK", "text/html; charset=utf-8", body.data, body.len, NULL);
     free(body.data);
 }
 
 static void schedule_reboot(void)
 {
-#ifdef MT11_WEB_SITL
+#if defined(MT11_WEB_SITL) || defined(MT11_WEB_TEST)
     log_message("SITL reboot request ignored");
 #else
     pid_t child = fork();
@@ -8986,6 +9036,13 @@ static void handle_request(int fd, const char *peer)
         send_response(fd, 200, "OK", "image/vnd.microsoft.icon", (const char *)favicon_ico, sizeof(favicon_ico), NULL);
         goto done;
     }
+    /* No credentials or tokens in this script. Serve it even if a restart
+     * expired the session between loading the reboot page and its script. */
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/reboot.js") == 0) {
+        send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
+                      reboot_script, sizeof(reboot_script) - 1U, NULL);
+        goto done;
+    }
     select_language(&request);
     auth = authenticate(&request, session_token);
     if (auth < 0) {
@@ -9002,6 +9059,12 @@ static void handle_request(int fd, const char *peer)
                    strcmp(request.path, "/language.js") == 0) {
             send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
                           language_script, sizeof(language_script) - 1U, NULL);
+        } else if (strcmp(request.method, "GET") == 0 &&
+                   strcmp(request.path, "/upgrade-status") == 0) {
+            /* Reboot polling must reach its onload handler when the cookie
+             * expires. A Basic challenge can instead block on a browser auth
+             * dialog. No status/token is disclosed to this unauthenticated request. */
+            send_text_error(fd, 401, "Unauthorized", T(S_AUTH_REQUIRED), NULL);
         } else if (find_header_span(&request, "Authorization", &header_len) == NULL &&
                    wants_html(&request)) {
             /* browsers get the login form; scripted clients keep Basic */

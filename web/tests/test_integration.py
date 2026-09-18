@@ -16,6 +16,7 @@ import time
 import urllib.parse
 
 from test_parameters_browser import check_parameters_browser
+from test_reboot_browser import check_reboot_browser
 
 
 binary = Path(sys.argv[1]).resolve()
@@ -572,8 +573,19 @@ def test_reboot_redirect(csrf):
     assert status == 400 and b"Reboot confirmation was not checked" in body
     status, body, headers = form("/reboot", "initial-password", csrf, {"confirm": "yes"})
     assert status == 303 and headers["Location"] == "/rebooting", (status, body)
-    status, body, _ = request("GET", "/rebooting", "initial-password")
-    assert status == 200 and b"<h1>Camera rebooting</h1>" in body
+    status, body, page_headers = request("GET", "/rebooting", "initial-password")
+    assert status == 200 and b"<h1 id=reboot-heading>Camera rebooting</h1>" in body
+    script_status, script, _ = raw_request("GET", "/reboot.js")
+    assert script_status == 200  # It still loads after the login session expires.
+    auth_status, _, auth_headers = raw_request("GET", "/upgrade-status",
+        headers={"Cookie": "session=" + "a" * 64, "Accept": "*/*"})
+    assert auth_status == 401
+    assert "www-authenticate" not in {key.lower() for key, _ in auth_headers}
+    check_reboot_browser(body, script, page_headers["Content-Security-Policy"], dict(auth_headers))
+    status, token, _ = request("GET", "/upgrade-status", "initial-password")
+    assert status == 200 and token.decode() == csrf
+    # Reloading the GET page never submits another reboot request.
+    assert request("GET", "/rebooting", "initial-password")[0] == 200
 
 
 try:
