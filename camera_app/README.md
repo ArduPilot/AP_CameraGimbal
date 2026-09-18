@@ -1080,9 +1080,10 @@ than moved onto the edges. This is nominal co-aligned geometry: it does not
 compensate for lens misalignment, distortion or near-field parallax.
 
 MT11 uses encoder regions (one small cross bitmap and up to four narrow box
-strips); A8 uses encoder regions and ZR10 uses VPE output regions. No video is
-decoded or re-encoded for overlays. ZR10 photos using a shared VPE output can
-also include the cross. The Z1-Mini native helper patches only the cross's
+strips); A8 uses scaler output port regions, as the vendor application does,
+and ZR10 uses VPE output regions. No video is decoded or re-encoded for
+overlays. ZR10 photos using a shared VPE output, and A8 photos taken from the
+main stream's scaler port, can also include the cross. The Z1-Mini native helper patches only the cross's
 small NV12 region before encoding, using uncached mappings, without copying
 whole frames or inserting a processing queue. These hardware integrations
 need camera testing; SITL pixel, parameter and recording regressions run in CI.
