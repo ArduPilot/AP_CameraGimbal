@@ -648,6 +648,8 @@ try:
         "main_codec": "h264",
         "sub_resolution": "1280x720",
         "sub_codec": "h264",
+        "main_alias": "main.264",
+        "sub_alias": "",
         "brightness": "50",
         "saturation": "50",
         "contrast": "50",
@@ -689,6 +691,7 @@ try:
     assert 'cross = "true"' in saved_config and 'thermal_fov = "true"' in saved_config
     assert 'recording = "true"' in saved_config
     assert 'autorecord = "while_armed"' in saved_config
+    assert 'alias = "main.264"' in saved_config and 'alias = ""' in saved_config
     assert "retained from an installation" in saved_config
     status, body, _ = request("GET", "/parameters", "initial-password")
     assert status == 200

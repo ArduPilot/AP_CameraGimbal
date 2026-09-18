@@ -1,6 +1,9 @@
 #include "camera_app/rtsp.h"
 #include "camera_app/video_metadata.h"
 #include "camera_app/support_video.h"
+extern "C" {
+#include "camera_app/log.h"
+}
 #include <cstdlib>
 #include <limits>
 
@@ -90,7 +93,9 @@ struct ca_rtsp {
     struct stream {
         ca_support_video *publisher = nullptr;
         xop::MediaSessionId session_id;
+        std::vector<xop::MediaSessionId> aliases;
         enum ca_video_codec codec;
+        unsigned frame_rate;
         uint32_t next_timestamp;
         uint32_t timestamp_step;
     };
@@ -106,6 +111,7 @@ static void add_stream(ca_rtsp *rtsp, xop::MediaSessionId session_id,
     ca_rtsp::stream stream;
     stream.session_id = session_id;
     stream.codec = codec;
+    stream.frame_rate = frame_rate;
     stream.next_timestamp = codec == CA_VIDEO_H265
                                 ? xop::H265Source::GetTimestamp()
                                 : xop::H264Source::GetTimestamp();
@@ -151,6 +157,34 @@ extern "C" int ca_rtsp_add_video(struct ca_rtsp *rtsp, const char *path,
     return 0;
 }
 
+extern "C" int ca_rtsp_add_alias(struct ca_rtsp *rtsp, unsigned stream_id,
+                                  const char *alias)
+{
+    if (rtsp == nullptr || alias == nullptr) return -1;
+    if (*alias == '\0') return 0;
+    std::lock_guard<std::mutex> lock(rtsp->mutex);
+    if (stream_id >= rtsp->streams.size()) return -1;
+    ca_rtsp::stream &stream = rtsp->streams[stream_id];
+    xop::MediaSession *session = xop::MediaSession::CreateNew(alias);
+    if (session == nullptr) return -1;
+    session->AddSource(xop::channel_0, new AccessUnitSource(stream.codec, stream.frame_rate));
+    xop::MediaSessionId session_id = rtsp->server->AddSession(session);
+    if (session_id == 0) return -1;
+    stream.aliases.push_back(session_id);
+    return 0;
+}
+
+extern "C" void ca_rtsp_add_config_aliases(struct ca_rtsp *rtsp,
+                                           const struct ca_config *settings)
+{
+    if (rtsp == nullptr || settings == nullptr) return;
+    const char *aliases[2] = {settings->main_alias, settings->sub_alias};
+    for (unsigned i = 0; i < 2; i++) {
+        if (ca_rtsp_add_alias(rtsp, i, aliases[i]) < 0)
+            ca_log("cannot serve /video%u as /%s", i + 1U, aliases[i]);
+    }
+}
+
 static int push_video(struct ca_rtsp *rtsp, unsigned stream_id,
                       const uint8_t *data, size_t length, bool key_frame,
                       float hfov_deg, bool timed, uint32_t timestamp)
@@ -181,6 +215,8 @@ static int push_video(struct ca_rtsp *rtsp, unsigned stream_id,
     ca_support_video_push(stream.publisher, annotated, annotated_length,
                            frame.timestamp, key_frame);
     bool sent = rtsp->server->PushFrame(stream.session_id, xop::channel_0, frame);
+    for (xop::MediaSessionId alias : stream.aliases)
+        sent = rtsp->server->PushFrame(alias, xop::channel_0, frame) || sent;
     // The stream clock must advance even without a local RTSP viewer; an
     // independent SupportProxy publisher still consumes these access units.
     if (inserted != 0) stream.next_timestamp += stream.timestamp_step;
@@ -249,6 +285,8 @@ extern "C" void ca_rtsp_close(struct ca_rtsp *rtsp)
         if (rtsp->server) {
             for (const ca_rtsp::stream &stream : rtsp->streams) {
                 rtsp->server->RemoveSession(stream.session_id);
+                for (xop::MediaSessionId alias : stream.aliases)
+                    rtsp->server->RemoveSession(alias);
             }
         }
         rtsp->server.reset();

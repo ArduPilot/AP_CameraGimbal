@@ -461,6 +461,10 @@ enum string_id {
     S_H_SUB_RESOLUTION_A8,
     S_P_SUB_CODEC,
     S_H_SUB_CODEC,
+    S_P_MAIN_ALIAS,
+    S_H_MAIN_ALIAS,
+    S_P_SUB_ALIAS,
+    S_H_SUB_ALIAS,
     S_H_BRIGHTNESS_MT11,
     S_H_SATURATION_MT11,
     S_H_CONTRAST_MT11,
@@ -1004,6 +1008,10 @@ static const char *const strings[S_COUNT][LANG_COUNT] = {
     [S_H_SUB_RESOLUTION_A8] = {"Resolution of rtsp://CAMERA:8554/video2.", "rtsp://CAMERA:8554/video2 的分辨率。", "rtsp://CAMERA:8554/video2 の解像度。"},
     [S_P_SUB_CODEC] = {"Sub RTSP codec", "子 RTSP 流编码格式", "サブ RTSP コーデック"},
     [S_H_SUB_CODEC] = {"Codec of rtsp://CAMERA:8554/video2.", "rtsp://CAMERA:8554/video2 的编码格式。", "rtsp://CAMERA:8554/video2 のコーデック。"},
+    [S_P_MAIN_ALIAS] = {"Main RTSP alias", "主 RTSP 流别名", "メイン RTSP エイリアス"},
+    [S_H_MAIN_ALIAS] = {"Extra path serving the same stream as /video1, for example the vendor's main.264. Letters, digits, dot, dash and underscore; blank for none.", "以另一路径提供与 /video1 相同的视频流，例如厂商的 main.264。仅限字母、数字、点、连字符和下划线；留空则不提供。", "/video1 と同じストリームを別のパス名でも提供します（例: メーカー標準の main.264）。英数字、ドット、ハイフン、アンダースコアのみ。空欄で無効。"},
+    [S_P_SUB_ALIAS] = {"Sub RTSP alias", "子 RTSP 流别名", "サブ RTSP エイリアス"},
+    [S_H_SUB_ALIAS] = {"Extra path serving the same stream as /video2; blank for none.", "以另一路径提供与 /video2 相同的视频流；留空则不提供。", "/video2 と同じストリームを別のパス名でも提供します。空欄で無効。"},
     [S_H_BRIGHTNESS_MT11] = {"Visible-camera ISP brightness, applied to both RGB sensors.", "可见光相机 ISP 亮度，同时应用于两个 RGB 传感器。", "可視光カメラの ISP の明るさ。両方の RGB センサーに適用されます。"},
     [S_H_SATURATION_MT11] = {"Visible-camera ISP saturation, applied to both RGB sensors.", "可见光相机 ISP 饱和度，同时应用于两个 RGB 传感器。", "可視光カメラの ISP の彩度。両方の RGB センサーに適用されます。"},
     [S_H_CONTRAST_MT11] = {"Visible-camera ISP contrast, applied to both RGB sensors.", "可见光相机 ISP 对比度，同时应用于两个 RGB 传感器。", "可視光カメラの ISP のコントラスト。両方の RGB センサーに適用されます。"},
@@ -1746,6 +1754,10 @@ static const struct parameter replacement_parameters[] = {
      PARAM_ENUM, 0, 0, 0, sub_resolution_options, sizeof(sub_resolution_options) / sizeof(sub_resolution_options[0])},
     {"sub_codec", "stream.sub", "codec", S_P_SUB_CODEC, S_H_SUB_CODEC,
      PARAM_ENUM, 0, 0, 0, replacement_codec_options, sizeof(replacement_codec_options) / sizeof(replacement_codec_options[0])},
+    {"main_alias", "stream.main", "alias", S_P_MAIN_ALIAS, S_H_MAIN_ALIAS,
+     PARAM_TEXT, 0, 63, 1, NULL, 0},
+    {"sub_alias", "stream.sub", "alias", S_P_SUB_ALIAS, S_H_SUB_ALIAS,
+     PARAM_TEXT, 0, 63, 1, NULL, 0},
     {"brightness", "image", "brightness", S_P_BRIGHTNESS,
      TARGET_TEXT(S_H_BRIGHTNESS_MT11, S_H_CARDV_BRIGHTNESS),
      PARAM_INTEGER, 0, 100, 1, NULL, 0},
@@ -1832,7 +1844,8 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot", "false",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION),
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
-    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264", "50", "50", "50", "0",
+    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264",
+    APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS, "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
     "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "false", "false", "false", "eth0", "", "", "",
 };
@@ -3427,6 +3440,8 @@ static bool valid_text_parameter(const struct parameter *parameter,
         if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
         return apcam_ipv4_prefix(text, &address, &prefix);
     }
+    if (!strcmp(parameter->key, "alias")) /* one RTSP path segment */
+        return strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
     if (strcmp(parameter->section, "support_proxy") == 0) {
         for (size_t i = 0; i < length; i++) {
             unsigned char c = (unsigned char)text[i];
@@ -5826,6 +5841,10 @@ static void append_parameter_field(struct string_buffer *page, const char *confi
                 sb_append(page, " pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
                 sb_append_html(page, T(parameter->help));
                 sb_append(page, "\"");
+            } else if (!strcmp(parameter->key, "alias")) {
+                sb_append(page, " pattern=\"[A-Za-z0-9._-]*\" title=\"");
+                sb_append_html(page, T(parameter->help));
+                sb_append(page, "\"");
             }
             sb_append(page, " value=\"");
         } else {
@@ -7285,7 +7304,7 @@ static const char parameters_script[] =
     "      }\n"
     "      if (field.name === 'timezone' && /[\\s\\x00-\\x1f\\x7f]/.test(field.value)) invalid(field);\n"
     "    }\n"
-    "    for (const name of ['proxy_host', 'network_interface']) {\n"
+    "    for (const name of ['proxy_host', 'network_interface', 'main_alias', 'sub_alias']) {\n"
     "      if (!/^[a-zA-Z0-9_.-]*$/.test(value(name))) invalid(get(name));\n"
     "    }\n"
     "    const parseAddress = text => {\n"
