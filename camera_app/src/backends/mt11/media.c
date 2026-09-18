@@ -590,6 +590,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
                           config->settings.sub_codec,
                           CA_MT11_THERMAL_FRAME_RATE,
                           &media->thermal_rtsp_stream) < 0) goto fail;
+    ca_rtsp_add_config_aliases(media->rtsp, &config->settings);
     if (ca_rtsp_support_proxy(media->rtsp, &config->settings.support) < 0)
         ca_log("SupportProxy video startup failed: %s", strerror(errno));
     stage = "native live-video startup";

@@ -100,6 +100,7 @@ int main(int argc, char **argv)
     assert(strcmp(ca_video_codec_name(config.main_codec), "h265") == 0);
     assert(strcmp(ca_thermal_palette_name(config.thermal_palette),
                   "ironbow") == 0);
+    assert(strcmp(config.main_alias, "main.264") == 0 && config.sub_alias[0] == '\0');
 
     assert(ca_config_param_count() == 34U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
@@ -210,6 +211,20 @@ int main(int argc, char **argv)
     assert(config.support.video1_port == 0U && config.support.video2_port == 0U);
     assert(strcmp(config.support.signing_passphrase, " a phrase & ? ") == 0);
     assert(strcmp(config.support.video1_name, "Front Camera") == 0);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    assert(fd >= 0);
+    write_config(fd, "[stream.main]\nalias = \"\"\n[stream.sub]\nalias = sub-1.264\n");
+    assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(config.main_alias[0] == '\0' && strcmp(config.sub_alias, "sub-1.264") == 0);
+    const char *invalid_alias[] = {"[stream.main]\nalias = a/b\n", "[stream.main]\nalias = \"a b\"\n",
+                                   "[stream.sub]\nalias = ../video1\n"};
+    for (size_t i = 0; i < sizeof(invalid_alias) / sizeof(invalid_alias[0]); i++) {
+        fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        assert(fd >= 0);
+        write_config(fd, invalid_alias[i]);
+        assert(ca_config_load(&config, path, error, sizeof(error)) < 0);
+        assert(strstr(error, "alias") != NULL);
+    }
     const char *invalid_support[] = {
         "enabled = true\n", "host = bad/host\n", "network_address = 192.0.2.25\n",
         "network_address = 192.0.2.25/33\n", "network_gateway = bad\n",

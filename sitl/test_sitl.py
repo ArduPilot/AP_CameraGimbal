@@ -188,6 +188,8 @@ def main():
         assert ready.exists(), "camera-app did not become ready"
         verify_rtsp_video(rtsp_port, "video1", expected_sizes[0])
         verify_rtsp_video(rtsp_port, "video2", expected_sizes[1])
+        # the default [stream.main] alias serves the vendor path too
+        verify_rtsp_video(rtsp_port, "main.264", expected_sizes[0])
 
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.connect(("127.0.0.1", camera_port))

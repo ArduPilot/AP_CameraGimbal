@@ -183,6 +183,10 @@ static const struct config_field config_fields[] = {
     {"stream.sub", "codec", CONFIG_ENUM, offsetof(struct ca_config, sub_codec),
      sizeof(((struct ca_config *)0)->sub_codec), codec_options,
      sizeof(codec_options) / sizeof(codec_options[0]), 0, 0, "VIDEO_SUB_CODEC"},
+    {"stream.main", "alias", CONFIG_STRING, offsetof(struct ca_config, main_alias),
+     sizeof(((struct ca_config *)0)->main_alias), NULL, 0U, 0, 63, NULL},
+    {"stream.sub", "alias", CONFIG_STRING, offsetof(struct ca_config, sub_alias),
+     sizeof(((struct ca_config *)0)->sub_alias), NULL, 0U, 0, 63, NULL},
     {"overlay", "cross", CONFIG_BOOL, offsetof(struct ca_config, osd_cross),
      sizeof(((struct ca_config *)0)->osd_cross), NULL, 0U, 0, 0, "OSD_CROSS"},
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
@@ -335,7 +339,7 @@ static int set_field(struct ca_config *config, const struct config_field *field,
             unsigned char c = (unsigned char)value[i];
             if (c < 32U || c > 126U || c == '"') return -1;
         }
-        if (strcmp(field->key, "host") == 0 ||
+        if (strcmp(field->key, "host") == 0 || strcmp(field->key, "alias") == 0 ||
             strcmp(field->key, "network_interface") == 0 || strcmp(field->key, "interface") == 0) {
             for (size_t i = 0; i < length; i++) {
                 unsigned char c = (unsigned char)value[i];
@@ -450,6 +454,8 @@ void ca_config_defaults(struct ca_config *config)
     config->support.signing_link_id = 1U;
     config->support.video1_port = 0U;
     config->support.video2_port = 0U;
+    strcpy(config->main_alias, APCAM_DEFAULT_MAIN_ALIAS);
+    strcpy(config->sub_alias, APCAM_DEFAULT_SUB_ALIAS);
     strcpy(config->support.video1_name, "video1");
     strcpy(config->support.video2_name, "video2");
     strcpy(config->support.network_interface, "eth0");

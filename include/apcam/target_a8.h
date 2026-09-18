@@ -58,6 +58,9 @@
 #define APCAM_DEFAULT_ORIENTATION 0
 #define APCAM_DEFAULT_PHOTO_SCOPE 1
 #define APCAM_DEFAULT_TIMEZONE "GMT-10"
+/* vendor-compatible RTSP path aliases for /video1 and /video2 */
+#define APCAM_DEFAULT_MAIN_ALIAS "main.264"
+#define APCAM_DEFAULT_SUB_ALIAS ""
 #define APCAM_GIMBAL_PITCH_MIN -90.0f
 #define APCAM_GIMBAL_PITCH_MAX 25.0f
 #define APCAM_GIMBAL_YAW_CONTINUOUS 0

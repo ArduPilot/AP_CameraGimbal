@@ -56,6 +56,7 @@ struct ca_media_impl {
     struct ca_rtsp *rtsp;
     unsigned rtsp_port;
     struct ca_support_config support;
+    char main_alias[64], sub_alias[64];
     unsigned secondary_rtsp_stream;
     unsigned sitl_frame_rate;
     struct sitl_video videos[CA_SITL_STREAMS];
@@ -356,6 +357,8 @@ static void *video_thread(void *opaque)
                     for (unsigned i = 0; i < CA_SITL_STREAMS; i++) free(rendered[i]);
                     break;
                 }
+                (void)ca_rtsp_add_alias(media->rtsp, 0, media->main_alias);
+                (void)ca_rtsp_add_alias(media->rtsp, 1, media->sub_alias);
                 if (ca_rtsp_support_proxy(media->rtsp, &media->support) < 0)
                     ca_log("SupportProxy video restart failed: %s", strerror(errno));
                 memcpy(rtsp_codecs, codecs, sizeof(codecs));
@@ -453,6 +456,8 @@ static int open_sitl_video(struct ca_media_impl *media,
     if (config->rtsp_port == UINT16_MAX) { errno = EINVAL; return -1; }
     media->rtsp_port = config->rtsp_port;
     media->support = config->settings.support;
+    memcpy(media->main_alias, config->settings.main_alias, sizeof(media->main_alias));
+    memcpy(media->sub_alias, config->settings.sub_alias, sizeof(media->sub_alias));
     if (ca_rtsp_open(&media->rtsp, config->rtsp_port, "video1",
                      media->videos[0].codec, frame_rate) < 0) {
         ca_log("cannot start SITL RTSP on port %u: %s", config->rtsp_port, strerror(errno));
@@ -469,6 +474,7 @@ static int open_sitl_video(struct ca_media_impl *media,
         ca_log("cannot configure SITL live video: %s", strerror(errno));
         return -1;
     }
+    ca_rtsp_add_config_aliases(media->rtsp, &config->settings);
     if (ca_rtsp_support_proxy(media->rtsp, &config->settings.support) < 0)
         ca_log("SupportProxy video startup failed: %s", strerror(errno));
     media->sitl_frame_rate = frame_rate;

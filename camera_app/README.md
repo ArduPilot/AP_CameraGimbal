@@ -140,10 +140,12 @@ resolution = 3840x2160
 [stream.main]
 resolution = 1920x1080
 codec = h264
+alias = "main.264"
 
 [stream.sub]
 resolution = 1280x720
 codec = h264
+alias = ""
 
 [image]
 brightness = 50
@@ -155,6 +157,13 @@ shutter = auto
 metering = average
 white_balance = auto
 ```
+
+`[stream.main] alias` and `[stream.sub] alias` serve `/video1` and `/video2`
+under an additional RTSP path on the same port, so ground stations configured
+for the vendor firmware's `rtsp://CAMERA:8554/main.264` keep working. SIYI
+targets default the main alias to `main.264`; an empty alias adds nothing.
+Aliases are a single path segment (letters, digits, `.`, `-`, `_`) and apply
+on camera-app restart.
 
 `timezone` accepts a POSIX TZ string or an installed IANA zone name and is
 applied before media filenames and normal startup logging are generated.

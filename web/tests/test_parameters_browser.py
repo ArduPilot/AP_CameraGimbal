@@ -102,6 +102,8 @@ CHECKS = r"""
     rejected({proxy_signing_passphrase: ''}, 'proxy_signing_passphrase');
     rejected({proxy_video2_port: original.proxy_video1_port}, 'proxy_video2_port');
     rejected({proxy_video1_name: ''}, 'proxy_video1_name');
+    rejected({main_alias: 'live/main'}, 'main_alias');
+    rejected({sub_alias: 'sub 264'}, 'sub_alias');
     rejected({proxy_publish_password: 'bad"password'}, 'proxy_publish_password');
     rejected({mavlink_system_id: '256'}, 'mavlink_system_id');
     rejected({mavlink_system_id: '1.5'}, 'mavlink_system_id');

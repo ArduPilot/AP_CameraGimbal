@@ -140,6 +140,7 @@ int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config 
         ca_live_video_server_open(&m->live, c->rtsp_port + 1U) < 0 ||
         ca_live_video_server_configure(m->live, 0, 1920, 1080, 30, true) < 0 ||
         ca_live_video_server_configure(m->live, 1, 1920, 1080, 30, true) < 0) goto fail;
+    ca_rtsp_add_config_aliases(m->rtsp, &c->settings);
     if (ca_rtsp_support_proxy(m->rtsp, &c->settings.support) < 0)
         ca_log("Z1 SupportProxy startup failed: %s", strerror(errno));
     int error = pthread_create(&m->thread, NULL, receiver, m);
