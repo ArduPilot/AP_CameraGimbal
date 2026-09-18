@@ -594,6 +594,8 @@ try:
     assert b"Firmware version</th><td id=firmware-version>" in body
     assert b" (<span id=firmware-git-hash>" in body
     assert b"id=time-sync" in body and b">Sync</button>" in body
+    # the configured [general] timezone (GMT-10 is fixed UTC+10) applies to page times
+    assert b" GMT (UTC+1000)<form id=time-sync" in body
     assert b"ArduPilot camera app" in body and b"replacement app" not in body
     status, script, headers = request("GET", "/status.js", "initial-password")
     assert status == 200 and b"Date.now()" in script

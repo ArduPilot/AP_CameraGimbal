@@ -5963,7 +5963,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     snprintf(uptime_text, sizeof(uptime_text), "%s", T(S_UNAVAILABLE));
     snprintf(load_text, sizeof(load_text), "%s", T(S_UNAVAILABLE));
     localtime_r(&now, &tm_now);
-    strftime(now_text, sizeof(now_text), "%Y-%m-%d %H:%M:%S %Z", &tm_now);
+    strftime(now_text, sizeof(now_text), "%Y-%m-%d %H:%M:%S %Z (UTC%z)", &tm_now);
     file = fopen("/proc/uptime", "r");
     if (file != NULL) {
         if (fscanf(file, "%lf", &uptime) == 1) {
@@ -8898,6 +8898,24 @@ static void schedule_reboot(void)
 #endif
 }
 
+/* camera-app applies [general] timezone to its own process only; use the
+ * same zone here so page times match the camera clock and its recordings */
+static void apply_configured_timezone(void)
+{
+    size_t length;
+    char zone[128];
+    char *config = read_file(REPLACEMENT_CONFIG_PATH, MAX_CONFIG, &length);
+
+    if (config == NULL) return;
+    if (ini_get_value(config, "general", "timezone", zone, sizeof(zone)) && zone[0] != '\0') {
+        const char *current = getenv("TZ");
+        if (current == NULL || strcmp(current, zone) != 0) {
+            if (setenv("TZ", zone, 1) == 0) tzset();
+        }
+    }
+    free(config);
+}
+
 static void handle_request(int fd, const char *peer)
 {
     struct request request = {0};
@@ -8905,6 +8923,8 @@ static void handle_request(int fd, const char *peer)
     char session_token[65];
     bool login_route;
     int auth;
+
+    apply_configured_timezone();
 
     /* Browsers commonly leave speculative connections idle.  Closing an
      * incomplete connection quietly avoids presenting an unsolicited 400 as
