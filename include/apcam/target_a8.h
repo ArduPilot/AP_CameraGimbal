@@ -119,7 +119,7 @@
 #define MEDIA_ROOT "/mnt/mmc"
 #endif
 #ifndef CAPTURE_ROOT
-#define CAPTURE_ROOT MEDIA_ROOT "/capture"
+#define CAPTURE_ROOT MEDIA_ROOT "/DCIM/capture"
 #endif
 #ifndef REPLACEMENT_CONFIG_PATH
 #define REPLACEMENT_CONFIG_PATH "/config/camera-app/camera.ini"
