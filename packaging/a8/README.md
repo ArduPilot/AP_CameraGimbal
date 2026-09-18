@@ -75,7 +75,8 @@ the bootloader's filename directly.
 3. The camera keeps 192.168.144.25 and the vendor telnet login.
    `camera-app` listens on SIYI 37260, MAVLink 14550, RTSP 8554
    (`/video1`, `/video2`) and writes captures and recordings to the card
-   under `/mnt/mmc/capture` and `/mnt/mmc/record`. The web interface is at
+   under `/mnt/mmc/DCIM/capture` and `/mnt/mmc/DCIM/record`, the DCIM folder
+   the vendor firmware also uses. The web interface is at
    `http://192.168.144.25/`; its login page takes user `admin` with the
    package's web password (`ardupilot` by default) and offers the interface
    in English, Simplified Chinese or Japanese. Later updates can be uploaded
