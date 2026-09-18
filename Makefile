@@ -448,6 +448,7 @@ z1mini-test: z1mini-test-headers
 	python3 tests/test_z1mini.py
 	python3 web/tests/test_z1mini_upgrade.py
 	python3 tests/test_z1mini_4k.py
+	python3 tests/test_z1mini_4k.py --orientation inverted
 	python3 tests/test_z1mini_service.py
 	python3 tests/test_z1mini_service.py --native
 

@@ -30,7 +30,7 @@ static int receive_exact(int fd, void *data, size_t size, const atomic_bool *sto
 
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                          ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
-                         struct ca_z1_overlay_control *overlay)
+                         struct ca_z1_overlay_control *overlay, bool inverted)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) return -1;
@@ -48,7 +48,10 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
             _exit(127);
         }
         for (int fd = 4; fd < max_fd; fd++) close(fd);
-        execl(helper, helper, "fd:3", "0", (char *)NULL);
+        /* An older helper rejects this extra argument, rather than silently
+         * delivering upright frames for an inverted mount. */
+        if (inverted) execl(helper, helper, "fd:3", "0", "--inverted", (char *)NULL);
+        else execl(helper, helper, "fd:3", "0", (char *)NULL);
         _exit(127);
     }
     close(sockets[1]);

@@ -5,6 +5,7 @@
  */
 #define _GNU_SOURCE
 #include "ax_config.h"
+#include "apcam/target.h"
 #include "camera_app/overlay.h"
 #include <sys/socket.h>
 #include "ax_venc_api.h"
@@ -388,11 +389,19 @@ failed:
     ca_overlay_free(cross.bits);
     return NULL;
 }
+static int sensor_orientation(void **sensor, bool inverted)
+{
+    unsigned mode = inverted ? APCAM_SENSOR_MIRROR_FLIP_INVERTED : APCAM_SENSOR_MIRROR_FLIP_UPRIGHT;
+    int result = ((fn4)sensor[10])(0, mode, 0, 0);
+    printf("sensor_mirror_flip(%u)=%08x mounting=%s\n", mode, result, inverted ? "inverted" : "upright");
+    return result;
+}
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s fd:3 0 | output-prefix frame-count\n", argv[0]);
+    if ((argc != 3 && argc != 4) || (argc == 4 && strcmp(argv[3], "--inverted"))) {
+        fprintf(stderr, "usage: %s {fd:3 0 | output-prefix frame-count} [--inverted]\n", argv[0]);
         return 2;
     }
+    bool inverted = argc == 4;
     bool framed = !strcmp(argv[1], "fd:3");
     unsigned limit = (unsigned)atoi(argv[2]);
     if (!limit && framed)
@@ -506,9 +515,8 @@ int main(int argc, char **argv) {
     dev_enabled = 1;
     CALL(AX_VIN_StreamOn, 0, 0, 0, 0);
     stream_on = 1;
-    // Match stock UpsideDown=true using the recovered sensor callback.
-    r = ((fn4)sensor[10])(0, 3, 0, 0);
-    printf("sensor_mirror_flip(3)=%08x\n", r);
+    // Rotate at the sensor so both VIN outputs and recordings agree.
+    r = sensor_orientation(sensor, inverted);
     if (r)
         goto cleanup;
     if (pthread_create(&isp_thread, NULL, isp_run, NULL))

@@ -11,6 +11,14 @@
 extern int ca_overlay_bitmaps(struct ca_overlay_bitmap [CA_OVERLAY_REGIONS], unsigned, unsigned,
                              const struct ca_overlay_geometry *);
 static unsigned allocations, mappings, inject_sequence;
+static unsigned sensor_mode;
+static int sensor_result;
+static int sensor_flip(uintptr_t pipe, uintptr_t mode, uintptr_t c, uintptr_t d)
+{
+    assert(pipe == 0 && c == 0 && d == 0);
+    sensor_mode = mode;
+    return sensor_result;
+}
 static bool fail_allocation;
 static int request_fd;
 
@@ -68,6 +76,13 @@ static void ack(FILE *out, unsigned sequence, bool enabled, unsigned error)
 
 int main(void)
 {
+    void *sensor[15] = {0};
+    sensor[10] = sensor_flip;
+    assert(sensor_orientation(sensor, false) == 0 && sensor_mode == 3);
+    assert(sensor_orientation(sensor, true) == 0 && sensor_mode == 0);
+    sensor_result = -EIO;
+    assert(sensor_orientation(sensor, true) == -EIO);
+
     int sockets[2];
     assert(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0);
     if (sockets[0]!=3) { assert(dup2(sockets[0],3)==3); close(sockets[0]); }
