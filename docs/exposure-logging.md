@@ -57,8 +57,10 @@ A8 lamp testing found that the inherited 5653 us minimum shutter prevented AE
 from reaching its brightness target at minimum gain. Auto shutter now allows
 the lower minimum in the camera's exposure table (147 us in the tested tuning),
 while keeping maximum shutter, gain limits and explicit shutter settings.
-The selected Auto limits are printed in the camera-app log; an unavailable or
-invalid table retains the inherited limits and logs a warning.
+The selected Auto limits are printed in the camera-app log. Empty rows and
+rows above the current maximum shutter are ignored. An unavailable table,
+invalid row count or table with no usable rows retains the inherited limits
+and logs a warning.
 
 In the hardware test, lowering this minimum let shutter decrease from 5646 us
 to 444 us and AE converge at brightness 520 against a target of 510. Restoring
@@ -84,7 +86,7 @@ visual model, not a claim of physical AE fidelity.
 ## Tests
 
 `make -C camera_app exposure-test` checks the A8 Auto/manual shutter limits and
-invalid exposure-table fallback, SigmaStar field layout/unit conversion,
+mixed usable/unusable exposure rows, invalid-table fallback, SigmaStar field layout/unit conversion,
 unknown fields, fragmented Z1 exposure/video IPC, invalid packet rejection and
 continued exposure polling during blocked thermal I/O.
 

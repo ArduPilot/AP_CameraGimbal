@@ -92,12 +92,25 @@ int main(void)
     reset(); table[2]=20000; table[6]=120;
     assert(set_exposure(&config)==0 && limits[0]==120);
 
+    /* Unusable rows must not discard a usable bright-scene shutter floor. */
+    const uint32_t unusable[] = {0, 33333, 1000001, UINT32_MAX};
+    for (unsigned i=0; i<sizeof(unusable)/sizeof(unusable[0]); i++) {
+        reset(); table[2]=unusable[i]; table[6]=147;
+        assert(set_exposure(&config)==0 && limits[0]==147 && limits[1]==33332);
+        assert(memcmp(limits+2,inherited+2,6*sizeof(uint32_t))==0 && !warnings);
+    }
+    /* Use the configured maximum, without an arbitrary one-second cutoff. */
+    reset(); limits[1]=2000000; table[6]=1500000;
+    assert(set_exposure(&config)==0 && limits[0]==147 && limits[1]==2000000 && !warnings);
+    reset(); table[0]=1; table[2]=33332;
+    assert(set_exposure(&config)==0 && limits[0]==5653 && !warnings);
+
     for (unsigned bad=0; bad<6; bad++) {
         reset();
         if (bad==0) table[0]=0;
         if (bad==1) table[0]=17;
-        if (bad==2) table[6]=0;
-        if (bad==3) table[6]=1000001;
+        if (bad==2) for (unsigned i=0; i<8; i++) table[2+4*i]=0;
+        if (bad==3) for (unsigned i=0; i<8; i++) table[2+4*i]=33333;
         if (bad==4) table_result=-EIO;
         if (bad==5) api.get_expo_table=NULL;
         assert(set_exposure(&config)==0);
