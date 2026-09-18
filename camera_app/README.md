@@ -965,9 +965,14 @@ The camera advertises `mftp://[;comp=100]/camera.xml` in
 `CAMERA_INFORMATION.cam_definition_uri`. The XML is available directly over
 MAVLink FTP, including TCP, UDP, UART and SupportProxy links. It needs no web
 login, internet connection or separately hosted definition file. The FTP service
-only serves this immutable definition; it does not expose the camera filesystem.
-Directory listings show `camera.xml` and its byte size at `/`, supporting both
-standard listings and MAVProxy's listing-with-time extension (unknown time).
+is read-only. Besides the immutable definition, its root exports the card's
+recording, capture and log roots as `/record`, `/capture` and `/logs`
+(`CAMERA_APP_RECORD_ROOT`, `CAMERA_APP_CAPTURE_ROOT` and `CAMERA_APP_LOG_ROOT`),
+so recordings, photos and BIN logs can be listed and downloaded with
+`ftp list /record` and `ftp get /record/<file>`; nothing outside those roots
+is reachable. Directory listings support both standard listings and MAVProxy's
+listing-with-time extension (the definition reports an unknown time). Burst
+reads send up to 64 packets per request on network links and 8 on the UART.
 In MAVProxy, use `set target_component 100` followed by `ftp list` to discover
 the exported files; `camera select` alone does not change the FTP module's target.
 When connecting through an autopilot, forwarding must be enabled on its camera

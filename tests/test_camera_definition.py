@@ -2,6 +2,7 @@
 """Validate generated camera definitions and the bounded read-only MAVFTP service."""
 import binascii
 import ctypes
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -91,11 +92,16 @@ class DefinitionVersion(unittest.TestCase):
 
 class Session(ctypes.Structure):
     _fields_ = [('system', ctypes.c_uint8), ('component', ctypes.c_uint8),
-                ('id', ctypes.c_uint8), ('active', ctypes.c_bool), ('last_ms', ctypes.c_uint64)]
+                ('id', ctypes.c_uint8), ('active', ctypes.c_bool), ('last_ms', ctypes.c_uint64),
+                ('fd', ctypes.c_int), ('size', ctypes.c_uint64),
+                ('burst_offset', ctypes.c_uint32), ('burst_remaining', ctypes.c_uint32),
+                ('burst_seq', ctypes.c_uint16), ('burst_size', ctypes.c_uint8)]
 
 
 class FTP(ctypes.Structure):
-    _fields_ = [('sessions', Session * 4)]
+    _fields_ = [('sessions', Session * 4), ('roots', (ctypes.c_char * 256) * 3),
+                ('burst_packets', ctypes.c_uint), ('xml', ctypes.c_char_p),
+                ('xml_length', ctypes.c_size_t)]
 
 
 class FTPTest(unittest.TestCase):
@@ -112,6 +118,15 @@ class FTPTest(unittest.TestCase):
                               ctypes.c_uint8, ctypes.c_uint8, ctypes.c_uint64,
                               ctypes.c_void_p, ctypes.c_void_p]
         cls.reply.restype = None
+        cls.init = cls.library.ca_camera_ftp_init
+        cls.init.argtypes = [ctypes.POINTER(FTP), ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        cls.init.restype = None
+        cls.burst_next = cls.library.ca_camera_ftp_burst_next
+        cls.burst_next.argtypes = [ctypes.POINTER(FTP), ctypes.c_uint8, ctypes.c_uint8, ctypes.c_void_p]
+        cls.burst_next.restype = ctypes.c_bool
+        cls.close = cls.library.ca_camera_ftp_close
+        cls.close.argtypes = [ctypes.POINTER(FTP)]
+        cls.close.restype = None
 
     @classmethod
     def tearDownClass(cls):
@@ -120,6 +135,26 @@ class FTPTest(unittest.TestCase):
     def setUp(self):
         self.ftp = FTP()
         self.xml = b'<camera/>' * 100
+
+    def tearDown(self):
+        self.close(ctypes.byref(self.ftp))
+
+    def card(self):
+        """Export a small card tree: record/2026-09-18/{a,b}.mp4, capture/photo.jpg, empty logs."""
+        root = Path(self.work.name) / 'card'
+        (root / 'record/2026-09-18').mkdir(parents=True, exist_ok=True)
+        (root / 'capture').mkdir(exist_ok=True)
+        (root / 'logs').mkdir(exist_ok=True)
+        (root / 'record/2026-09-18/a.mp4').write_bytes(bytes(range(256)) * 4)
+        (root / 'record/2026-09-18/b.mp4').write_bytes(b'')
+        (root / 'record/2026-09-18/link.mp4').unlink(missing_ok=True)
+        os.symlink('a.mp4', root / 'record/2026-09-18/link.mp4')
+        (root / 'record/note').mkdir(exist_ok=True)
+        (root / 'capture/photo.jpg').write_bytes(b'JPEG' * 100)
+        os.utime(root / 'capture/photo.jpg', (1700000000, 1700000000))
+        self.init(ctypes.byref(self.ftp), str(root / 'record').encode(),
+                  str(root / 'capture').encode(), str(root / 'logs').encode())
+        return root
 
     def request(self, opcode, session=0, data=b'', size=None, offset=0, owner=255, now=1000, seq=65535):
         size = len(data) if size is None else size
@@ -216,6 +251,107 @@ class FTPTest(unittest.TestCase):
             for path in (b'/camera.xml', b'/missing', b'/../', b'/etc'):
                 self.assertEqual(self.request(opcode, data=path)[1], b'\x0a')
         self.assertFalse(any(session.active for session in self.ftp.sessions))
+
+    def entries(self, path, opcode=3):
+        listing = []
+        while True:
+            header, payload = self.request(opcode, data=path, offset=len(listing))
+            if header[2] == 129:
+                self.assertEqual(payload, b'\x06')
+                return listing
+            self.assertEqual(header[2], 128)
+            listing.extend(e.decode() for e in payload.split(b'\0') if e)
+
+    def test_card_listing(self):
+        root = self.card()
+        self.assertEqual(self.entries(b'/'), [f'Fcamera.xml\t{len(self.xml)}', 'Drecord', 'Dcapture', 'Dlogs'])
+        with_time = self.entries(b'/', 16)
+        self.assertEqual(with_time[0], f'Fcamera.xml\t{len(self.xml)}\t0')
+        self.assertRegex(with_time[1], r'^Drecord\t0\t\d+$')
+        self.assertEqual(self.entries(b'/record'), ['D2026-09-18', 'Dnote'])
+        self.assertEqual(self.entries(b'record/'), ['D2026-09-18', 'Dnote'])
+        # symbolic links are neither files nor directories to the client
+        self.assertEqual(self.entries(b'/record/2026-09-18'), ['Fa.mp4\t1024', 'Fb.mp4\t0'])
+        self.assertEqual(self.entries(b'/capture', 16), ['Fphoto.jpg\t400\t1700000000'])
+        self.assertEqual(self.entries(b'/logs'), [])
+        self.assertEqual(self.entries(b'/record/2026-09-18/'), ['Fa.mp4\t1024', 'Fb.mp4\t0'])
+        for path in (b'/record/../capture', b'/record/./note', b'/record//note', b'/record/2026-09-18/a.mp4',
+                     b'/recordx', b'/rec', b'/record/missing', b'/logs/../../record', b'/record/\x01'):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(3, data=path)[1], b'\x0a')
+        # the camera definition is still served from the virtual root only
+        self.assertEqual(self.request(4, data=b'/record/camera.xml')[1], b'\x0a')
+        (root / 'record/2026-09-18' / ('x' * 250)).write_bytes(b'')
+        self.assertEqual(self.entries(b'/record/2026-09-18'), ['Fa.mp4\t1024', 'Fb.mp4\t0'])
+
+    def test_card_download_and_bursts(self):
+        root = self.card()
+        data = (root / 'record/2026-09-18/a.mp4').read_bytes()
+        for path in (b'/record/2026-09-18/a.mp4', b'record/2026-09-18/a.mp4', b'//record/2026-09-18/a.mp4'):
+            header, payload = self.request(4, data=path)
+            self.assertEqual(header[2], 128, path)
+            self.assertEqual(struct.unpack('<I', payload)[0], len(data))
+        session = header[1]
+        self.assertEqual(self.request(5, session, size=16, offset=1000)[1], data[1000:1016])
+        self.assertEqual(self.request(5, session, size=16, offset=1024)[1], b'\x06')
+        # single-packet bursts by default
+        header, payload = self.request(15, session, size=239)
+        self.assertEqual((header[5], payload), (1, data[:239]))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, ctypes.create_string_buffer(251)))
+        # multi-packet bursts continue from the reply until the count or EOF
+        self.ftp.burst_packets = 3
+        header, payload = self.request(15, session, size=239, offset=100, seq=10)
+        self.assertEqual((header[5], payload), (0, data[100:339]))
+        received = payload
+        expected_seq = 12
+        while True:
+            response = ctypes.create_string_buffer(251)
+            if not self.burst_next(ctypes.byref(self.ftp), 255, 190, response):
+                break
+            header = struct.unpack('<HBBBBBBI', response.raw[:12])
+            self.assertEqual((header[0], header[1], header[4]), (expected_seq, session, 15))
+            expected_seq += 1
+            self.assertEqual(header[7], 100 + len(received))
+            self.assertEqual(header[2], 128)
+            received += response.raw[12:12 + header[3]]
+        self.assertEqual((expected_seq, header[5]), (14, 1))
+        self.assertEqual(received, data[100:100 + 3 * 239])
+        # a burst reaching EOF ends with the autopilot's EOF NACK at that offset
+        header, payload = self.request(15, session, size=239, offset=1024 - 300)
+        self.assertEqual((header[5], payload), (0, data[724:963]))
+        response = ctypes.create_string_buffer(251)
+        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        header = struct.unpack('<HBBBBBBI', response.raw[:12])
+        self.assertEqual((header[2], header[5], header[7]), (128, 1, 963))
+        self.assertEqual(response.raw[12:12 + header[3]], data[963:])
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        header, payload = self.request(15, session, size=239, offset=1024 - 239)
+        self.assertEqual((header[5], payload), (1, data[-239:]))
+        # another client's session is unaffected and bursts are per client
+        other = self.open(owner=254)
+        self.assertEqual(self.request(15, other, size=239, offset=1024 - 239, owner=254)[0][5], 1)
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        self.assertEqual(self.request(15, session, size=100)[1], data[:100])
+        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response))
+        # terminating closes the descriptor; empty files and directories are not readable
+        self.assertEqual(self.request(1, session)[0][2], 128)
+        self.assertEqual(self.ftp.sessions[0].fd, -1)
+        header, payload = self.request(4, data=b'/record/2026-09-18/b.mp4')
+        self.assertEqual(struct.unpack('<I', payload)[0], 0)
+        self.assertEqual(self.request(5, header[1], size=1)[1], b'\x06')
+        for path in (b'/record', b'/record/2026-09-18/link.mp4', b'/record/2026-09-18/../2026-09-18/a.mp4', b'/'):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(4, data=path)[1], b'\x0a')
+        # reopening a card file releases the previous descriptor of the same session
+        first = self.request(4, data=b'/record/2026-09-18/a.mp4')[0][1]
+        self.assertGreaterEqual(self.ftp.sessions[0].fd, 0)
+        self.assertEqual(self.request(4, data=b'/capture/photo.jpg')[0][1], first)
+        self.assertEqual(self.request(5, first, size=4)[1], b'JPEG')
+        self.request(2)
+        self.assertEqual(self.request(5, first, size=4)[1], b'\x04')
+        self.assertTrue(all(s.fd == -1 or not s.active for s in self.ftp.sessions))
 
 
 if __name__ == '__main__':
