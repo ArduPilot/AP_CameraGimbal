@@ -38,7 +38,7 @@ int main(int argc, char **argv)
     assert(config.uart_protocol == CA_UART_NONE);
     assert(config.main_resolution == CA_VIDEO_1080P);
     assert(config.sub_resolution == CA_VIDEO_720P);
-    assert(config.recording_resolution == CA_VIDEO_1080P);
+    assert(config.recording_resolution == CA_VIDEO_2160P);
     assert(config.main_codec == CA_VIDEO_H264);
     assert(config.brightness == 50);
     assert(config.position_targeting);

@@ -2,7 +2,7 @@
 
 AP CameraGimbal provides MAVLink and XFRobot control, a web UI, video streaming
 and recording on the Z1-Mini. Release packages use native capture with separate
-1080p live video and 4K recording.
+1080p live video and selectable 1080p or 4K recording.
 
 ## Build
 
@@ -58,7 +58,7 @@ reinstall the package if needed. The overlay cannot recover damaged platform
 partitions. Use the original XFRobot firmware to restore vendor operation.
 
 Settings and web credentials in `/opt/ap_cameragimbal` survive updates. New
-native installations default to 4K recording; existing installations retain
+native installations default to 1080p recording; existing installations retain
 their saved resolution. Logs are bounded in `/tmp`. Recordings require a
 mounted microSD card and are stored under `/mnt/mmc/DCIM/record`.
 
