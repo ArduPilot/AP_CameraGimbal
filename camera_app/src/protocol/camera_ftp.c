@@ -318,7 +318,7 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
 }
 
 bool ca_camera_ftp_burst_next(struct ca_camera_ftp *ftp, uint8_t system,
-                              uint8_t component, uint8_t response[251])
+                              uint8_t component, uint8_t response[251], bool final)
 {
     struct ca_camera_ftp_session *session = NULL;
     for (unsigned i = 0; i < 4 && !session; i++) {
@@ -346,7 +346,7 @@ bool ca_camera_ftp_burst_next(struct ca_camera_ftp *ftp, uint8_t system,
     }
     response[4] = (uint8_t)got;
     session->burst_offset += (uint32_t)got;
-    if ((size_t)got < session->burst_size || session->burst_offset >= session->size)
+    if (final || (size_t)got < session->burst_size || session->burst_offset >= session->size)
         session->burst_remaining = 0;
     response[6] = session->burst_remaining ? 0 : 1;
     return true;
