@@ -37,8 +37,9 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
                          uint8_t system, uint8_t component, uint64_t now_ms,
                          const uint8_t request[251], uint8_t response[251]);
 /* Next packet of the burst started by the last reply to this client, or
- * false once it is complete. */
+ * false once it is complete. final ends the burst with this packet, for a
+ * link that has no room for more. */
 bool ca_camera_ftp_burst_next(struct ca_camera_ftp *ftp, uint8_t system,
-                              uint8_t component, uint8_t response[251]);
+                              uint8_t component, uint8_t response[251], bool final);
 void ca_camera_ftp_close(struct ca_camera_ftp *ftp);
 #endif

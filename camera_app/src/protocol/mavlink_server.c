@@ -28,6 +28,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "camera_app/event_poll.h"
+#include <linux/sockios.h>
+#include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
 #include <sys/stat.h>
@@ -199,6 +202,27 @@ static mavlink_status_t *tx_status(struct ca_mavlink_server *server,
                ? &server->gimbal_tx : &server->camera_tx;
 }
 
+/* FTP bursts queue many packets at once; small default buffers would cut
+ * them short on the camera's kernel */
+static void set_send_buffer(int fd)
+{
+    int size = 256 * 1024;
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
+}
+
+/* Bytes a route can still queue without blocking or dropping. */
+static size_t route_send_room(struct ca_mavlink_server *server, const struct route *route)
+{
+    if (route->kind == ROUTE_PROXY) return SIZE_MAX;
+    if (route->kind == ROUTE_UART) return sizeof(server->uart_output) - server->uart_output_length;
+    int fd = route->kind == ROUTE_UDP ? server->udp_fd : server->clients[route->client].fd;
+    int buffer = 0, queued = 0;
+    socklen_t length = sizeof(buffer);
+    if (fd < 0 || getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buffer, &length) < 0 ||
+        ioctl(fd, SIOCOUTQ, &queued) < 0 || queued < 0) return SIZE_MAX;
+    return queued >= buffer ? 0 : (size_t)(buffer - queued);
+}
+
 static int bind_socket(int type, unsigned port)
 {
     struct sockaddr_in address = {
@@ -210,6 +234,7 @@ static int bind_socket(int type, unsigned port)
     int one = 1;
     if (fd < 0) return -1;
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (type == SOCK_DGRAM) set_send_buffer(fd);
     if (bind(fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         int saved_errno = errno;
         close(fd);
@@ -327,6 +352,8 @@ static int queue_uart(struct ca_mavlink_server *server, const uint8_t *data,
     return result;
 }
 
+static void close_client(struct ca_mavlink_server *server, unsigned slot);
+
 static int send_route(struct ca_mavlink_server *server,
                       const struct route *route, const uint8_t *data,
                       size_t length)
@@ -343,10 +370,27 @@ static int send_route(struct ca_mavlink_server *server,
                           route->address_length);
         } while (sent < 0 && errno == EINTR);
     } else if (route->kind == ROUTE_TCP) {
-        do {
-            sent = send(server->clients[route->client].fd, data, length,
-                        MSG_NOSIGNAL);
-        } while (sent < 0 && errno == EINTR);
+        /* A frame must not be cut short: a partial write would corrupt the
+         * stream for this client, so finish it with a bounded wait and drop
+         * the client if the socket stays full. */
+        int fd = server->clients[route->client].fd;
+        size_t done = 0;
+        for (;;) {
+            sent = send(fd, data + done, length - done, MSG_NOSIGNAL | MSG_DONTWAIT);
+            if (sent < 0 && errno == EINTR) continue;
+            if (sent > 0) done += (size_t)sent;
+            if (done == length) break;
+            if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+            if (done == 0) { errno = EAGAIN; return -1; }
+            struct pollfd wait = {.fd = fd, .events = POLLOUT};
+            if (poll(&wait, 1, 200) <= 0) {
+                ca_log("MAVLink TCP client %u stalled mid-frame; disconnecting", route->client);
+                close_client(server, route->client);
+                errno = EIO;
+                return -1;
+            }
+        }
+        sent = (ssize_t)length;
     } else {
         return queue_uart(server, data, length);
     }
@@ -2324,10 +2368,14 @@ static void handle_camera_ftp(struct ca_mavlink_server *server,
     mavlink_msg_file_transfer_protocol_encode_status(server->system_id, server->camera_component_id,
         &server->encode_status, &response, &reply);
     if (send_message(server, route, &response) < 0) return;
-    while (ca_camera_ftp_burst_next(&server->ftp, message->sysid, message->compid, reply.payload)) {
+    /* end the burst on the last packet the link can still queue, so the
+     * client never waits for packets that were never sent */
+    bool final = route_send_room(server, route) < 2U * MAVLINK_MAX_PACKET_LEN;
+    while (ca_camera_ftp_burst_next(&server->ftp, message->sysid, message->compid, reply.payload, final)) {
         mavlink_msg_file_transfer_protocol_encode_status(server->system_id, server->camera_component_id,
             &server->encode_status, &response, &reply);
         if (send_message(server, route, &response) < 0) break;
+        final = route_send_room(server, route) < 2U * MAVLINK_MAX_PACKET_LEN;
     }
 }
 
@@ -2493,6 +2541,7 @@ static int accept_clients(struct ca_mavlink_server *server)
             continue;
         }
         server->clients[slot].fd = fd;
+        set_send_buffer(fd);
         ca_mavlink_parser_init(&server->clients[slot].parser);
         ca_poll_event event = {
             .events = CA_POLL_IN | CA_POLL_RDHUP,

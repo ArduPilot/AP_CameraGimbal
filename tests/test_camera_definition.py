@@ -122,7 +122,7 @@ class FTPTest(unittest.TestCase):
         cls.init.argtypes = [ctypes.POINTER(FTP), ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
         cls.init.restype = None
         cls.burst_next = cls.library.ca_camera_ftp_burst_next
-        cls.burst_next.argtypes = [ctypes.POINTER(FTP), ctypes.c_uint8, ctypes.c_uint8, ctypes.c_void_p]
+        cls.burst_next.argtypes = [ctypes.POINTER(FTP), ctypes.c_uint8, ctypes.c_uint8, ctypes.c_void_p, ctypes.c_bool]
         cls.burst_next.restype = ctypes.c_bool
         cls.close = cls.library.ca_camera_ftp_close
         cls.close.argtypes = [ctypes.POINTER(FTP)]
@@ -297,7 +297,7 @@ class FTPTest(unittest.TestCase):
         # single-packet bursts by default
         header, payload = self.request(15, session, size=239)
         self.assertEqual((header[5], payload), (1, data[:239]))
-        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, ctypes.create_string_buffer(251)))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, ctypes.create_string_buffer(251), False))
         # multi-packet bursts continue from the reply until the count or EOF
         self.ftp.burst_packets = 3
         header, payload = self.request(15, session, size=239, offset=100, seq=10)
@@ -306,7 +306,7 @@ class FTPTest(unittest.TestCase):
         expected_seq = 12
         while True:
             response = ctypes.create_string_buffer(251)
-            if not self.burst_next(ctypes.byref(self.ftp), 255, 190, response):
+            if not self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False):
                 break
             header = struct.unpack('<HBBBBBBI', response.raw[:12])
             self.assertEqual((header[0], header[1], header[4]), (expected_seq, session, 15))
@@ -320,21 +320,28 @@ class FTPTest(unittest.TestCase):
         header, payload = self.request(15, session, size=239, offset=1024 - 300)
         self.assertEqual((header[5], payload), (0, data[724:963]))
         response = ctypes.create_string_buffer(251)
-        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False))
         header = struct.unpack('<HBBBBBBI', response.raw[:12])
         self.assertEqual((header[2], header[5], header[7]), (128, 1, 963))
         self.assertEqual(response.raw[12:12 + header[3]], data[963:])
-        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False))
         header, payload = self.request(15, session, size=239, offset=1024 - 239)
         self.assertEqual((header[5], payload), (1, data[-239:]))
         # another client's session is unaffected and bursts are per client
         other = self.open(owner=254)
         self.assertEqual(self.request(15, other, size=239, offset=1024 - 239, owner=254)[0][5], 1)
-        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response))
-        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response, False))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False))
         self.assertEqual(self.request(15, session, size=100)[1], data[:100])
-        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response))
-        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response))
+        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 254, 190, response, False))
+        # a link without room ends the burst early with burst_complete set
+        self.ftp.burst_packets = 8
+        self.assertEqual(self.request(15, session, size=100)[0][5], 0)
+        self.assertTrue(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, True))
+        header = struct.unpack('<HBBBBBBI', response.raw[:12])
+        self.assertEqual((header[2], header[5], header[7]), (128, 1, 100))
+        self.assertFalse(self.burst_next(ctypes.byref(self.ftp), 255, 190, response, False))
         # terminating closes the descriptor; empty files and directories are not readable
         self.assertEqual(self.request(1, session)[0][2], 128)
         self.assertEqual(self.ftp.sessions[0].fd, -1)
