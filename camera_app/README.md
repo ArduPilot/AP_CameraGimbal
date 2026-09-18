@@ -310,6 +310,14 @@ incomplete final fragment, but earlier complete fragments remain playable.
 The optional total fragment duration (`mehd`) is omitted while the duration
 is unknown. Writing it as zero prevents VLC 3 from deriving the recording
 length and seek range from the fragments, including in mid-recording downloads.
+A 64 KiB `free` box is reserved after the movie header. Closing a recording
+ends it with a `sidx` of keyframe-aligned references covering the whole file,
+placed directly before the first fragment, and writes the final duration into
+the movie and track headers. FFmpeg-based
+players, including Chrome's `<video>` element on the Files page, otherwise
+read every fragment before playback starts; with the index they start at once
+and can seek. A recording cut short by a crash keeps the empty box and still
+plays after that scan.
 The Files endpoint snapshots the file length between fragment writes and
 downloads that immutable prefix while recording continues.
 
