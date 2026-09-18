@@ -75,6 +75,13 @@ hardware checks in both orientations are still required. Geographic targeting
 is disabled by default. Still capture, tracking, zoom/focus and manual image
 adjustments are not implemented.
 
+Native capture supports upright and inverted mounting. Select the physical
+orientation in Parameters and restart the camera app. Inverted mounting adds
+180 degrees of sensor rotation to both live video and recordings, without
+software frame processing. Auto currently uses upright orientation; this camera
+does not report automatic mount detection. The retained-ISP package supports
+upright video only.
+
 Native capture owns the sensor/ISP and hardware encoders. It requires a CPU
 temperature below 70 C to start and stops at 75 C, leaving web recovery
 available. The alternative retained-ISP package uses the vendor's fixed 1080p

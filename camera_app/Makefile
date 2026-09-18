@@ -647,7 +647,7 @@ z1mini-overlay-test: media-overlay-test z1-overlay-race-test
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini tests/test_z1mini_overlay.c src/media/overlay.c -o build/tests/test_z1mini_overlay -ldl -pthread -lm
 	./build/tests/test_z1mini_overlay
 
-build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/media/overlay.c include/camera_app/overlay.h src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h
+build/z1mini/ax-capture: src/backends/z1mini/ax_capture.c src/media/overlay.c include/camera_app/overlay.h src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h $(APCAM_HEADERS)
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)
 	$(CC) -O2 -g -Wall -Wextra -Werror -std=c11 $(APCAM_CPPFLAGS) -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< src/media/overlay.c -o $@ -ldl -pthread -lm

@@ -42,5 +42,5 @@ typedef void (*ca_z1_native_exposure_fn)(void *, const struct ca_exposure *);
 typedef int (*ca_z1_native_run_fn)(const atomic_bool *, ca_z1_native_frame_fn, void *);
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                          ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
-                         struct ca_z1_overlay_control *overlay);
+                         struct ca_z1_overlay_control *overlay, bool inverted);
 #endif

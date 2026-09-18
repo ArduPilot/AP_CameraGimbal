@@ -89,7 +89,8 @@ static void *receiver(void *opaque)
     const char *native_path = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
     if (native_path && *native_path) {
         ca_log("Z1 native AX capture starting; exclusive media ownership required");
-        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m, &m->overlay);
+        int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m, &m->overlay,
+            m->config.settings.orientation == CA_MOUNT_INVERTED);
         ca_log("Z1 native AX capture stopped result=%d", result);
         atomic_store(&m->ready, false);
         pthread_mutex_lock(&m->lock);
@@ -122,8 +123,14 @@ int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config 
         c->settings.sub_resolution != CA_VIDEO_1080P ||
         (c->settings.recording_resolution != CA_VIDEO_1080P &&
          !(native && c->settings.recording_resolution == CA_VIDEO_2160P)) ||
-        c->settings.main_codec != CA_VIDEO_H264 || c->settings.sub_codec != CA_VIDEO_H264 ||
-        c->settings.orientation == CA_MOUNT_INVERTED) { errno = ENOTSUP; return -1; }
+        c->settings.main_codec != CA_VIDEO_H264 || c->settings.sub_codec != CA_VIDEO_H264) {
+        ca_log("Z1 media requires 1080p H264 streams and 1080p recording (or 4K with native capture)");
+        errno = ENOTSUP; return -1;
+    }
+    if (c->settings.orientation == CA_MOUNT_INVERTED && !native) {
+        ca_log("Z1 inverted mounting requires the native capture helper");
+        errno = ENOTSUP; return -1;
+    }
     struct ca_media_impl *m = calloc(1, sizeof(*m));
     if (!m) return -1;
     m->config = *c;
@@ -209,7 +216,12 @@ int ca_media_impl_get_thermal_gain(struct ca_media_impl *m, uint8_t *g) { (void)
 int ca_media_impl_set_thermal_gain(struct ca_media_impl *m, uint8_t g) { (void)m; (void)g; return unsupported(); }
 int ca_media_impl_get_thermal_palette(struct ca_media_impl *m, uint8_t *p) { (void)m; (void)p; return unsupported(); }
 int ca_media_impl_set_thermal_palette(struct ca_media_impl *m, uint8_t p) { (void)m; (void)p; return unsupported(); }
-int ca_media_impl_set_inverted(struct ca_media_impl *m, bool i) { (void)m; return i ? unsupported() : 0; }
+int ca_media_impl_set_inverted(struct ca_media_impl *m, bool inverted)
+{
+    /* Applied by the helper before the first frame. MOUNT_ORIENT requires an
+     * app restart; reapplying the active value during media reopen is harmless. */
+    return inverted == (m->config.settings.orientation == CA_MOUNT_INVERTED) ? 0 : unsupported();
+}
 void ca_media_impl_close(struct ca_media_impl *m)
 {
     if (!m) return;

@@ -44,6 +44,10 @@
 #define APCAM_LENS1_HEIGHT 2160
 #define APCAM_ZOOM_MAX 8.0f
 #define APCAM_FRAME_RATE 30
+/* IMX415 mounting correction: sensor callback bits 0/1 mirror/flip.
+ * Inverting the mount adds a 180-degree rotation to the normal correction. */
+#define APCAM_SENSOR_MIRROR_FLIP_UPRIGHT 3
+#define APCAM_SENSOR_MIRROR_FLIP_INVERTED 0
 #define APCAM_THERMAL_FRAME_RATE 0
 #define APCAM_THERMAL_STREAM_WIDTH 0
 #define APCAM_THERMAL_STREAM_HEIGHT 0

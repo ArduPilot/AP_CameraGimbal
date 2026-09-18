@@ -85,7 +85,7 @@ int main(int argc, char **argv)
     pthread_t thread;
     assert(pthread_create(&thread,NULL,toggle,NULL)==0);
     inject=true;
-    assert(ca_z1_native_receive(argv[0],&stop,publish,NULL,NULL,&control)==0);
+    assert(ca_z1_native_receive(argv[0],&stop,publish,NULL,NULL,&control,false)==0);
     pthread_join(thread,NULL); pthread_barrier_destroy(&barrier);
     assert(frames==2 && atomic_load(&control.desired)==0);
     assert(atomic_load(&control.applied)==-EIO && errors==1);

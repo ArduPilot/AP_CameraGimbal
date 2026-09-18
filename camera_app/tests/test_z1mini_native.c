@@ -49,9 +49,12 @@ static void frame(void *unused, const uint8_t *data, size_t length, uint64_t pts
 
 int main(int argc, char **argv)
 {
-    if (argc == 3 && !strcmp(argv[1], "fd:3")) {
+    if ((argc == 3 || argc == 4) && !strcmp(argv[1], "fd:3")) {
         const char *mode = getenv("Z1_NATIVE_TEST_MODE");
-        bool valid=!strcmp(mode,"valid") || !strcmp(mode,"overlay") || !strcmp(mode,"legacy");
+        bool inverted=!strcmp(mode,"inverted");
+        assert(argc == (inverted ? 4 : 3));
+        if (inverted) assert(!strcmp(argv[3],"--inverted"));
+        bool valid=inverted || !strcmp(mode,"valid") || !strcmp(mode,"overlay") || !strcmp(mode,"legacy");
         if (!strcmp(mode,"overlay") || !strcmp(mode,"retry")) {
             struct ca_z1_native_header hello={CA_Z1_NATIVE_OVERLAY_MAGIC,0,CA_Z1_NATIVE_OVERLAY_READY,0,0};
             if (write(3,&hello,sizeof(hello))!=sizeof(hello)) return 1;
@@ -124,16 +127,16 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry", "legacy"};
+    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry", "legacy", "inverted"};
     for (unsigned i = 0; i < sizeof(modes)/sizeof(modes[0]); i++) {
         setenv("Z1_NATIVE_TEST_MODE", modes[i], 1);
         atomic_store(&stopped, false);
         count = exposure_count = 0;
         stop_after = i==6 ? 195 : 2;
         struct ca_z1_overlay_control overlay={.desired=1,.applied=-EINPROGRESS};
-        bool valid=i==0 || i==5 || i==7;
-        bool overlay_test=i>=5;
-        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL);
+        bool valid=i==0 || i==5 || i==7 || i==8;
+        bool overlay_test=i>=5 && i<=7;
+        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL, i==8);
         if (overlay_test) assert(atomic_load(&overlay.applied)==(i==7 ? -ENOTSUP : 1));
         assert(result == (valid || i==6 ? 0 : -1));
         assert(exposure_count == (valid ? 1U : 0U));
