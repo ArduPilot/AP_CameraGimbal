@@ -39,7 +39,7 @@ jobs:
       - name: Build all camera release packages
         run: make -j4 release
       - name: Check packaging and UUID helpers
-        run: make release-test platform-test camera-definition-test
+        run: make release-test platform-test camera-definition-test targets-test
       - name: Test native Z1-Mini overlay failures and request ordering
         run: make z1mini-overlay-test
       - name: Test Z1-Mini web firmware updates
