@@ -8883,6 +8883,22 @@ static void send_file_response_async(int client, const struct request *request,
     }
 }
 
+static void send_rebooting_page(int fd)
+{
+    struct string_buffer body;
+    char title[96];
+
+    snprintf(title, sizeof(title), T(S_TITLE_REBOOTING), PRODUCT_NAME);
+    sb_init(&body);
+    sb_appendf(&body, "<!doctype html><html lang=%s><meta charset=utf-8><title>",
+               languages[current_language].html_lang);
+    sb_append_html(&body, title);
+    sb_appendf(&body, "</title><h1>%s</h1><p>%s</p>", T(S_REBOOTING_HEADING),
+               T(S_REBOOTING_TEXT));
+    send_response(fd, 200, "OK", "text/html; charset=utf-8", body.data, body.len, NULL);
+    free(body.data);
+}
+
 static void schedule_reboot(void)
 {
 #ifdef MT11_WEB_SITL
@@ -9077,6 +9093,8 @@ static void handle_request(int fd, const char *peer)
         send_log_page(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/log.txt") == 0) {
         send_log_text(fd);
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/rebooting") == 0) {
+        send_rebooting_page(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/healthz") == 0) {
         char health[96];
         enum camera_kind kind = current_camera_kind();
@@ -9332,19 +9350,10 @@ static void handle_request(int fd, const char *peer)
             if (!confirmed) {
                 send_page(fd, T(S_REBOOT_UNCONFIRMED), true);
             } else {
-                struct string_buffer body;
-                char title[96];
                 log_message("camera reboot requested by %s", peer);
-                snprintf(title, sizeof(title), T(S_TITLE_REBOOTING), PRODUCT_NAME);
-                sb_init(&body);
-                sb_appendf(&body, "<!doctype html><html lang=%s><meta charset=utf-8><title>",
-                           languages[current_language].html_lang);
-                sb_append_html(&body, title);
-                sb_appendf(&body, "</title><h1>%s</h1><p>%s</p>", T(S_REBOOTING_HEADING),
-                           T(S_REBOOTING_TEXT));
-                send_response(fd, 200, "OK", "text/html; charset=utf-8",
-                              body.data, body.len, NULL);
-                free(body.data);
+                /* redirect so a browser refresh re-fetches the notice
+                 * instead of resubmitting the reboot form */
+                send_redirect(fd, "/rebooting");
                 schedule_reboot();
             }
         } else {

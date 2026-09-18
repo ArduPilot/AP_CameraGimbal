@@ -566,6 +566,16 @@ def test_login_and_languages(csrf):
     assert request("GET", "/", "wrong-password")[0] == 401
 
 
+def test_reboot_redirect(csrf):
+    # a confirmed reboot redirects so a page refresh cannot reboot again
+    status, body, _ = form("/reboot", "initial-password", csrf, {})
+    assert status == 400 and b"Reboot confirmation was not checked" in body
+    status, body, headers = form("/reboot", "initial-password", csrf, {"confirm": "yes"})
+    assert status == 303 and headers["Location"] == "/rebooting", (status, body)
+    status, body, _ = request("GET", "/rebooting", "initial-password")
+    assert status == 200 and b"<h1>Camera rebooting</h1>" in body
+
+
 try:
     deadline = time.monotonic() + 5
     while True:
@@ -579,6 +589,7 @@ try:
 
     test_large_recording_download()
     test_login_and_languages(csrf)
+    test_reboot_redirect(csrf)
 
     status, body, _ = request("GET", "/users", "initial-password")
     assert status == 200 and b"Authorized SSH keys" in body
