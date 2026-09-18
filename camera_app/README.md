@@ -202,6 +202,10 @@ match resolution; the recording codec remains H.264 with our encoder bitrates.
 These resolution settings apply to RGB imagery. The MT11 module's 640x512
 thermal image has a proven one-stage VPSS ceiling of 1280x720, so thermal RTSP
 and thermal MP4 output remain 1280x720 whichever stream slot thermal occupies.
+The recording defaults have configuration and simulator test coverage. MT11
+4K and ZR10 1440p recording still need hardware verification with all live
+streams active, including sustained microSD write throughput at 12 Mbps.
+
 The visible-image values use the vendor ranges and presets: image-level values
 are 0--100, exposure compensation is -10--10 tenths of an EV, ISO is `auto` or
 100--3200, shutter is `auto` or `1/30` through `1/2000`, metering is
@@ -426,10 +430,10 @@ through the web UI/INI. The six additional proxy parameters are listed in
 | `UART_PROTOCOL` | `uart.protocol` | 0 none, 1 SIYI, 2 MAVLink |
 | `THERMAL_PALETTE` | `thermal.palette` | 0 white hot, 2 sepia, 3 ironbow, 4 rainbow, 5 night, 6 aurora, 7 red hot, 8 jungle, 9 medical, 10 black hot, 11 glory hot |
 | `REC_AUTOSTART` | `recording.autorecord` | 0 disabled, 1 enabled at startup, 2 while armed |
-| `REC_RESOLUTION` | `recording.resolution` | 0 720p, 1 1080p, 2 2160p |
-| `VIDEO_MAIN_RES` | `stream.main.resolution` | 0 720p, 1 1080p, 2 2160p |
+| `REC_RESOLUTION` | `recording.resolution` | 0 720p, 1 1080p, 2 2160p, 3 1440p; target availability below |
+| `VIDEO_MAIN_RES` | `stream.main.resolution` | 0 720p, 1 1080p, 2 2160p, 3 1440p; target availability below |
 | `VIDEO_MAIN_CODEC` | `stream.main.codec` | 0 H.264, 1 H.265 |
-| `VIDEO_SUB_RES` | `stream.sub.resolution` | 0 720p, 1 1080p, 2 2160p |
+| `VIDEO_SUB_RES` | `stream.sub.resolution` | 0 720p, 1 1080p, 2 2160p, 3 1440p; target availability below |
 | `VIDEO_SUB_CODEC` | `stream.sub.codec` | 0 H.264, 1 H.265 |
 | `IMG_BRIGHTNESS` | `image.brightness` | 0–100 |
 | `IMG_SATURATION` | `image.saturation` | 0–100 |
@@ -439,6 +443,10 @@ through the web UI/INI. The six additional proxy parameters are listed in
 | `IMG_SHUTTER` | `image.shutter` | 0 auto; 1–8: 1/30, 1/50, 1/100, 1/250, 1/500, 1/750, 1/1000, 1/2000 s |
 | `IMG_METERING` | `image.metering` | 0 average, 1 center, 2 spot |
 | `IMG_WHITE_BAL` | `image.white_balance` | 0 auto, 1 daylight, 2 cloudy, 3 fluorescent, 4 incandescent |
+
+For the resolution parameters, MT11 and A8 support values 0, 1 and 2;
+ZR10 supports 0, 1 and 3. Z1-Mini supports only 1 for streaming and 1 or 2
+for recording. MT11 thermal output remains 720p regardless of these RGB settings.
 
 Writes validate ranges and enum choices and persist atomically to the same INI
 file as the web UI. Camera-definition settings described below also apply

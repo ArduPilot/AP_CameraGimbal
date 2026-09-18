@@ -4,7 +4,7 @@ Firmware: **{filename}**. Source revision: `{revision}`.
 `BUILD_INFO.json` records whether the build includes uncommitted changes.
 
 This is the native AX620A application overlay: **1080p live video** and a
-separate **4K recording** path. It retains the installed XFRobot kernel,
+separate **selectable 1080p or 4K recording** path. It retains the installed XFRobot kernel,
 root filesystem, AX libraries and calibration. It is not an SD bootloader image.
 
 ## First installation and updates
