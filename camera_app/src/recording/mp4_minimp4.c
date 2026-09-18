@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/file.h>
 #include <sys/vfs.h>
 #include <unistd.h>
@@ -43,7 +44,21 @@ struct ca_mp4_file {
     uint64_t next_pts90k;
     uint64_t bytes;
     uint64_t hard_limit;
+    /* Space reserved after the moov holds a sidx written at close. Without
+     * an index covering the whole file, FFmpeg-based players (Chrome among
+     * them) walk every fragment before playback starts. */
+    uint64_t index_at;   /* muxer offset of the reserved box; 0 before the moov */
+    uint64_t shift;      /* bytes inserted there; later muxer offsets move by this */
+    uint64_t mvhd_at, tkhd_at, mdhd_at; /* zero-duration headers patched at close */
+    uint32_t movie_timescale, media_timescale;
+    struct ca_mp4_keyframe { uint64_t offset, time; } *keyframes;
+    size_t keyframe_count, keyframe_capacity;
+    bool pending_key;
+    bool index_failed;
 };
+#define CA_MP4_INDEX_RESERVE (64U * 1024U)
+#define CA_MP4_SIDX_HEADER 40U
+#define CA_MP4_SIDX_ENTRY 12U
 
 struct ca_mp4 {
     struct ca_mp4_file *file;
@@ -71,30 +86,169 @@ struct ca_fmp4 {
     bool failed;
 };
 
+static uint32_t read32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+static void put32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+static void put64(uint8_t *p, uint64_t v)
+{
+    put32(p, (uint32_t)(v >> 32));
+    put32(p + 4, (uint32_t)v);
+}
+
+static int pwrite_all(int fd, const void *buffer, size_t size, uint64_t at)
+{
+    const uint8_t *data = buffer;
+    size_t done = 0;
+    while (done < size) {
+        ssize_t written = pwrite(fd, data + done, size - done, (off_t)(at + done));
+        if (written > 0) done += (size_t)written;
+        else if (written < 0 && errno == EINTR) continue;
+        else return -1;
+    }
+    return 0;
+}
+
+/* Remember where the version 0 duration fields of the moov live. */
+static void locate_headers(struct ca_mp4_file *writer, const uint8_t *moov, size_t size, uint64_t at)
+{
+    size_t pos = 8;
+    while (pos + 8 <= size) {
+        uint32_t box = read32(moov + pos);
+        if (box < 8 || box > size - pos) return;
+        if (!memcmp(moov + pos + 4, "mvhd", 4) && box >= 28 && moov[pos + 8] == 0) {
+            writer->mvhd_at = at + pos;
+            writer->movie_timescale = read32(moov + pos + 20);
+        } else if (!memcmp(moov + pos + 4, "trak", 4)) {
+            size_t p2 = pos + 8;
+            while (p2 + 8 <= pos + box) {
+                uint32_t b2 = read32(moov + p2);
+                if (b2 < 8 || b2 > pos + box - p2) return;
+                if (!memcmp(moov + p2 + 4, "tkhd", 4) && b2 >= 32 && moov[p2 + 8] == 0 && !writer->tkhd_at)
+                    writer->tkhd_at = at + p2;
+                if (!memcmp(moov + p2 + 4, "mdia", 4)) {
+                    size_t p3 = p2 + 8;
+                    while (p3 + 8 <= p2 + b2) {
+                        uint32_t b3 = read32(moov + p3);
+                        if (b3 < 8 || b3 > p2 + b2 - p3) return;
+                        if (!memcmp(moov + p3 + 4, "mdhd", 4) && b3 >= 28 && moov[p3 + 8] == 0 && !writer->mdhd_at) {
+                            writer->mdhd_at = at + p3;
+                            writer->media_timescale = read32(moov + p3 + 20);
+                        }
+                        p3 += b3;
+                    }
+                }
+                p2 += b2;
+            }
+        }
+        pos += box;
+    }
+}
+
+static void note_keyframe(struct ca_mp4_file *writer, uint64_t offset)
+{
+    if (writer->index_failed) return;
+    if (writer->keyframe_count == writer->keyframe_capacity) {
+        size_t capacity = writer->keyframe_capacity ? writer->keyframe_capacity * 2 : 256;
+        struct ca_mp4_keyframe *grown = realloc(writer->keyframes, capacity * sizeof(*grown));
+        if (grown == NULL) { writer->index_failed = true; return; }
+        writer->keyframes = grown;
+        writer->keyframe_capacity = capacity;
+    }
+    writer->keyframes[writer->keyframe_count++] =
+        (struct ca_mp4_keyframe){offset, writer->next_pts90k};
+}
+
 static int write_at(int64_t offset, const void *buffer, size_t size, void *opaque)
 {
     struct ca_mp4_file *writer = opaque;
     const uint8_t *data = buffer;
-    size_t done = 0;
 
-    if (offset < 0 || (uint64_t)offset > writer->hard_limit ||
-        size > writer->hard_limit - (uint64_t)offset) {
+    if (offset < 0) { errno = EINVAL; return 1; }
+    uint64_t at = (uint64_t)offset;
+    if (writer->shift && at >= writer->index_at) at += writer->shift;
+    if (at > writer->hard_limit || size > writer->hard_limit - at) {
         errno = EFBIG;
         return 1;
     }
-    while (done < size) {
-        ssize_t written = pwrite(writer->fd, data + done, size - done,
-                                 (off_t)(offset + (int64_t)done));
-        if (written > 0) {
-            done += (size_t)written;
-        } else if (written < 0 && errno == EINTR) {
-            continue;
-        } else {
-            return 1;
-        }
-    }
-    uint64_t end = (uint64_t)offset + size;
+    if (pwrite_all(writer->fd, data, size, at) < 0) return 1;
+    uint64_t end = at + size;
     if (end > writer->bytes) writer->bytes = end;
+    if (size >= 8 && !memcmp(data + 4, "moof", 4) && writer->pending_key) {
+        note_keyframe(writer, at);
+    } else if (size >= 8 && !memcmp(data + 4, "moov", 4) && !writer->shift) {
+        /* reserve the index space as a free box right after the moov */
+        uint8_t box[8];
+        put32(box, CA_MP4_INDEX_RESERVE);
+        memcpy(box + 4, "free", 4);
+        if (end + CA_MP4_INDEX_RESERVE > writer->hard_limit) { errno = EFBIG; return 1; }
+        if (pwrite_all(writer->fd, box, sizeof(box), end) < 0) return 1;
+        locate_headers(writer, data, size, at);
+        writer->index_at = end;
+        writer->shift = CA_MP4_INDEX_RESERVE;
+        writer->bytes = end + CA_MP4_INDEX_RESERVE;
+    }
+    return 0;
+}
+
+/* Shrink the reserved box and end it with a sidx of keyframe-aligned
+ * references covering the file, so the first fragment directly follows the
+ * index (Chrome ignores an index whose first_offset skips padding). Then
+ * give the headers the final duration. */
+static int write_index(struct ca_mp4_file *writer)
+{
+    if (!writer->shift || writer->index_failed || writer->keyframe_count == 0) return 0;
+    size_t max_refs = (CA_MP4_INDEX_RESERVE - 8U - CA_MP4_SIDX_HEADER) / CA_MP4_SIDX_ENTRY;
+    size_t stride = (writer->keyframe_count + max_refs - 1) / max_refs;
+    size_t count = (writer->keyframe_count + stride - 1) / stride;
+    size_t sidx_size = CA_MP4_SIDX_HEADER + count * CA_MP4_SIDX_ENTRY;
+    uint8_t *box = calloc(1, sidx_size);
+    if (box == NULL) return -1;
+    put32(box, (uint32_t)sidx_size);
+    memcpy(box + 4, "sidx", 4);
+    box[8] = 1; /* version 1: 64-bit time and offset */
+    put32(box + 12, 1); /* reference_ID: the video track */
+    put32(box + 16, writer->media_timescale ? writer->media_timescale : 90000U);
+    put64(box + 20, writer->keyframes[0].time);
+    put64(box + 28, 0); /* first_offset: the first moof follows directly */
+    box[38] = (uint8_t)(count >> 8);
+    box[39] = (uint8_t)count;
+    uint8_t *entry = box + CA_MP4_SIDX_HEADER;
+    for (size_t i = 0; i < count; i++, entry += CA_MP4_SIDX_ENTRY) {
+        const struct ca_mp4_keyframe *start = &writer->keyframes[i * stride];
+        struct ca_mp4_keyframe next = {writer->bytes, writer->next_pts90k};
+        if ((i + 1) * stride < writer->keyframe_count) next = writer->keyframes[(i + 1) * stride];
+        uint64_t bytes = next.offset - start->offset, duration = next.time - start->time;
+        if (bytes >= 0x80000000ULL || duration > UINT32_MAX) { free(box); return 0; }
+        put32(entry, (uint32_t)bytes);
+        put32(entry + 4, (uint32_t)duration);
+        put32(entry + 8, 0x90000000U); /* starts with a type 1 SAP at delta 0 */
+    }
+    uint8_t padding[8];
+    put32(padding, (uint32_t)(CA_MP4_INDEX_RESERVE - sidx_size));
+    memcpy(padding + 4, "free", 4);
+    int result = pwrite_all(writer->fd, box, sidx_size,
+                            writer->index_at + CA_MP4_INDEX_RESERVE - sidx_size);
+    if (result == 0) result = pwrite_all(writer->fd, padding, sizeof(padding), writer->index_at);
+    free(box);
+    if (result < 0) return -1;
+    uint64_t media = writer->next_pts90k;
+    uint32_t ts = writer->media_timescale ? writer->media_timescale : 90000U;
+    uint64_t movie = media * writer->movie_timescale / ts;
+    uint8_t value[4];
+    if (writer->mdhd_at && media <= UINT32_MAX) {
+        put32(value, (uint32_t)media);
+        if (pwrite_all(writer->fd, value, 4, writer->mdhd_at + 24) < 0) return -1;
+    }
+    if (movie <= UINT32_MAX) {
+        put32(value, (uint32_t)movie);
+        if (writer->mvhd_at && pwrite_all(writer->fd, value, 4, writer->mvhd_at + 24) < 0) return -1;
+        if (writer->tkhd_at && pwrite_all(writer->fd, value, 4, writer->tkhd_at + 28) < 0) return -1;
+    }
     return 0;
 }
 
@@ -330,6 +484,12 @@ static int write_recording_frame(struct ca_mp4_file *writer, const uint8_t *anne
     char json[CA_VIDEO_METADATA_JSON_MAX];
     size_t json_length = 0U;
     if (writer == NULL) { errno = EINVAL; return -1; }
+    /* index the fragments that start with an IDR, as the muxer marks them */
+    size_t offset = 0U, nal, nal_length;
+    writer->pending_key = false;
+    while (ca_annexb_next(annex_b, length, &offset, &nal, &nal_length)) {
+        if (nal_length != 0U && (annex_b[nal] & 31U) == 5U) writer->pending_key = true;
+    }
     int result = write_h264(&writer->h264, writer->frame_duration, annex_b, length,
                             writer->next_pts90k, json, &json_length, hfov_deg);
     if (result <= 0) return result;
@@ -367,6 +527,9 @@ static int file_close(struct ca_mp4_file *writer)
     if (writer == NULL) return 0;
     mp4_h26x_write_close(&writer->h264);
     if (MP4E_close(writer->mux) != MP4E_STATUS_OK) result = -1;
+    if (result == 0 && write_index(writer) < 0) result = -1;
+    free(writer->keyframes);
+    writer->keyframes = NULL;
     if (writer->sync_started) {
         pthread_mutex_lock(&writer->sync_lock);
         writer->sync_stopping = true;
