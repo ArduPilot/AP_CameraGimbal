@@ -202,13 +202,18 @@ static uint32_t auto_min_shutter(uint32_t inherited, uint32_t maximum)
     }
     uint32_t count = get_u32(table, 0);
     uint32_t minimum = inherited;
+    bool have_usable_row = false;
     if (count == 0 || count > 16U) goto invalid;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t us = get_u32(table, 8U + i * 16U);
-        if (us == 0 || us > 1000000U) goto invalid;
+        /* A long-exposure table may include rows beyond the current video
+         * shutter limit. Ignore those and empty rows without losing shorter
+         * usable exposures; do not impose an unrelated absolute time limit. */
+        if (us == 0 || us > maximum) continue;
+        have_usable_row = true;
         if (us < minimum) minimum = us;
     }
-    if (minimum == 0 || minimum > maximum) goto invalid;
+    if (!have_usable_row || minimum == 0 || minimum > maximum) goto invalid;
     return minimum;
 invalid:
     ca_log("ISP exposure table invalid; retaining minimum shutter %u us", inherited);
