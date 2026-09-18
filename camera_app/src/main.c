@@ -497,7 +497,9 @@ int main(int argc, char **argv)
                            ? external_uart_device
                            : NULL,
         .rtsp_port = rtsp_port,
+        .record_root = record_root,
         .capture_root = capture_root,
+        .log_root = log_root,
         .photo_scope = app_config.photo_scope,
         .settings = app_config,
         .backend = backend,

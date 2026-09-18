@@ -2315,12 +2315,20 @@ static void handle_camera_ftp(struct ca_mavlink_server *server,
         !target_matches(server, request.target_system, request.target_component, server->camera_component_id)) return;
     reply.target_system = message->sysid;
     reply.target_component = message->compid;
+    /* card downloads need multi-packet bursts to be usable; keep them short
+     * on the UART so gimbal control traffic is not delayed */
+    server->ftp.burst_packets = route->kind == ROUTE_UART ? 8U : 64U;
     ca_camera_ftp_reply(&server->ftp, server->definition_xml, server->definition_length,
                         message->sysid, message->compid, monotonic_ms(), request.payload, reply.payload);
     mavlink_message_t response;
     mavlink_msg_file_transfer_protocol_encode_status(server->system_id, server->camera_component_id,
         &server->encode_status, &response, &reply);
-    (void)send_message(server, route, &response);
+    if (send_message(server, route, &response) < 0) return;
+    while (ca_camera_ftp_burst_next(&server->ftp, message->sysid, message->compid, reply.payload)) {
+        mavlink_msg_file_transfer_protocol_encode_status(server->system_id, server->camera_component_id,
+            &server->encode_status, &response, &reply);
+        if (send_message(server, route, &response) < 0) break;
+    }
 }
 
 static void process_message(struct ca_mavlink_server *server,
@@ -2590,6 +2598,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     }
     memcpy(server->capture_root, config->capture_root,
            strlen(config->capture_root) + 1U);
+    ca_camera_ftp_init(&server->ftp, config->record_root, config->capture_root, config->log_root);
     server->manual_control = config->manual_control;
     server->backend = config->backend;
     server->media = config->media;
@@ -2822,5 +2831,6 @@ void ca_mavlink_server_close(struct ca_mavlink_server *server)
     ca_poll_close(server->pollset);
     free(server->definition_xml);
     free(server->config_path);
+    ca_camera_ftp_close(&server->ftp);
     free(server);
 }

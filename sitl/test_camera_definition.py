@@ -40,9 +40,11 @@ def download(link):
         payload = struct.pack('<HBBBBBBI', sequence, session, opcode,
                               len(data) if size is None else size, 0, 0, 0, offset) + data
         link.mav.file_transfer_protocol_send(0, 42, CAMERA, payload.ljust(251, b'\0'))
+        # burst reads continue with further sequence numbers; match the reply to this request
         response = receive(link, 'FILE_TRANSFER_PROTOCOL', lambda m:
                            m.target_system == 255 and m.target_component == 190 and
-                           struct.unpack('<H', bytes(m.payload[:2]))[0] == (sequence + 1) & 65535)
+                           struct.unpack('<H', bytes(m.payload[:2]))[0] == (sequence + 1) & 65535 and
+                           struct.unpack('<I', bytes(m.payload[8:12]))[0] == offset)
         assert response.get_srcComponent() == CAMERA
         raw = bytes(response.payload)
         header = struct.unpack('<HBBBBBBI', raw[:12])
@@ -53,7 +55,7 @@ def download(link):
     session = header[1]
     xml = b''
     while len(xml) < size:
-        _, data = ftp(15, session, size=239, offset=len(xml))
+        _, data = ftp(5, session, size=239, offset=len(xml))
         xml += data
     ftp(1, session)
     return xml
@@ -239,11 +241,23 @@ def mavproxy_checks(endpoint, directory, link, definition):
         try:
             cli.expect(r'loaded %u settings' % len(definition.parameters))
             time.sleep(2)
+            recording = max((directory / 'record').glob('*.mp4'), key=lambda p: p.stat().st_size)
             for with_time in (1, 0):
                 cli.sendline('ftp set list_time %u' % with_time)
                 cli.sendline('ftp list')
+                # MAVProxy sorts entries: the card directories precede camera.xml
+                for name in ('capture', 'logs', 'record'):
+                    cli.expect(r' D %s' % name)
                 cli.expect(r'camera\.xml\s+\d+')
                 cli.expect(r'Total size')
+                cli.sendline('ftp list /record')
+                cli.expect(re.escape(recording.name) + r'\s+%u' % recording.stat().st_size)
+                cli.expect(r'Total size')
+            fetched = directory / 'fetched.mp4'
+            cli.sendline(f'ftp get /record/{recording.name} {fetched}')
+            cli.expect(r'Wrote %u bytes' % recording.stat().st_size, timeout=120)
+            time.sleep(0.5)
+            assert fetched.read_bytes() == recording.read_bytes(), (fetched, recording)
             cli.sendline('camera params')
             cli.expect(r'REC_AUTOSTART\s+0\s+')
             last = list(definition.parameters)[-1]

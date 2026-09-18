@@ -13,7 +13,9 @@ struct ca_mavlink_server_config {
     unsigned udp_port;
     const char *uart_device;
     unsigned rtsp_port;
+    const char *record_root;
     const char *capture_root;
+    const char *log_root;
     const char *config_path;
     const char *network_error;
     enum ca_photo_scope photo_scope;
