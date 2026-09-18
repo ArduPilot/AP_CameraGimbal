@@ -404,6 +404,9 @@ def main():
                                    side_effect=lambda path: b'ELF fixture: ' + path.name.encode()):
                 package_builder.build(packages[0])
                 package_builder.build(packages[1], native_capture=Path('ax-capture'))
+            for path in packages:
+                with zipfile.ZipFile(path) as z:
+                    assert z.read('gcu/ap/camera.ini.default') == (ROOT/'packaging/z1mini/camera.ini').read_bytes()
             packages += list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
             packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
             for path in packages:

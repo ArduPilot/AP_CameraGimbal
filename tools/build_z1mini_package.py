@@ -39,9 +39,6 @@ def build(output, native_capture=None):
     }
     if native_capture is not None:
         payload['ax-capture'] = arm_binary(native_capture)
-        payload['camera.ini.default'] = payload['camera.ini.default'].replace(
-            b'[recording]\nautorecord = false\nresolution = 1920x1080',
-            b'[recording]\nautorecord = false\nresolution = 3840x2160')
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], cwd=ROOT).returncode != 0
     payload['manifest.json'] = (json.dumps({

@@ -135,7 +135,7 @@ palette = white_hot
 
 [recording]
 autorecord = false
-resolution = 1920x1080
+resolution = 3840x2160
 
 [stream.main]
 resolution = 1920x1080
@@ -190,9 +190,15 @@ MAVLink recording-policy changes apply immediately.
 Recording transitions also broadcast MAVLink `CAMERA_CAPTURE_STATUS`; its elapsed
 timer covers automatic and web-triggered recording as well as MAVLink commands.
 
-Stream and recording resolutions accept `1280x720`, `1920x1080` or
-`3840x2160`; each RTSP codec accepts `h264` or `h265`. Recording uses separate
+Stream and recording resolutions are target-specific: MT11 and A8 offer
+`1280x720`, `1920x1080` and `3840x2160`; ZR10 offers `1280x720`, `1920x1080`
+and `2560x1440`; Z1-Mini streams at `1920x1080` and records at `1920x1080`
+or `3840x2160`. Each RTSP codec accepts `h264` or `h265`. Recording uses separate
 H.264 encoders, so its resolution does not silently follow either RTSP stream.
+Fresh installations and SITL use the vendor recording resolution defaults:
+MT11 and A8 use `3840x2160`, ZR10 uses `2560x1440`, and Z1-Mini uses
+`1920x1080`. Existing saved settings are preserved on upgrade. These defaults
+match resolution; the recording codec remains H.264 with our encoder bitrates.
 These resolution settings apply to RGB imagery. The MT11 module's 640x512
 thermal image has a proven one-stage VPSS ceiling of 1280x720, so thermal RTSP
 and thermal MP4 output remain 1280x720 whichever stream slot thermal occupies.

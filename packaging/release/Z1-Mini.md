@@ -21,8 +21,9 @@ root filesystem, AX libraries and calibration. It is not an SD bootloader image.
 3. After reboot, open the camera's existing Ethernet IP address in a browser
    on port **80**. Log in as **admin / ardupilot** on a new installation.
 4. Check the version/hash on **Status**, then check **Live**. Insert a microSD
-   card for recordings. New installations default to 4K recording; existing
-   installations preserve their saved recording resolution.
+   card for recordings. New installations default to 1080p recording, with 4K
+   available in Parameters. Existing installations preserve their saved
+   recording resolution.
 
 When using the vendor updater on a running AP installation, stop the AP
 service first so it does not replace running executables. Existing parameters
