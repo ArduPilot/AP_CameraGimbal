@@ -315,11 +315,17 @@ and special files, and limits each asset to 256 KiB. HTML fragments are private:
 only explicit script/style routes are served. Their `{{0}}` substitutions are
 values already escaped by the page for the destination context; templates are
 never used as printf format strings. Missing or invalid templates fail the
-whole page rather than publishing truncated forms.
+whole page rather than publishing truncated forms. Missing or unavailable
+assets return HTTP 503 with a reinstall message on cameras without the recovery
+UI described below.
 
 Every firmware package installs `webroot` alongside the application data
 (`APP_DIR/webroot`); updating an executable alone is no longer a complete web
-installation. ZR10 and Z1-Mini packages include assets in their checksums. Native
+installation. `make -C camera_app install-web` transfers the complete webroot
+before replacing and restarting the web binary. Its destination defaults to
+`/app/webroot` and can be changed with `REMOTE_WEBROOT`; a failed transfer
+stops the installation before restart. ZR10 and Z1-Mini packages include assets
+in their checksums. Native
 SITL uses the source webroot, and the standalone Windows payload includes its
 own copy selected with `CAMERA_GIMBAL_SITL_WEBROOT`. There is no dependency on a
 system web server, JavaScript package manager or an internet-hosted UI bundle.

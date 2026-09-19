@@ -43,7 +43,8 @@ MAVLINK_CPPFLAGS := -I$(MAVLINK_GEN_DIR) -DCA_MAVLINK_DIALECT=$(MAVLINK_DIALECT)
 
 BACKEND_DIR := src/backends/$(CAMERA_BACKEND)
 CPPFLAGS = -Ibuild $(APCAM_CPPFLAGS) -Iinclude -I$(BACKEND_DIR) $(MAVLINK_CPPFLAGS)
-CXXFLAGS ?= -std=gnu++17 -fno-exceptions -fno-rtti -Wno-missing-field-initializers
+# Required language/runtime settings follow user flags, including command-line overrides.
+override CXXFLAGS += -std=gnu++17 -fno-exceptions -fno-rtti -Wno-missing-field-initializers
 APP_CXXFLAGS = $(filter-out -std=%,$(CFLAGS)) $(CXXFLAGS)
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Werror -std=c11
 ifeq ($(CAMERA_BACKEND),zr10)
@@ -163,9 +164,11 @@ SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
 SSH_HOST ?= MT11
 SSH ?= ssh
 RSYNC_RSH ?= ssh
+RSYNC ?= rsync
 REMOTE_BIN ?= /app/bin/camera-app
 REMOTE_CONFIG ?= /app/camera.ini
 REMOTE_WEB ?= /app/bin/mt11-web
+REMOTE_WEBROOT ?= /app/webroot
 REMOTE_APP_INIT ?= /app/app_init.sh
 REMOTE_APP_SELECTION ?= /app/app_selection.sh
 REMOTE_TIMESYNC ?= /app/bin/mt11-timesync.sh
@@ -583,7 +586,8 @@ install-app: $(TARGET)
 
 install-web:
 	$(MAKE) -C ../web
-	rsync -av --chmod=F755 -e '$(RSYNC_RSH)' ../web/mt11-web $(SSH_HOST):$(REMOTE_WEB).new
+	$(RSYNC) -av --delay-updates --delete-delay --chmod=D755,F644 -e '$(RSYNC_RSH)' ../web/webroot/ $(SSH_HOST):$(REMOTE_WEBROOT)/
+	$(RSYNC) -av --chmod=F755 -e '$(RSYNC_RSH)' ../web/mt11-web $(SSH_HOST):$(REMOTE_WEB).new
 	$(SSH) $(SSH_HOST) 'set -eu; chmod 0755 $(REMOTE_WEB).new; mv $(REMOTE_WEB).new $(REMOTE_WEB); sed -i "s/mt11-web -p 8080/mt11-web -p $(WEB_PORT)/g" /app/app_init.sh; pids=$$(ps | awk '\''/mt11-web -p (80|8080)/ && !/awk/ {print $$1}'\''); for pid in $$pids; do kill -TERM "$$pid"; done; sleep 1; $(REMOTE_WEB) -p $(WEB_PORT) >/run/mt11-web.log 2>&1 &'
 
 install-init: $(APP_INIT) $(APP_SELECTION) $(TIMESYNC)

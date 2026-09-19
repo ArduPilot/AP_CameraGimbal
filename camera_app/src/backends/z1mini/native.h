@@ -1,6 +1,6 @@
-#include "apcam/compiler.h"
 #ifndef CA_Z1_NATIVE_H
 #define CA_Z1_NATIVE_H
+#include "apcam/compiler.h"
 #include "apcam/atomic.h"
 #include "camera_app/exposure.h"
 #include <stdbool.h>
