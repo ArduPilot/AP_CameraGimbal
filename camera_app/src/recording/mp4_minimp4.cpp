@@ -20,7 +20,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#ifdef __APPLE__
+#include <sys/mount.h>
+#else
 #include <sys/vfs.h>
+#endif
 #include <unistd.h>
 
 /* Linux vfat/msdos share this magic; exFAT has its own filesystem type.
@@ -293,8 +297,18 @@ static void *sync_recording(void *opaque)
             }
             if (now.tv_sec < next_sync.tv_sec ||
                 (now.tv_sec == next_sync.tv_sec && now.tv_nsec < next_sync.tv_nsec)) {
+#ifdef __APPLE__
+                // Darwin condition variables have no selectable clock. Relative
+                // waits preserve the monotonic interval through clock changes.
+                struct timespec remaining = {next_sync.tv_sec - now.tv_sec,
+                                             next_sync.tv_nsec - now.tv_nsec};
+                if (remaining.tv_nsec < 0) { remaining.tv_sec--; remaining.tv_nsec += 1000000000; }
+                int result = pthread_cond_timedwait_relative_np(&writer->sync_changed,
+                                                               &writer->sync_lock, &remaining);
+#else
                 int result = pthread_cond_timedwait(&writer->sync_changed,
                                                     &writer->sync_lock, &next_sync);
+#endif
                 if (result != 0 && result != ETIMEDOUT) {
                     atomic_store(&writer->sync_error, result);
                     break;
@@ -333,7 +347,9 @@ static int start_recording_sync(struct ca_mp4_file *writer)
     if (result != 0) { errno = result; return -1; }
     result = pthread_condattr_init(&attr);
     if (result != 0) goto fail_mutex;
+#ifndef __APPLE__
     result = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+#endif
     if (result == 0) result = pthread_cond_init(&writer->sync_changed, &attr);
     pthread_condattr_destroy(&attr);
     if (result != 0) goto fail_mutex;
@@ -384,7 +400,11 @@ static int file_open(struct ca_mp4_file **result, const char *path,
         errno = saved_errno;
         return -1;
     }
+#ifdef __APPLE__
+    writer->hard_limit = !strcmp(fs.f_fstypename, "msdos") ? CA_FAT_MAX_BYTES : INT64_MAX;
+#else
     writer->hard_limit = fs.f_type == CA_MSDOS_SUPER_MAGIC ? CA_FAT_MAX_BYTES : INT64_MAX;
+#endif
     writer->frame_duration = 90000U / frame_rate;
     /* Append-only fragments keep completed frames playable before close and
      * after a crash; the movie header is emitted with the first video frame. */

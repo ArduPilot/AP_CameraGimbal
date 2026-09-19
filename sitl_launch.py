@@ -30,7 +30,7 @@ OWNER_VARIABLE = 'CAMERA_GIMBAL_SITL_LAUNCH_ID'
 
 def owned_processes(token):
     """Include detached web-restart children, without touching other SITL runs."""
-    if os.name == 'nt':
+    if os.name == 'nt' or sys.platform == 'darwin':
         import psutil
         result = []
         for process in psutil.process_iter(['pid']):

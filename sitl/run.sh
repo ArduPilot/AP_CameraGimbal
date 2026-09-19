@@ -142,7 +142,7 @@ if python3 "$repo/sitl/check_running.py" "$web_port" \
     exit 1
 fi
 exec 9>"$launcher_lock"
-if ! flock -n 9; then
+if ! python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)'; then
     echo "$label SITL is already running; stop its original launcher with Ctrl-C" >&2
     exit 1
 fi
@@ -221,11 +221,17 @@ MT11_WEB_LIVE_PORT="$((rtsp_port + 1))" \
     "$build/$web_binary" -p "$web_port" >"$runtime/run/web.log" 2>&1 9>&- &
 web_pid=$!
 
-sleep 0.1
-if ! kill -0 "$web_pid" 2>/dev/null; then
-    echo "web service failed to start; see $runtime/run/web.log" >&2
-    exit 1
-fi
+# Starting the process is not proof that it is listening (notably on macOS
+# during the first launch). Only enable the launcher's web button when ready.
+web_attempts=0
+until python3 "$repo/sitl/check_running.py" "$web_port" "$runtime/app/web.pass"; do
+    web_attempts=$((web_attempts + 1))
+    if ! kill -0 "$web_pid" 2>/dev/null || [ "$web_attempts" -ge 20 ]; then
+        echo "web service failed to become ready; see $runtime/run/web.log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
 
 echo "$label SITL running"
 echo "  Web UI:   http://127.0.0.1:$web_port/ (admin / ardupilot)"

@@ -20,6 +20,9 @@ CC := $(CROSS_COMPILE)gcc
 HOST_CXX ?= c++
 CXX := $(CROSS_COMPILE)g++
 PYTHON ?= python3
+ifeq ($(shell uname -s),Darwin)
+override HOST_CXX += -include $(abspath ../include/apcam/posix_compat.h) -Wno-deprecated-declarations
+endif
 
 # MAVLink C bindings are generated from the message definitions in the
 # modules/mavlink submodule (git submodule update --init --recursive).
@@ -59,6 +62,11 @@ MINIMP4_HEADER := build/minimp4.h
 SAMPLE_COMMON := $(SS928_MPP_ROOT)/src/common
 VENDOR_LIB_DIR := $(SS928_MPP_ROOT)/lib/linux/hisilicon
 RTSP_ROOT := $(SS928_MPP_ROOT)/src/rtspserver/src
+ifeq ($(shell uname -s),Darwin)
+# Prepare before enumerating the vendor source files below. Writes only on change.
+XOP_DARWIN_PREPARE := $(shell $(PYTHON) ../tools/prepare_xop.py $(RTSP_ROOT) ../build/darwin-xop)
+RTSP_ROOT := $(abspath ../build/darwin-xop)
+endif
 SCENE_ROOT := $(SS928_MPP_ROOT)/src/scene_auto
 XOP_VENDOR_LIB := $(SS928_MPP_ROOT)/lib/linux/3rdparty/libxoprtsp.a
 XOP_COMPAT_LIB := build/libxoprtsp_compat.a
@@ -330,9 +338,9 @@ build/live_video_server.o: src/streaming/live_video_server.cpp \
 $(MINIMP4_HEADER): $(MINIMP4_ROOT)/minimp4.h src/recording/minimp4_metadata.patch Makefile
 	mkdir -p build
 	cp $< $@
-	sed -i 's/\r$$//' $@
+	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
 	patch $@ < src/recording/minimp4_metadata.patch
-	sed -i 's/^#define MP4D_TFDT_SUPPORT[[:space:]]*0/#define MP4D_TFDT_SUPPORT         1/' $@
+	$(PYTHON) -c 'from pathlib import Path; import re; p=Path("$@"); p.write_text(re.sub(r"(?m)^#define MP4D_TFDT_SUPPORT\s+0", "#define MP4D_TFDT_SUPPORT 1", p.read_text()))'
 	grep -q '^#define MP4D_TFDT_SUPPORT[[:space:]]*1' $@
 
 build/mp4_minimp4.o: src/recording/mp4_minimp4.cpp $(MINIMP4_HEADER)
@@ -350,7 +358,7 @@ build/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 build/xop_rtsp_connection.cpp: src/streaming/xop_aggregate_setup.patch Makefile
 	mkdir -p build
 	cp $(RTSP_ROOT)/xop/RtspConnection.cpp $@
-	sed -i 's/\r$$//' $@
+	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
 	patch $@ < $<
 
 build/xop_rtsp_connection.o: build/xop_rtsp_connection.cpp
@@ -361,7 +369,7 @@ build/xop_rtsp_connection.o: build/xop_rtsp_connection.cpp
 build/xop_rtp_connection.cpp: src/streaming/xop_satip_payload.patch Makefile
 	mkdir -p build
 	cp $(RTSP_ROOT)/xop/RtpConnection.cpp $@
-	sed -i 's/\r$$//' $@
+	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
 	patch $@ < $<
 
 build/xop_rtp_connection.o: build/xop_rtp_connection.cpp

@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef __CYGWIN__
+#ifdef __linux__
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>

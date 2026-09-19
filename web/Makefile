@@ -14,6 +14,9 @@ CFLAGS ?= -O2 -pipe -Wall -Wextra -Wformat-security -Werror -std=gnu++17 -fno-ex
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -isystem ../camera_app/build/mavlink/all/include -Wno-address-of-packed-member
 endif
+ifeq ($(shell uname -s),Darwin)
+CFLAGS += -include $(abspath ../include/apcam/posix_compat.h) -Wno-deprecated-declarations
+endif
 LDFLAGS ?= -static
 TEST_ROOT := $(CURDIR)/tests/runtime
 HOST_TEST := tests/mt11-web-host
