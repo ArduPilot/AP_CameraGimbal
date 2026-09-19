@@ -8,7 +8,7 @@ for backend in $(python3 -c 'import json; print(" ".join(json.load(open("build/t
     make -C camera_app -j"${NUMBER_OF_PROCESSORS:-4}" sitl CAMERA_BACKEND="$backend" \
         SITL_TARGET="../build/windows/native/camera-app-$backend.exe" \
         SITL_OBJDIR="build/windows-$backend" \
-        HOST_CPP='g++ -D_GNU_SOURCE' RTSP_ROOT=../build/windows-xop
+        HOST_CXX='g++ -D_GNU_SOURCE' RTSP_ROOT=../build/windows-xop
     defines=-DWEB_PORTABLE_SITL
     case "$backend" in
         a8) ;;

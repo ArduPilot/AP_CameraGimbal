@@ -14,6 +14,7 @@ usage()
 
 [ "$#" -eq 9 ] || usage
 
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 platform=$1
 output=$2
 camera_app=$3
@@ -61,6 +62,7 @@ trap 'rm -rf "$work"' EXIT
 
 tree=$work/customer
 mkdir -p "$tree/bin" "$tree/camera-app" "$tree/config"
+cp -R "$root/web/webroot" "$tree/camera-app/webroot"
 # The retained boot script loads these modules from the customer partition.
 cp -a "$platform/modules" "$tree/modules"
 install -m 0644 "$platform/8836_imx678_v6.bin" "$tree/8836_imx678_v6.bin"

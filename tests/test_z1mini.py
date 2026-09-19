@@ -173,11 +173,17 @@ class RTSP:
 
 
 def main():
-    web_source = (ROOT/'web/mt11-web.c').read_text()
+    web_source = (ROOT/'web/mt11-web.cpp').read_text()
     allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
                           web_source, re.S)
     assert allowlist
     accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
+    web_assets = {
+        'gcu/ap/webroot/' + path.relative_to(ROOT / 'web/webroot').as_posix(): path.read_bytes()
+        for path in (ROOT / 'web/webroot').rglob('*') if path.is_file()
+    }
+    assert web_assets, 'Web assets must be bundled in Z1-Mini updates'
+    accepted.update(web_assets)
     builder = ast.parse((ROOT/'tools/build_z1mini_package.py').read_text())
     app_files, ipc_files = set(), set()
     for node in ast.walk(builder):
@@ -192,18 +198,18 @@ def main():
                         app_files.add(key.value)
                     if isinstance(target.value, ast.Name) and target.value.id == 'members' and isinstance(key, ast.Constant) and isinstance(key.value, str):
                         ipc_files.add(key.value)
-    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files
+    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files | set(web_assets)
     assert accepted == builder_members, (accepted, builder_members)
     with tempfile.TemporaryDirectory(prefix='z1mini-test-') as temp:
         root = Path(temp)
         log = (root / 'build.log').open('w')
-        run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-            '-o', str(root/'unit'), str(ROOT/'camera_app/tests/test_z1mini.c'),
-            str(ROOT/'camera_app/src/backends/z1mini/pipeline.c'), str(ROOT/'camera_app/src/log.c'), '-lm', '-lutil')
+        run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
+            '-o', str(root/'unit'), str(ROOT/'camera_app/tests/test_z1mini.cpp'),
+            str(ROOT/'camera_app/src/backends/z1mini/pipeline.cpp'), str(ROOT/'camera_app/src/log.cpp'), '-lm', '-lutil')
         run(str(root/'unit'))
-        run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-            '-o', str(root/'native-unit'), str(ROOT/'camera_app/tests/test_z1mini_native.c'),
-            str(ROOT/'camera_app/src/backends/z1mini/native.c'), str(ROOT/'camera_app/src/log.c'), '-pthread')
+        run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
+            '-o', str(root/'native-unit'), str(ROOT/'camera_app/tests/test_z1mini_native.cpp'),
+            str(ROOT/'camera_app/src/backends/z1mini/native.cpp'), str(ROOT/'camera_app/src/log.cpp'), '-pthread')
         run(str(root/'native-unit'))
         run('make', '-C', str(ROOT/'camera_app'), 'CAMERA_BACKEND=z1mini', 'z1mini-host', '-j8', stdout=log, stderr=log)
         source = root/'source.h264'
@@ -320,6 +326,7 @@ def main():
             temp_file = root/'soc_temp'; temp_file.write_text('80125\n')
             webbin = root/'z1mini-web'
             paths = {
+                "WEBROOT_PATH": ROOT / "web/webroot",
                 'APP_DIR':root, 'APP_SELECTION_DIR':root, 'MEDIA_ROOT':root,
                 'PASSWORD_PATH':root/'web.pass', 'REPLACEMENT_CONFIG_PATH':config,
                 'REPLACEMENT_CONFIG_BACKUP_PATH':root/'config.bak', 'SESSION_PATH':root/'sessions',
@@ -328,9 +335,9 @@ def main():
                 'VENDOR_CAMERA_PATH':root/'vendor', 'REPLACEMENT_CAMERA_PATH':binary,
                 'SOC_TEMPERATURE_PATH':temp_file,
             }
-            run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-address-of-packed-member',
+            run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-address-of-packed-member',
                 '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-DMT11_WEB_TEST', '-I'+str(ROOT/'camera_app/build/mavlink/all/include'),
-                *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.c'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
+                *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.cpp'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
             webport = port()
             web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log,
                                    env=dict(os.environ, MT11_WEB_LIVE_PORT=str(outputport + 1)))
@@ -407,6 +414,8 @@ def main():
             for path in packages:
                 with zipfile.ZipFile(path) as z:
                     assert z.read('gcu/ap/camera.ini.default') == (ROOT/'packaging/z1mini/camera.ini').read_bytes()
+                    for name, content in web_assets.items():
+                        assert z.read(name) == content, name
             packages += list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
             packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
             for path in packages:

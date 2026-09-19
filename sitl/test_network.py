@@ -166,10 +166,10 @@ def main():
         return
     with tempfile.TemporaryDirectory(prefix='camera-network-') as directory:
         binary = Path(directory) / 'test-network'
-        subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-std=c11',
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-I' + str(REPO / 'include'), '-I' + str(REPO / 'camera_app/include'),
-                        str(REPO / 'camera_app/tests/test_network.c'),
-                        str(REPO / 'camera_app/src/protocol/network.c'), '-o', str(binary)], check=True)
+                        str(REPO / 'camera_app/tests/test_network.cpp'),
+                        str(REPO / 'camera_app/src/protocol/network.cpp'), '-o', str(binary)], check=True)
         namespace = ['sudo', '-n', 'unshare', '--net'] if args.sudo else ['unshare', '--user', '--map-root-user', '--net']
         subprocess.run([*namespace, sys.executable, str(Path(__file__).resolve()), '--inside', str(binary)], check=True)
 

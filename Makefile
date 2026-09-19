@@ -94,6 +94,7 @@ release: camera-definitions
 		--output '$(RELEASE_ROOT)' --targets $(RELEASE_TARGETS)
 
 release-test:
+	python3 tests/test_cpp_build.py
 	python3 tests/test_release.py
 	python3 tests/test_build_dependencies.py
 	python3 tests/test_prebuilt_tools.py
@@ -307,8 +308,8 @@ mavproxy-camera-test:
 sitl-clean:
 	rm -rf build
 
-packaging/mt11/thermal_socket: packaging/mt11/thermal_socket.c
-	$(CROSS_COMPILE)gcc -static -O2 -pipe -Wall -Wextra -Werror -std=c11 \
+packaging/mt11/thermal_socket: packaging/mt11/thermal_socket.cpp
+	$(CROSS_COMPILE)g++ -static -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
 		-o $@ $<
 
 mt11_package:
@@ -352,8 +353,8 @@ a8_package:
 	$(MAKE) build-dependencies
 	$(MAKE) -C camera_app CAMERA_BACKEND=a8 CROSS_COMPILE=$(A8_CROSS_COMPILE)
 	$(MAKE) -C web a8-web A8_CROSS_COMPILE=$(A8_CROSS_COMPILE)
-	$(A8_CROSS_COMPILE)gcc -O2 -pipe -Wall -Wextra -Werror -std=c11 \
-		-o build/a8-uuid packaging/a8/a8-uuid.c -ldl
+	$(A8_CROSS_COMPILE)g++ -static-libstdc++ -static-libgcc -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
+		-o build/a8-uuid packaging/a8/a8-uuid.cpp -ldl
 	CROSS_COMPILE=$(A8_CROSS_COMPILE) tools/build_a8_package.sh \
 		'$(A8_PLATFORM_DIR)' '$(A8_PACKAGE_OUT)' \
 		camera_app/build/a8/camera-app build/a8-uuid web/a8-web \
@@ -380,8 +381,8 @@ zr10_dependencies:
 zr10: zr10_dependencies
 	$(MAKE) -C camera_app CAMERA_BACKEND=zr10 CROSS_COMPILE='$(ZR10_CROSS_COMPILE)'
 	$(MAKE) -C web zr10-web ZR10_CROSS_COMPILE='$(ZR10_CROSS_COMPILE)'
-	$(ZR10_CROSS_COMPILE)gcc -O2 -Wall -Wextra -Werror -std=c11 \
-		-o build/zr10-uuid packaging/zr10/zr10-uuid.c -ldl
+	$(ZR10_CROSS_COMPILE)g++ -static-libstdc++ -static-libgcc -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
+		-o build/zr10-uuid packaging/zr10/zr10-uuid.cpp -ldl
 zr10_package: zr10
 	ZR10_CROSS_COMPILE='$(ZR10_CROSS_COMPILE)' tools/build_zr10_package.sh \
 		'$(ZR10_PACKAGE_OUT)' camera_app/build/zr10/camera-app web/zr10-web \

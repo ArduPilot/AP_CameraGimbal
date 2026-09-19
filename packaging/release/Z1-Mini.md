@@ -25,6 +25,15 @@ root filesystem, AX libraries and calibration. It is not an SD bootloader image.
    available in Parameters. Existing installations preserve their saved
    recording resolution.
 
+Older AP builds from before the external webroot reject the new asset files
+in the web update archive. Use the XFRobot `.gcu` updater once when moving
+from one of those builds; later updates work through the AP web UI.
+
+If a web server with recovery support is installed without its webroot files,
+open the camera's main URL. Its built-in firmware recovery page lets you log in
+with the existing password and upload the complete `.gcu` package. Missing or
+partial webroot contents do not disable this recovery uploader.
+
 When using the vendor updater on a running AP installation, stop the AP
 service first so it does not replace running executables. Existing parameters
 and web credentials in `/opt/ap_cameragimbal` survive both update methods.

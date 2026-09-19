@@ -72,6 +72,7 @@ def toolchain(name):
         stamp.write_text(digest + '\n')
     compiler = str(target / 'bin' / prefix)
     run(compiler + 'gcc', '-dumpmachine')
+    run(compiler + 'g++', '-dumpmachine')
     return compiler
 
 
@@ -111,7 +112,7 @@ def main():
         run(*prefix, 'apt-get', 'install', '-y', 'build-essential', 'gcc-aarch64-linux-gnu',
             'g++-aarch64-linux-gnu', 'python3-venv', 'python3-dev', 'git', 'curl', 'ca-certificates',
             'mtd-utils', 'fakeroot', 'zlib1g-dev', 'liblzo2-dev', 'libzstd-dev', 'liblzma-dev',
-            'openssl', 'patch', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
+            'openssl', 'patch', 'rsync', 'zip', 'unzip', 'xz-utils', 'bzip2', 'ffmpeg', 'nodejs',
             'python3-av', 'python3-opencv', *tool_build_deps)
     BUILD.mkdir(exist_ok=True)
     env = BUILD / 'environment'

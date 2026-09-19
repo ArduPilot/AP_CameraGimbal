@@ -39,7 +39,7 @@ def real_stack(app):
             camera_port = reserve_port(socket.SOCK_DGRAM)
             env = {'CAMERA_GIMBAL_SITL_BUILD': str(root / backend),
                    prefix + 'WEB_PORT': str(web_port),
-                   prefix + 'RTSP_PORT': str(reserve_port(socket.SOCK_STREAM)),
+                   prefix + 'RTSP_PORT': str(reserve_port(socket.SOCK_STREAM, span=2)),
                    prefix + 'CAMERA_PORT': str(camera_port),
                    prefix + 'MAVLINK_TCP_PORT': '0', prefix + 'MAVLINK_UDP_PORT': '0'}
             with mock.patch.dict(os.environ, env):

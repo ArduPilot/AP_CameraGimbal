@@ -8,6 +8,8 @@ from pathlib import Path
 import io
 import os
 import re
+import shutil
+import urllib.parse
 import socket
 import subprocess
 import sys
@@ -73,7 +75,13 @@ def lie_about_uncompressed_size(data, names, declared_size):
 
 AP = {'camera-app': b'#!/bin/sh\necho new camera\n', 'z1mini-web': b'#!/bin/sh\necho new web\n',
       'service.sh': b'#!/bin/sh\n', 'ax-capture': b'#!/bin/sh\n', 'camera.ini.default': b'[general]\n',
-      'web.pass.default': b'ardupilot\n', 'README.md': b'readme\n'}
+      'web.pass.default': b'ardupilot\n', 'README.md': b'readme\n',
+      'webroot/head.html': b'<title>new template</title>', 'webroot/style.css': b'body{color:black}'}
+# Tiny stand-ins keep extraction-budget fault tests bounded while covering
+# installation of every asset required to leave recovery mode.
+for asset in (WEB / 'webroot').iterdir():
+    if asset.is_file():
+        AP.setdefault('webroot/' + asset.name, b'x')
 IPC = {'run.sh': b'#!/bin/sh\n./camera_gcu.sh &\n', 'camera_gcu.sh': b'#!/bin/sh\n'}
 
 if not (MAVLINK / 'all/mavlink.h').exists():
@@ -83,11 +91,11 @@ if not (MAVLINK / 'all/mavlink.h').exists():
 with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     root = Path(directory)
     exchange_test = root / 'exchange-test'
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-ffunction-sections', '-fdata-sections',
                     '-Wl,--gc-sections', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
-                    '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
-                    f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.c'),
+                    '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', f'-DWEBROOT_PATH="{Path(__file__).resolve().parents[1] / "webroot"}"', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
+                    f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.cpp'),
                     '-o', str(exchange_test), '-lm'], check=True)
     subprocess.run([str(exchange_test), str(root)], check=True)
     gcu, settings, run, media = root / 'gcu', root / 'settings', root / 'run', root / 'mnt'
@@ -99,20 +107,21 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     (settings / 'web.pass').chmod(0o600)
     config = (ROOT / 'packaging/z1mini/camera.ini').read_bytes()
     (settings / 'camera.ini').write_bytes(config)
+    shutil.copytree(WEB / 'webroot', gcu / 'ap/webroot')
     binary = root / 'z1mini-web'
-    paths = dict(GCU_ROOT=gcu, APP_DIR=gcu / 'ap', APP_SELECTION_DIR=settings, MEDIA_ROOT=media,
+    paths = dict(WEBROOT_PATH=gcu / "ap/webroot", GCU_ROOT=gcu, APP_DIR=gcu / 'ap', APP_SELECTION_DIR=settings, MEDIA_ROOT=media,
                  PASSWORD_PATH=settings / 'web.pass', REPLACEMENT_CONFIG_PATH=settings / 'camera.ini',
                  REPLACEMENT_CONFIG_BACKUP_PATH=settings / 'camera.ini.bak', SESSION_PATH=run / 'sessions',
                  UPGRADE_LOCK_PATH=run / 'upgrade.lock', USER_LOCK_PATH=run / 'users.lock',
                  RUNTIME_DIR=run, CAMERA_READY_PATH=run / 'ready', REPLACEMENT_CAMERA_PATH=gcu / 'ap/camera-app',
                  SOC_TEMPERATURE_PATH=run / 'soc_temp')
     exchange_failure = root / 'disable-atomic-exchange'
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
                     '-DGCU_PACKAGE_MAX_EXTRACTED=4096',
                     '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', f'-I{MAVLINK}',
                     *[f'-D{name}="{path}"' for name, path in paths.items()],
-                    str(WEB / 'mt11-web.c'), '-o', str(binary), '-lm'], check=True)
+                    str(WEB / 'mt11-web.cpp'), '-o', str(binary), '-lm'], check=True)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
@@ -129,8 +138,9 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     def request(path, body=None, headers=None):
         connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
         auth = 'Basic ' + base64.b64encode(b'admin:test-password').decode()
+        authentication = {} if headers and 'Cookie' in headers else {'Authorization': auth}
         connection.request('GET' if body is None else 'POST', path, body=body,
-                           headers={'Authorization': auth, **(headers or {})})
+                           headers={**authentication, **(headers or {})})
         response = connection.getresponse()
         result = response.status, response.read()
         connection.close()
@@ -155,6 +165,51 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         status, script = request('/upgrade.js')
         assert status == 200
         check_upgrade_browser(script, [name, 'Z1Mini_AP_v1.1_test-2.gcu'], rejected)
+
+        # Recovery must work with a partially installed tree as well as no tree.
+        (gcu / 'ap/webroot/style.css').unlink()
+        status, recovery = request('/')
+        assert status == 200 and b'Z1-Mini firmware recovery' in recovery
+        shutil.rmtree(gcu / 'ap/webroot')
+        status, recovery = request('/')
+        assert status == 200 and b'id=firmware-upload' in recovery
+        assert b'/style.css' not in recovery
+        status, recovery_script = request('/upgrade.js')
+        assert status == 200 and recovery_script == script
+        check_upgrade_browser(recovery_script, [name], rejected)
+
+        def browser(path, body=None, cookie=None, origin=None):
+            connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+            headers = {'Accept': 'text/html'}
+            if body is not None:
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                body = urllib.parse.urlencode(body)
+            if cookie: headers['Cookie'] = cookie
+            if origin: headers['Origin'] = origin
+            connection.request('GET' if body is None else 'POST', path, body, headers)
+            response = connection.getresponse()
+            result = response.status, dict(response.getheaders()), response.read()
+            connection.close()
+            return result
+
+        assert browser('/')[0] == 303
+        assert browser('/upgrade.js')[0] == 303  # No unauthenticated uploader.
+        status, _, login = browser('/login')
+        assert status == 200 and b'Z1-Mini firmware recovery' in login
+        assert b'<script' not in login and b'<link' not in login
+        token = re.search(rb'name=token value="([a-f0-9]{64})"', login).group(1).decode()
+        form = {'token': token, 'username': 'admin', 'password': 'wrong'}
+        status, _, error = browser('/login', form)
+        assert status == 401 and b'Z1-Mini firmware recovery' in error
+        form['password'] = 'test-password'
+        assert browser('/login', form | {'token': 'bad'})[0] == 400
+        assert browser('/login', form, origin='http://attacker.invalid')[0] == 403
+        status, login_headers, _ = browser('/login', form)
+        assert status == 303
+        cookie = login_headers['Set-Cookie'].split(';')[0]
+        assert browser('/', cookie=cookie)[0] == 200
+        assert browser('/upgrade.js', cookie=cookie)[0] == 200
+
         headers = {'Content-Type': 'application/octet-stream', 'X-CSRF-Token': csrf, 'X-Firmware-Name': name}
         for bad in rejected:
             assert request('/upgrade', b'x', headers | {'X-Firmware-Name': bad})[0] == 400, bad
@@ -174,6 +229,7 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             'other target': package(AP, IPC, manifest=b'{"target": "xfrobot-other"}\n'),
             'needs vendor isp': package(AP, IPC, manifest=b'{"target": "xfrobot-z1mini", "vendor_isp_required": true}\n'),
             'unlisted extra file': package(AP | {'unlisted.bin': b'payload'}, IPC),
+            'unlisted web asset': package(AP | {'webroot/unknown.js': b'payload'}, IPC),
             'dot path': raw_zip({'gcu/ap/..': b'x'}),
             'underdeclared extracted size exceeds remaining budget': lie_about_uncompressed_size(
                 package(AP | {'camera-app': b'a' * 1200, 'z1mini-web': b'b' * 1200}, IPC),
@@ -214,9 +270,13 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         assert (gcu / 'ap/camera-app').read_bytes() == b'old camera\n'
         assert not (root / 'gcu.new').exists()
         exchange_failure.unlink()
-        status, message = request('/upgrade', good, headers)
+        # Use the recovery page's browser session for the successful install.
+        status, message = request('/upgrade', good, headers | {'Cookie': cookie})
         assert status == 201, (status, message)
         assert b'rebooting' in message
+        status, restored = request('/')
+        assert status == 200 and b'Z1-Mini firmware recovery' not in restored
+        assert b'id=firmware-upload' in restored
         assert (gcu / 'ap/camera-app').read_bytes() == AP['camera-app']
         assert (gcu / 'ipc/run.sh').read_bytes() == IPC['run.sh']
         assert not (gcu / 'ipc/lib-old').exists(), 'previous installation was not replaced'
@@ -227,6 +287,9 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         assert ((gcu / 'ap').stat().st_mode & 0o777) == 0o755
         assert ((gcu / 'ipc').stat().st_mode & 0o777) == 0o755
         assert ((gcu / 'ap/README.md').stat().st_mode & 0o777) == 0o644
+        assert (gcu / 'ap/webroot/head.html').read_bytes() == AP['webroot/head.html']
+        assert (gcu / 'ap/webroot/style.css').read_bytes() == AP['webroot/style.css']
+        assert ((gcu / 'ap/webroot/head.html').stat().st_mode & 0o777) == 0o644
         assert not list(run.glob('firmware-upload.*'))
         assert (settings / 'camera.ini').read_bytes() == config
         # A retained-ISP package is never accepted by the destructive web
@@ -241,7 +304,7 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         log.flush()
         text = (root / 'web.log').read_text()
         assert text.count('SITL reboot request ignored') == 1, text
-        print('PASS Z1-Mini: browser and server accept overlay packages, reject bad names and archives, install atomically and reboot')
+        print('PASS Z1-Mini: asset-free recovery login/upload, validation, atomic installation, restored UI and reboot')
     finally:
         process.terminate()
         try:

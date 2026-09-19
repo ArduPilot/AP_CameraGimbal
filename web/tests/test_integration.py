@@ -24,6 +24,7 @@ root = Path(sys.argv[2]).resolve()
 shutil.rmtree(root, ignore_errors=True)
 (root / "app" / "dropbear").mkdir(parents=True)
 (root / "mnt").mkdir()
+shutil.copytree(Path(__file__).resolve().parents[1] / "webroot", root / "webroot")
 (root / "app" / "web.pass").write_text("initial-password\n", encoding="utf-8")
 os.chmod(root / "app" / "web.pass", 0o600)
 (root / "app" / "dropbear" / "authorized_keys").write_text("", encoding="utf-8")
@@ -366,6 +367,25 @@ def test_login_and_languages(csrf):
     status, body, headers = raw_request("GET", "/language.js")
     assert status == 200 and b"lang-login" in body
     subprocess.run(["node", "--check"], input=body, check=True)
+
+    status, stylesheet, style_headers = raw_request("GET", "/style.css")
+    assert status == 200 and b".live-video" in stylesheet
+    assert dict(style_headers)["Content-Type"].startswith("text/css")
+    assert "style-src 'self'" in dict(style_headers)["Content-Security-Policy"]
+    for private_asset in ("/head.html", "/webroot/head.html", "/../head.html", "/%2e%2e/head.html"):
+        status, _, _ = request("GET", private_asset, "initial-password")
+        assert status == 404, private_asset
+
+    # A partial/missing install must report an asset failure, never empty 200
+    # or a misleading allocation error. Keep the source tree untouched.
+    head = root / "webroot/head.html"
+    head.rename(root / "saved-head.html")
+    for route in ("/", "/login", "/parameters", "/rebooting"):
+        status, body, _ = request("GET", route, "initial-password") if route != "/login" else raw_request("GET", route)
+        assert status == 503 and b"assets unavailable" in body, (route, status, body)
+        assert b"Out of memory" not in body
+    (root / "saved-head.html").rename(head)
+    assert request("GET", "/rebooting", "initial-password")[0] == 200
 
     # wrong password, expired form token
     status, body, headers = login_form("wrong-password")

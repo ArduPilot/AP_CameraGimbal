@@ -37,6 +37,12 @@ def build(output, native_capture=None):
         'web.pass.default': b'ardupilot\n',
         'README.md': (ROOT / 'packaging/z1mini/README.md').read_bytes(),
     }
+    webroot = ROOT / 'web/webroot'
+    assets = sorted(path for path in webroot.rglob('*') if path.is_file())
+    if not assets:
+        raise ValueError(f'{webroot}: missing web assets')
+    for path in assets:
+        payload['webroot/' + path.relative_to(webroot).as_posix()] = path.read_bytes()
     if native_capture is not None:
         payload['ax-capture'] = arm_binary(native_capture)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()

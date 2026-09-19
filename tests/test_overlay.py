@@ -32,9 +32,9 @@ class Overlays(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix='overlay-test-')
         path = Path(cls.tmp.name) / 'overlay.so'
-        subprocess.run(['cc', '-shared', '-fPIC', '-Wall', '-Wextra', '-Werror', '-std=c11',
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-shared', '-fPIC', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-                        '-DAPCAM_TARGET=APCAM_TARGET_MT11', str(ROOT/'camera_app/src/media/overlay.c'),
+                        '-DAPCAM_TARGET=APCAM_TARGET_MT11', str(ROOT/'camera_app/src/media/overlay.cpp'),
                         '-lm', '-o', str(path)], check=True)
         cls.lib = C.CDLL(str(path))
         cls.lib.ca_overlay_geometry.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.c_bool, C.c_bool, C.c_float]
