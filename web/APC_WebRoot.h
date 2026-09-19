@@ -38,6 +38,23 @@ public:
         }
         return false;
     }
+    bool available() const
+    {
+        if (!_path) return false;
+        int directory = open(_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (directory < 0) return false;
+        bool ok = true;
+        for (const char *name : apcam_web_assets) {
+            int fd = openat(directory, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+            struct stat st {};
+            ok = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+                 st.st_size > 0 && uint64_t(st.st_size) <= 256U * 1024U;
+            if (fd >= 0) close(fd);
+            if (!ok) break;
+        }
+        close(directory);
+        return ok;
+    }
     void set_path(const char *path) { _path = path; }
     bool append(APC_StringBuffer &output, const char *name) const
     {

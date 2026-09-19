@@ -79,6 +79,9 @@ Capability queries allocate no memory and do no hardware I/O.
   its location to each simulated web service. Z1-Mini firmware predating this
   change needs one update through the XFRobot updater because its old web
   updater rejects additional package filenames (see its installation notes).
+  New Z1 web binaries also have a built-in recovery login/upload page if their
+  webroot is missing or incomplete; they can install a complete package using
+  the normal authenticated updater without relying on external assets.
 * Scoped mutex, condition and descriptor owners begin replacing explicit
   cleanup in the extracted media frontend and application startup. Media
   capability decisions use `APC_Camera`; SDK selection remains compile-time.

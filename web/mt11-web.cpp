@@ -189,6 +189,9 @@ static char session_epoch[65];
 
 #include "APC_StringBuffer.h"
 #include "APC_WebRoot.h"
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+#include "APC_RecoveryPage.h"
+#endif
 static APC_WebRoot webroot;
 
 #ifdef WEB_PORTABLE_SITL
@@ -5172,6 +5175,9 @@ static char *render_log_page(size_t *page_len)
 static char *render_login_page(const char *message, bool message_is_error,
                                size_t *page_len)
 {
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+    if (!webroot.available()) return APC_RecoveryPage::render(true, login_token, message, page_len);
+#endif
     APC_StringBuffer page;
     char title[96];
 
@@ -5591,6 +5597,14 @@ static void send_script(int fd, const struct js_string *items, size_t count,
         script.append("'");
     }
     script.append("};\n");
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+    if (strcmp(body, "upgrade.js") == 0 && !webroot.available()) {
+        if (!script.append(apcam_recovery_upgrade_js)) {
+            send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
+            return;
+        }
+    } else
+#endif
     if (!webroot.append(script, body)) {
         send_text_error(fd, 503, "Service Unavailable", "Web asset unavailable\n", NULL);
         return;
@@ -6908,6 +6922,16 @@ static void handle_request(int fd, const char *peer)
     } else if (request.streaming_body) {
         handle_firmware_upload(fd, &request, peer);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
+#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+        if (!webroot.available()) {
+            size_t length;
+            char *page = APC_RecoveryPage::render(false, csrf_token, nullptr, &length);
+            if (page) {
+                send_response(fd, 200, "OK", "text/html; charset=utf-8", page, length, nullptr);
+                free(page);
+            } else send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
+        } else
+#endif
         send_page(fd, NULL, false);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
         send_parameter_page(fd, NULL, false, NULL);
