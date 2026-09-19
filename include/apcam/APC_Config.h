@@ -361,7 +361,8 @@ private:
             }
             if (length != 0U && strcmp(field->key, "network_address") == 0) {
                 char address[32];
-                snprintf(address, sizeof(address), "%s", value);
+                if (length >= sizeof(address)) return -1;
+                memcpy(address, value, length + 1U);
                 char *slash = strchr(address, '/');
                 struct in_addr parsed;
                 if (slash == NULL) return -1;

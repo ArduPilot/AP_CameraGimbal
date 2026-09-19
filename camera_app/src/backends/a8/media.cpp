@@ -1,14 +1,14 @@
-#include <new>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include <new>
 #include "isp.h"
 #include "pipeline.h"
 #include "camera_app/overlay.h"
 
 #include "camera_app/live_video_server.h"
 #include "camera_app/log.h"
-#include "camera_app/media_impl.h"
+#include "camera_app/APC_Media_Backend.h"
 #include "camera_app/sigmastar_exposure.h"
 #include <dlfcn.h>
 #include "camera_app/video_fov.h"
@@ -35,7 +35,8 @@
  * loading it earlier blocks inside the vendor library */
 #define CA_A8_ISP_BIN_AFTER_FRAMES 10U
 
-struct ca_media_impl {
+class APC_Media_A8;
+struct APC_Media_A8_State {
     struct ca_overlay_hw *overlay;
     struct ca_media_config config;
     struct ca_a8_pipeline_config pipeline;
@@ -61,7 +62,59 @@ struct ca_media_impl {
     uint8_t thermal_palette;
     atomic_bool inverted;
     bool image_settings_logged;
+
+    APC_Media_A8 *owner = nullptr;
 };
+
+// Driver state is private to this translation unit. The owner survives all
+// capture callbacks and joins them before releasing SDK resources.
+class APC_Media_A8 final : public APC_Media_Backend {
+public:
+    ~APC_Media_A8() override { shutdown(); }
+    static std::unique_ptr<APC_Media_Backend> create(const ca_media_config &config)
+    {
+        auto *driver = new (std::nothrow) APC_Media_A8();
+        if (!driver) { errno = ENOMEM; return nullptr; }
+        if (driver->init(&config) < 0) {
+            const int saved = errno;
+            delete driver;
+            errno = saved;
+            return nullptr;
+        }
+        return std::unique_ptr<APC_Media_Backend>(driver);
+    }
+    bool ready() const override;
+    int set_recording(bool active) override;
+    bool recording() const override;
+    const char * recording_path() const override;
+    int set_zoom(float zoom) override;
+    float zoom() const override;
+    float hfov(bool thermal) const override;
+    unsigned frame_rate(bool thermal) const override;
+    int set_lens(enum ca_media_lens lens) override;
+    enum ca_media_lens lens() const override;
+    int set_thermal_main(bool thermal_main) override;
+    bool thermal_main() const override;
+    int autofocus(uint16_t x, uint16_t y) override;
+    int manual_focus(int direction) override;
+    int set_focus_percent(float percent) override;
+    bool thermal_range(struct ca_thermal_range *range) override;
+    int capture_photo(enum ca_photo_scope scope) override;
+    int get_thermal_gain(uint8_t *gain) override;
+    int set_thermal_gain(uint8_t gain) override;
+    int get_thermal_palette(uint8_t *palette) override;
+    int set_thermal_palette(uint8_t palette) override;
+    int set_inverted(bool inverted) override;
+    int exposure(unsigned lens, struct ca_exposure *sample) override;
+    int apply_overlay(const struct ca_config *settings) override;
+    int apply_image(const struct ca_config *settings) override;
+private:
+    APC_Media_A8() = default;
+    int init(const ca_media_config *config);
+    void shutdown();
+    APC_Media_A8_State *_state = nullptr;
+};
+
 
 static bool video_key_frame(enum ca_video_codec codec, const uint8_t *data,
                             size_t length)
@@ -94,12 +147,12 @@ static unsigned stream_bitrate(unsigned width, unsigned height)
     return 2048U;
 }
 
-static void consume_frame(struct ca_media_impl *media, unsigned channel,
+static void consume_frame(struct APC_Media_A8_State *media, unsigned channel,
                           uint8_t *data, size_t length, uint64_t pts)
 {
     enum ca_video_codec codec = media->pipeline.streams[channel].codec;
     bool key_frame = video_key_frame(codec, data, length);
-    float hfov_deg = ca_media_impl_hfov(media, false);
+    float hfov_deg = media->owner->hfov(false);
 
     if (!atomic_exchange(&media->encoded_frame_logged[channel], true)) {
         ca_log("VENC channel %u first encoded frame bytes=%zu key=%u", channel,
@@ -141,7 +194,7 @@ static void consume_frame(struct ca_media_impl *media, unsigned channel,
 
 static void *capture_thread(void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_A8_State *media = (struct APC_Media_A8_State*)(opaque);
     struct pollfd items[CA_A8_VENC_COUNT];
 
     for (unsigned channel = 0; channel < CA_A8_VENC_COUNT; channel++) {
@@ -169,7 +222,7 @@ static void *capture_thread(void *opaque)
     return NULL;
 }
 
-static int make_recording_path(struct ca_media_impl *media)
+static int make_recording_path(struct APC_Media_A8_State *media)
 {
     time_t now = time(NULL);
     struct tm local;
@@ -203,7 +256,7 @@ static int make_recording_path(struct ca_media_impl *media)
     return -1;
 }
 
-static void media_cleanup(struct ca_media_impl *media)
+static void media_cleanup(struct APC_Media_A8_State *media)
 {
     if (media->thread_started) {
         atomic_store(&media->stop, true);
@@ -226,20 +279,22 @@ static void media_cleanup(struct ca_media_impl *media)
     }
 }
 
-int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_config *config)
+int APC_Media_A8::init(const struct ca_media_config *config)
 {
-    struct ca_media_impl *media;
+    struct APC_Media_A8_State *media;
     struct ca_a8_stream *streams;
     const char *stage = "argument validation";
 
-    if (result == NULL || config == NULL || config->backend == NULL ||
+    if (config == NULL || config->backend == NULL ||
         strcmp(config->backend, "a8") != 0 || config->capture_root == NULL ||
         config->record_root == NULL) {
         errno = EINVAL;
         return -1;
     }
-    media = new (std::nothrow) ca_media_impl{};
-    if (media == NULL) return -1;
+    media = new (std::nothrow) APC_Media_A8_State{};
+    if (media == NULL) { errno = ENOMEM; return -1; }
+    _state = media;
+    media->owner = this;
     media->config = *config;
     media->zoom = 1.0f;
     atomic_store(&media->visible_hfov_deg, CA_VISIBLE_HFOV_DEG);
@@ -270,7 +325,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     media->pipeline_open = true;
     if (config->settings.orientation == CA_MOUNT_INVERTED) {
         stage = "inverted output configuration";
-        if (ca_media_impl_set_inverted(media, true) < 0) goto fail;
+        if (media->owner->set_inverted(true) < 0) goto fail;
     }
     stage = "RTSP startup";
     if (ca_rtsp_open(&media->rtsp, config->rtsp_port, "video1",
@@ -308,7 +363,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
            CA_A8_FRAME_RATE, ca_video_codec_name(streams[CA_A8_SUB_VENC].codec),
            streams[CA_A8_RECORD_VENC].width, streams[CA_A8_RECORD_VENC].height,
            config->rtsp_port);
-    *result = media;
+
     return 0;
 fail:
     {
@@ -317,14 +372,15 @@ fail:
         media_cleanup(media);
         pthread_mutex_destroy(&media->photo_lock);
         pthread_mutex_destroy(&media->lock);
-        delete media;
+        _state = nullptr; delete media;
         errno = saved_errno != 0 ? saved_errno : EIO;
     }
     return -1;
 }
 
-int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
+int APC_Media_A8::set_recording(bool active)
 {
+    auto *media = _state;
     int result = 0;
 
     if (media == NULL) {
@@ -360,18 +416,21 @@ int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
     return result;
 }
 
-bool ca_media_impl_recording(const struct ca_media_impl *media)
+bool APC_Media_A8::recording() const
 {
+    const auto *media = _state;
     return media != NULL && atomic_load(&media->recording);
 }
 
-const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
+const char * APC_Media_A8::recording_path() const
 {
+    const auto *media = _state;
     return media != NULL ? media->recording_path : "";
 }
 
-int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
+int APC_Media_A8::capture_photo(enum ca_photo_scope scope)
 {
+    auto *media = _state;
     uint8_t *jpeg = NULL;
     size_t length = 0;
     struct timespec captured_at;
@@ -405,8 +464,9 @@ int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope
     return result;
 }
 
-int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
+int APC_Media_A8::set_zoom(float zoom)
 {
+    auto *media = _state;
     if (media == NULL || zoom < 1.0f || zoom > CA_A8_MAX_ZOOM) {
         errno = EINVAL;
         return -1;
@@ -422,18 +482,21 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     return 0;
 }
 
-float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
+float APC_Media_A8::hfov(bool thermal) const
 {
+    const auto *media = _state;
     return media != NULL && !thermal ? atomic_load(&media->visible_hfov_deg) : 0.0f;
 }
 
-float ca_media_impl_zoom(const struct ca_media_impl *media)
+float APC_Media_A8::zoom() const
 {
+    const auto *media = _state;
     return media != NULL ? media->zoom : 1.0f;
 }
 
-int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
+int APC_Media_A8::set_lens(enum ca_media_lens lens)
 {
+    auto *media = _state;
     /* one lens; the SIYI image-slot commands still need to succeed */
     if (media == NULL || (lens != CA_MEDIA_LENS_WIDE &&
                           lens != CA_MEDIA_LENS_ZOOM)) {
@@ -443,14 +506,16 @@ int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
     return 0;
 }
 
-enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *media)
+enum ca_media_lens APC_Media_A8::lens() const
 {
+    const auto *media = _state;
     (void)media;
     return CA_MEDIA_LENS_WIDE;
 }
 
-int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_main)
+int APC_Media_A8::set_thermal_main(bool thermal_main)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -462,14 +527,16 @@ int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_mai
     return 0;
 }
 
-bool ca_media_impl_thermal_main(const struct ca_media_impl *media)
+bool APC_Media_A8::thermal_main() const
 {
+    const auto *media = _state;
     (void)media;
     return false;
 }
 
-int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
+int APC_Media_A8::autofocus(uint16_t x, uint16_t y)
 {
+    auto *media = _state;
     (void)x;
     (void)y;
     if (media == NULL) {
@@ -480,8 +547,9 @@ int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
     return 0;
 }
 
-int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
+int APC_Media_A8::manual_focus(int direction)
 {
+    auto *media = _state;
     if (media == NULL || direction < -1 || direction > 1) {
         errno = EINVAL;
         return -1;
@@ -489,8 +557,9 @@ int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
     return 0;
 }
 
-int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
+int APC_Media_A8::set_focus_percent(float percent)
 {
+    auto *media = _state;
     if (media == NULL || percent < 0.0f || percent > 100.0f) {
         errno = EINVAL;
         return -1;
@@ -498,16 +567,17 @@ int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
     return 0;
 }
 
-bool ca_media_impl_thermal_range(struct ca_media_impl *media,
-                            struct ca_thermal_range *range)
+bool APC_Media_A8::thermal_range(struct ca_thermal_range *range)
 {
+    auto *media = _state;
     (void)media;
     (void)range;
     return false;
 }
 
-int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
+int APC_Media_A8::get_thermal_gain(uint8_t *gain)
 {
+    auto *media = _state;
     if (media == NULL || gain == NULL) {
         errno = EINVAL;
         return -1;
@@ -516,8 +586,9 @@ int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
     return 0;
 }
 
-int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
+int APC_Media_A8::set_thermal_gain(uint8_t gain)
 {
+    auto *media = _state;
     if (media == NULL || gain > 1U) {
         errno = EINVAL;
         return -1;
@@ -526,8 +597,9 @@ int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
     return 0;
 }
 
-int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *palette)
+int APC_Media_A8::get_thermal_palette(uint8_t *palette)
 {
+    auto *media = _state;
     if (media == NULL || palette == NULL) {
         errno = EINVAL;
         return -1;
@@ -536,8 +608,9 @@ int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *pale
     return 0;
 }
 
-int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palette)
+int APC_Media_A8::set_thermal_palette(uint8_t palette)
 {
+    auto *media = _state;
     if (media == NULL || palette > 11U || palette == 1U) {
         errno = EINVAL;
         return -1;
@@ -546,8 +619,9 @@ int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palet
     return 0;
 }
 
-int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
+int APC_Media_A8::set_inverted(bool inverted)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -565,23 +639,26 @@ int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
     return 0;
 }
 
-void ca_media_impl_close(struct ca_media_impl *media)
+void APC_Media_A8::shutdown()
 {
+    auto *media = _state;
     if (media == NULL) return;
     media_cleanup(media);
     pthread_mutex_destroy(&media->photo_lock);
     pthread_mutex_destroy(&media->lock);
-    delete media;
+    _state = nullptr; delete media;
 }
 
-unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal)
+unsigned APC_Media_A8::frame_rate(bool thermal) const
 {
+    const auto *media = _state;
     (void)media;
     return thermal ? APCAM_THERMAL_FRAME_RATE : APCAM_FRAME_RATE;
 }
 
-int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_A8::apply_image(const struct ca_config *settings)
 {
+    auto *media = _state;
     pthread_mutex_lock(&media->lock);
     if (!media->isp_bin_loaded) { pthread_mutex_unlock(&media->lock); errno = EAGAIN; return -1; }
     int result = ca_a8_apply_isp_config(settings);
@@ -591,11 +668,14 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
     return 0;
 }
 
-bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
+bool APC_Media_A8::ready() const
+{
+    const auto *media = _state; return media != NULL; }
 
 /* Diagnostics are optional: unavailable SDK symbols must not stop capture. */
-int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+int APC_Media_A8::exposure(unsigned lens, struct ca_exposure *s)
 {
+    auto *media = _state;
     if (lens!=0) return -ENOTSUP;
     pthread_mutex_lock(&media->lock);
     if (!media->isp_bin_loaded) { pthread_mutex_unlock(&media->lock); return -EAGAIN; }
@@ -613,8 +693,9 @@ int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca
     return result ? result : mode_result;
 }
 
-int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_A8::apply_overlay(const struct ca_config *settings)
 {
+    auto *media = _state;
     struct ca_overlay_channel channels[3]= {};
     enum ca_video_resolution resolutions[3]={settings->main_resolution,settings->sub_resolution,settings->recording_resolution};
     pthread_mutex_lock(&media->lock);
@@ -625,4 +706,9 @@ int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_con
     int result=ca_overlay_hw_set(&media->overlay,channels,3);
     pthread_mutex_unlock(&media->lock);
     return result;
+}
+
+std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
+{
+    return APC_Media_A8::create(config);
 }

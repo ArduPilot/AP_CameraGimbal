@@ -3,6 +3,7 @@
 #endif
 #include "apcam/target.h"
 #include "camera_app/APC_CameraApp.h"
+#include "apcam/APC_Resource.h"
 #if APCAM_HAVE_XFROBOT
 #include "camera_app/xfrobot_server.h"
 #endif
@@ -253,11 +254,11 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
                        unsigned mavlink_tcp_port, unsigned mavlink_udp_port,
                        enum ca_uart_protocol uart_protocol, unsigned manual_port)
 {
-    int fd = open(ready_path(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    APC_FileDescriptor fd(open(ready_path(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
     char text[256];
     int length;
 
-    if (fd < 0) return -1;
+    if (fd.get() < 0) return -1;
     length = snprintf(text, sizeof(text),
                       "backend=%s\npid=%ld\nudp_port=%u\ntcp_port=%u\n"
                       "mavlink_tcp_port=%u\nmavlink_udp_port=%u\n"
@@ -272,13 +273,11 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
                       ca_uart_protocol_name(uart_protocol),
                       ca_backend_recording(backend) ? 1U : 0U, manual_port);
     if (length < 0 || (size_t)length >= sizeof(text) ||
-        write(fd, text, (size_t)length) != length) {
+        write(fd.get(), text, (size_t)length) != length) {
         int saved_errno = errno;
-        close(fd);
         errno = saved_errno != 0 ? saved_errno : EIO;
         return -1;
     }
-    close(fd);
     return 0;
 }
 

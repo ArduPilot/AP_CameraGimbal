@@ -114,6 +114,13 @@ def main():
             window.grab().save(str(output / (backend + '-launcher.png')))
             login(web_port)
             print(f'{backend}: browser login and session cookie passed', flush=True)
+            # Exercise installed assets, not just the generated HTML links.
+            for asset, mime in (('/style.css', 'text/css'), ('/live.js', 'application/javascript'),
+                                ('/parameters.js', 'application/javascript')):
+                with web_request(web_port, asset) as response:
+                    assert response.headers.get_content_type() == mime
+                    assert len(response.read()) > 100
+
             with web_request(web_port, '/live') as response:
                 page = response.read().decode()
             csrf = re.search(r'data-csrf="([0-9a-f]{64})"', page).group(1)

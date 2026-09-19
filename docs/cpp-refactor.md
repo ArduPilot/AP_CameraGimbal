@@ -56,26 +56,42 @@ It deliberately does not change wire signs, rate calibration, lens selection,
 XML parameter types, recording formats, service paths or installed settings.
 Capability queries allocate no memory and do no hardware I/O.
 
-## Recommended next steps
+## Second structural stage
 
-1. Introduce `APC_Media` and backend classes behind the current media API.
-   Move worker ownership, SDK lifetime and live reconfiguration together.
-   Keep gimbal and image-pipeline interfaces separate: cameras use different
-   transports for them, and the simulator must implement both independently.
-2. Extract shared configuration descriptors and validation from the web and
-   camera app. Have web, MAVLink parameters, XML generation and logging use
-   those descriptors, while retaining the existing on-disk keys and parameter
-   names. This addresses duplicated capability/validation logic directly.
-3. Split web request parsing, authentication/session storage, parameter pages,
-   media browsing and firmware updates into small classes. Start at the HTTP
-   request/response boundary; keep firmware update transactions isolated from
-   ordinary page rendering. Preserve the current per-request language choice.
-4. Move remaining run-loop services into explicit owners with narrow
-   interfaces. Use scoped file descriptors and mutex guards before changing
-   threading or scheduling. Keep asynchronous media work off the gimbal loop.
-5. Replace runtime target conditionals with capability queries as each module
-   is extracted. Keep target defines for SDK includes, board paths, ABI and
-   vendor-only operations that really need compile-time selection.
+* `APC_Media` owns the stable media frontend, diagnostic workers, live settings
+  and pipeline replacement/rollback. `APC_Media_Backend` defines the image
+  pipeline interface; MT11, A8, ZR10, Z1-Mini and SITL each implement a concrete
+  backend that owns SDK state and capture-worker shutdown. Gimbal transport
+  remains independent. Existing protocol callbacks retain the `ca_media_*`
+  facade while new services can use the class directly.
+* `APC_Config` supplies the shared field descriptors, allowed values and
+  validation. The camera parser, numeric MAVLink parameters, XML and parameter
+  logging retain their existing order/names, and the web form now uses this
+  schema for validation and numeric limits. UI labels and translations remain
+  web metadata rather than creating a second configuration schema.
+* `APC_HTTPRequest` owns parsing storage; `APC_HTTPResponse` centralizes response
+  framing and security headers. `APC_WebRoot` restricts reads to a generated
+  asset manifest and regular files, and expands explicit HTML placeholders.
+  Nine JavaScript files, two CSS files and seventeen HTML fragments live under
+  `web/webroot/`. Dynamic/translated content still renders on the server.
+* Every hardware package installs its webroot with the web binary. Native SITL
+  uses the source webroot; the Windows bundle carries its own copy and supplies
+  its location to each simulated web service. Z1-Mini firmware predating this
+  change needs one update through the XFRobot updater because its old web
+  updater rejects additional package filenames (see its installation notes).
+* Scoped mutex, condition and descriptor owners begin replacing explicit
+  cleanup in the extracted media frontend and application startup. Media
+  capability decisions use `APC_Camera`; SDK selection remains compile-time.
+
+## Further work
+
+Continue splitting authentication/session storage, parameter rendering, media
+browsing and firmware update transactions out of the remaining web service.
+Convert individual run-loop protocols into narrow owners, maintaining their
+shutdown order and wire behaviour. Adopt scoped locks/descriptors inside the
+vendor backends incrementally with hardware verification; this stage preserves
+those existing SDK transaction sequences and keeps the `ca_*` compatibility
+interfaces available.
 
 Follow the ArduPilot style of `APC_` classes, private underscored members,
 explicit ownership and capability methods. Avoid broad inheritance trees,
@@ -91,6 +107,7 @@ checks. `tests/test_targets.cpp` checks the capability class on all four
 targets, including calibrated FOV and unsupported zoom. The web suite includes
 buffer ownership, escaping, reuse and allocation-overflow checks.
 
-The source/compiler change still requires device testing before merging,
-especially MT11 USB thermal capture and each vendor SDK pipeline. Host
-compilation and simulator tests are not proof of vendor hardware behaviour.
+The initial compiler migration was tested successfully on a real MT11. This
+second structural stage still needs device verification, especially MT11 USB
+thermal capture and each vendor SDK pipeline. Host compilation and simulator
+tests are not proof of vendor hardware behaviour.

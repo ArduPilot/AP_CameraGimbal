@@ -1,7 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "camera_app/media_impl.h"
+#include "test_media_backend.h"
 #include "camera_app/binlog.h"
 #include <assert.h>
 #include <pthread.h>
@@ -11,29 +11,28 @@
 #include <time.h>
 #include <unistd.h>
 
-struct ca_media_impl { int unused; };
+
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static bool release_io, in_io, closed;
 static unsigned exposure_count;
 bool ca_binlog_active(void) { return true; }
-int ca_media_impl_exposure(struct ca_media_impl *m, unsigned lens, struct ca_exposure *s)
-{ (void)m; (void)lens; s->shutter_us=10000; s->valid=CA_AE_SHUTTER; return 0; }
+class BlockedBackend final : public TestMediaBackend {
+public:
+int exposure(unsigned lens, struct ca_exposure *s) override
+{ (void)lens; s->shutter_us=10000; s->valid=CA_AE_SHUTTER; return 0; }
 
-int ca_media_impl_open(struct ca_media_impl **out, const struct ca_media_config *config)
-{ (void)config; *out = (struct ca_media_impl *)calloc(1, sizeof(**out)); return *out ? 0 : -1; }
-void ca_media_impl_close(struct ca_media_impl *media)
+~BlockedBackend() override
 {
     pthread_mutex_lock(&lock);
     assert(!in_io);
     closed = true;
     pthread_cond_broadcast(&wake);
     pthread_mutex_unlock(&lock);
-    free(media);
+
 }
-int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
+int get_thermal_gain(uint8_t *gain) override
 {
-    (void)media;
     pthread_mutex_lock(&lock);
     assert(!closed);
     in_io = true;
@@ -44,14 +43,17 @@ int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
     *gain = 1;
     return 0;
 }
-int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *palette)
-{ (void)media; *palette = 0; return 0; }
-bool ca_media_impl_recording(const struct ca_media_impl *media)
-{ (void)media; return false; }
-int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
-{ (void)media; (void)active; return 0; }
-const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
-{ (void)media; return ""; }
+int get_thermal_palette(uint8_t *palette) override
+{ *palette = 0; return 0; }
+bool recording() const override
+{ return false; }
+int set_recording(bool active) override
+{ (void)active; return 0; }
+const char * recording_path() const override
+{ return ""; }
+};
+std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &)
+{ return std::unique_ptr<APC_Media_Backend>(new BlockedBackend); }
 void ca_log(const char *format, ...) { (void)format; }
 uint64_t ca_binlog_time_us(void) { return 0; }
 void ca_binlog_emit(uint8_t id, const void *data, size_t size)
@@ -64,8 +66,6 @@ void ca_binlog_emit(uint8_t id, const void *data, size_t size)
 }
 static void *close_media(void *opaque) { ca_media_close((struct ca_media *)opaque); return NULL; }
 
-int ca_media_impl_apply_overlay(struct ca_media_impl *m, const struct ca_config *s)
-{ (void)m; (void)s; return 0; }
 
 int main(void)
 {

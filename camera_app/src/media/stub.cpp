@@ -1,8 +1,8 @@
-#include <new>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "camera_app/media_impl.h"
+#include <new>
+#include "camera_app/APC_Media_Backend.h"
 #include "camera_app/binlog.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/recorder.h"
@@ -39,7 +39,8 @@ struct sitl_video {
 };
 #endif
 
-struct ca_media_impl {
+class APC_Media_SITL;
+struct APC_Media_SITL_State {
     struct ca_recorder recorder;
     float zoom;
     bool has_thermal;
@@ -89,7 +90,61 @@ struct ca_media_impl {
     unsigned rgb_record_source;
     unsigned video_width[CA_SITL_STREAMS], video_height[CA_SITL_STREAMS];
 #endif
+
+    APC_Media_SITL *owner = nullptr;
 };
+
+// Driver state is private to this translation unit. The owner survives all
+// capture callbacks and joins them before releasing SDK resources.
+class APC_Media_SITL final : public APC_Media_Backend {
+public:
+    ~APC_Media_SITL() override { shutdown(); }
+    static std::unique_ptr<APC_Media_Backend> create(const ca_media_config &config)
+    {
+        auto *driver = new (std::nothrow) APC_Media_SITL();
+        if (!driver) { errno = ENOMEM; return nullptr; }
+        if (driver->init(&config) < 0) {
+            const int saved = errno;
+            delete driver;
+            errno = saved;
+            return nullptr;
+        }
+        return std::unique_ptr<APC_Media_Backend>(driver);
+    }
+    bool ready() const override;
+    int set_recording(bool active) override;
+    bool recording() const override;
+    const char * recording_path() const override;
+    int set_zoom(float zoom) override;
+    float zoom() const override;
+    int set_lens_zoom(enum ca_media_lens lens, float zoom) override;
+    float lens_zoom(enum ca_media_lens lens) const override;
+    float hfov(bool thermal) const override;
+    unsigned frame_rate(bool thermal) const override;
+    int set_lens(enum ca_media_lens lens) override;
+    enum ca_media_lens lens() const override;
+    int set_thermal_main(bool thermal_main) override;
+    bool thermal_main() const override;
+    int autofocus(uint16_t x, uint16_t y) override;
+    int manual_focus(int direction) override;
+    int set_focus_percent(float percent) override;
+    bool thermal_range(struct ca_thermal_range *range) override;
+    int capture_photo(enum ca_photo_scope scope) override;
+    int get_thermal_gain(uint8_t *gain) override;
+    int set_thermal_gain(uint8_t gain) override;
+    int get_thermal_palette(uint8_t *palette) override;
+    int set_thermal_palette(uint8_t palette) override;
+    int set_inverted(bool inverted) override;
+    int exposure(unsigned lens, struct ca_exposure *sample) override;
+    int apply_overlay(const struct ca_config *settings) override;
+    int apply_image(const struct ca_config *settings) override;
+private:
+    APC_Media_SITL() = default;
+    int init(const ca_media_config *config);
+    void shutdown();
+    APC_Media_SITL_State *_state = nullptr;
+};
+
 
 static int write_file_all(int fd, const uint8_t *data, size_t length)
 {
@@ -109,7 +164,7 @@ static int write_file_all(int fd, const uint8_t *data, size_t length)
 }
 
 #ifdef CAMERA_APP_SITL
-static int close_sitl_recording(struct ca_media_impl *media)
+static int close_sitl_recording(struct APC_Media_SITL_State *media)
 {
     int result = 0;
     for (unsigned i = 0U; i < 2U; i++) {
@@ -134,7 +189,7 @@ struct terrain_frame {
     struct timespec due;
 };
 struct terrain_queue {
-    struct ca_media_impl *media;
+    struct APC_Media_SITL_State *media;
     pthread_t thread;
     pthread_mutex_t lock;
     pthread_cond_t changed;
@@ -164,7 +219,7 @@ static int64_t time_difference_ns(struct timespec a, struct timespec b)
 static void *render_terrain_frames(void *opaque)
 {
     struct terrain_queue *queue = (terrain_queue*)(opaque);
-    struct ca_media_impl *media = queue->media;
+    struct APC_Media_SITL_State *media = queue->media;
     int64_t interval = INT64_C(1000000000) / media->sitl_frame_rate;
     int64_t lead = (TERRAIN_QUEUE_SIZE + 1U) * interval;
     if (lead > INT64_C(250000000)) lead = INT64_C(250000000);
@@ -190,8 +245,8 @@ static void *render_terrain_frames(void *opaque)
         frame->due = due;
         frame->pts = (uint64_t)(time_difference_ns(due, started) * 9 / 100000);
         frame->thermal_main = media->thermal_main;
-        frame->fov[0] = ca_media_impl_hfov(media, false);
-        frame->fov[1] = ca_media_impl_hfov(media, media->has_thermal);
+        frame->fov[0] = media->owner->hfov(false);
+        frame->fov[1] = media->owner->hfov(media->has_thermal);
         struct ca_sitl_image image = {};
         pthread_mutex_lock(&media->image_lock);
         image.settings = media->image_settings;
@@ -259,7 +314,7 @@ static void *render_terrain_frames(void *opaque)
     return NULL;
 }
 
-static struct terrain_queue *start_terrain_queue(struct ca_media_impl *media)
+static struct terrain_queue *start_terrain_queue(struct APC_Media_SITL_State *media)
 {
     struct terrain_queue *queue = new (std::nothrow) terrain_queue{};
     if (!queue) return NULL;
@@ -313,7 +368,7 @@ static void stop_terrain_queue(struct terrain_queue *queue)
 
 static void *video_thread(void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_SITL_State *media = (struct APC_Media_SITL_State*)(opaque);
     uint64_t pts = 0U;
 
     struct terrain_queue *queue = media->terrain ? start_terrain_queue(media) : NULL;
@@ -329,8 +384,8 @@ static void *video_thread(void *opaque)
         bool rendered_key[CA_SITL_STREAMS];
         bool thermal_main = media->thermal_main;
         float fov[2] = {
-            ca_media_impl_hfov(media, false),
-            ca_media_impl_hfov(media, media->has_thermal),
+            media->owner->hfov(false),
+            media->owner->hfov(media->has_thermal),
         };
         if (media->terrain) {
             struct terrain_frame *frame = next_terrain_frame(queue);
@@ -385,7 +440,7 @@ static void *video_thread(void *opaque)
                 key_frame = rendered_key[stream]; have_frame = length != 0;
             } else break;
             if (have_frame) {
-                float record_hfov = ca_media_impl_hfov(media, media->has_thermal && (stream == 1U || stream == 4U));
+                float record_hfov = media->owner->hfov(media->has_thermal && (stream == 1U || stream == 4U));
                 float hfov_deg = record_hfov;
                 if (media->terrain) record_hfov = hfov_deg = fov[(stream == 1U || stream == 4U) ? 1U : 0U];
                 pthread_mutex_lock(&media->record_lock);
@@ -420,7 +475,7 @@ static void *video_thread(void *opaque)
     return NULL;
 }
 
-static int open_sitl_video(struct ca_media_impl *media,
+static int open_sitl_video(struct APC_Media_SITL_State *media,
                            const struct ca_media_config *config)
 {
     const char *video1 = getenv("CAMERA_APP_SITL_VIDEO1");
@@ -501,15 +556,17 @@ static int open_sitl_video(struct ca_media_impl *media,
 }
 #endif
 
-int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_config *config)
+int APC_Media_SITL::init(const struct ca_media_config *config)
 {
     const char *state_path = getenv("CAMERA_APP_RECORD_STATE");
-    if (result == NULL || config == NULL) {
+    if (config == NULL) {
         errno = EINVAL;
         return -1;
     }
-    struct ca_media_impl *media = new (std::nothrow) ca_media_impl{};
-    if (media == NULL) return -1;
+    struct APC_Media_SITL_State *media = new (std::nothrow) APC_Media_SITL_State{};
+    if (media == NULL) { errno = ENOMEM; return -1; }
+    _state = media;
+    media->owner = this;
     ca_recorder_init(&media->recorder, state_path);
     media->zoom = 1.0f;
     media->has_thermal = APCAM_HAVE_THERMAL;
@@ -525,7 +582,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     media->capture_root = strdup(config->capture_root);
     if (media->capture_root == NULL) {
         ca_recorder_close(&media->recorder);
-        delete media;
+        _state = nullptr; delete media;
         return -1;
     }
 #ifdef CAMERA_APP_SITL
@@ -536,17 +593,18 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     media->record_root = strdup(config->record_root);
     if (media->record_root == NULL || open_sitl_video(media, config) < 0) {
         int saved_errno = errno;
-        ca_media_impl_close(media);
+        media->owner->shutdown();
         errno = saved_errno;
         return -1;
     }
 #endif
-    *result = media;
+
     return 0;
 }
 
-int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
+int APC_Media_SITL::set_recording(bool active)
 {
+    auto *media = _state;
 #ifdef CAMERA_APP_SITL
     if (media->video_thread_started) {
         int result = 0;
@@ -583,16 +641,18 @@ int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
     return ca_recorder_set(&media->recorder, active);
 }
 
-bool ca_media_impl_recording(const struct ca_media_impl *media)
+bool APC_Media_SITL::recording() const
 {
+    const auto *media = _state;
 #ifdef CAMERA_APP_SITL
     if (media->video_thread_started) return atomic_load(&media->sitl_recording);
 #endif
     return ca_recorder_active(&media->recorder);
 }
 
-const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
+const char * APC_Media_SITL::recording_path() const
 {
+    const auto *media = _state;
 #ifdef CAMERA_APP_SITL
     if (media->video_thread_started) return media->recording_path[0];
 #endif
@@ -600,7 +660,7 @@ const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
     return "test-recording.mp4";
 }
 
-static void update_hfov(struct ca_media_impl *media)
+static void update_hfov(struct APC_Media_SITL_State *media)
 {
     float hfov;
     if (APCAM_HAVE_ZOOM_LENS && media->lens == CA_MEDIA_LENS_ZOOM)
@@ -610,8 +670,9 @@ static void update_hfov(struct ca_media_impl *media)
     atomic_store(&media->visible_hfov_deg, hfov);
 }
 
-float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
+float APC_Media_SITL::hfov(bool thermal) const
 {
+    const auto *media = _state;
     if (media == NULL) return 0.0f;
     if (thermal) return media->has_thermal ? CA_THERMAL_HFOV_DEG : 0.0f;
     return atomic_load(&media->visible_hfov_deg);
@@ -630,8 +691,9 @@ static float optical_zoom_factor(float requested)
     return factor;
 }
 
-int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
+int APC_Media_SITL::set_zoom(float zoom)
 {
+    auto *media = _state;
     if (media == NULL || !isfinite(zoom) || zoom < 1.0f ||
         zoom > APCAM_ZOOM_MAX) {
         errno = EINVAL;
@@ -651,8 +713,9 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     return 0;
 }
 
-int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens lens, float zoom)
+int APC_Media_SITL::set_lens_zoom(enum ca_media_lens lens, float zoom)
 {
+    auto *media = _state;
     float maximum = lens == CA_MEDIA_LENS_ZOOM ? APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_MAX;
     if (!media || !isfinite(zoom) || zoom < 1 || zoom > maximum ||
         (lens != CA_MEDIA_LENS_WIDE && lens != CA_MEDIA_LENS_ZOOM) ||
@@ -672,8 +735,9 @@ int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens 
     return 0;
 }
 
-float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_lens lens)
+float APC_Media_SITL::lens_zoom(enum ca_media_lens lens) const
 {
+    const auto *media = _state;
     if (!media) return NAN;
     if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[lens];
     if (lens == CA_MEDIA_LENS_ZOOM && APCAM_HAVE_ZOOM_LENS && media->optical_available)
@@ -681,21 +745,24 @@ float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_l
     return NAN;
 }
 
-float ca_media_impl_zoom(const struct ca_media_impl *media)
+float APC_Media_SITL::zoom() const
 {
+    const auto *media = _state;
     if (!media) return 1;
     return APCAM_HAVE_ZOOM_LENS ? (media->lens == CA_MEDIA_LENS_ZOOM ?
         APCAM_ZOOM_LENS_BASE * media->optical_ratio * media->digital_ratio[media->lens] :
         media->digital_ratio[media->lens]) : media->zoom;
 }
 
-enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *media)
+enum ca_media_lens APC_Media_SITL::lens() const
 {
+    const auto *media = _state;
     return media != NULL ? atomic_load(&media->lens) : CA_MEDIA_LENS_WIDE;
 }
 
-int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
+int APC_Media_SITL::autofocus(uint16_t x, uint16_t y)
 {
+    auto *media = _state;
     (void)x;
     (void)y;
     if (media == NULL) {
@@ -706,8 +773,9 @@ int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
     return 0;
 }
 
-int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
+int APC_Media_SITL::manual_focus(int direction)
 {
+    auto *media = _state;
     if (media == NULL || direction < -1 || direction > 1) {
         errno = EINVAL;
         return -1;
@@ -716,8 +784,9 @@ int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
     return 0;
 }
 
-int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
+int APC_Media_SITL::set_focus_percent(float percent)
 {
+    auto *media = _state;
     if (media == NULL || !isfinite(percent) || percent < 0.0f || percent > 100.0f) {
         errno = EINVAL;
         return -1;
@@ -726,9 +795,9 @@ int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
     return 0;
 }
 
-bool ca_media_impl_thermal_range(struct ca_media_impl *media,
-                            struct ca_thermal_range *range)
+bool APC_Media_SITL::thermal_range(struct ca_thermal_range *range)
 {
+    auto *media = _state;
     if (range == NULL) return false;
     *range = (struct ca_thermal_range) {
         .maximum_centi_c = 4200,
@@ -768,7 +837,7 @@ bool ca_media_impl_thermal_range(struct ca_media_impl *media,
 }
 
 #ifdef CAMERA_APP_SITL
-static int capture_sitl_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
+static int capture_sitl_photo(struct APC_Media_SITL_State *media, enum ca_photo_scope scope)
 {
     unsigned mask = media->has_thermal && scope == CA_PHOTO_SCOPE_THERMAL ? 4U :
                     (1U | (APCAM_HAVE_ZOOM_LENS ? 2U : 0U) | (media->has_thermal ? 4U : 0U));
@@ -784,7 +853,7 @@ static int capture_sitl_photo(struct ca_media_impl *media, enum ca_photo_scope s
 #if APCAM_HAVE_ZOOM_LENS
     media->capture_fov[1] = ca_zoom_lens_hfov(media->optical_ratio, media->digital_ratio[1]);
 #endif
-    media->capture_fov[2] = ca_media_impl_hfov(media, true);
+    media->capture_fov[2] = media->owner->hfov(true);
     int error = 0;
     while (!media->capture_done && !error)
         error = pthread_cond_timedwait(&media->capture_changed, &media->image_lock, &deadline);
@@ -812,8 +881,9 @@ static int capture_sitl_photo(struct ca_media_impl *media, enum ca_photo_scope s
 }
 #endif
 
-int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
+int APC_Media_SITL::capture_photo(enum ca_photo_scope scope)
 {
+    auto *media = _state;
 #ifdef CAMERA_APP_SITL
     if (media && media->terrain) return capture_sitl_photo(media, scope);
 #endif
@@ -867,8 +937,9 @@ int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope
     return 0;
 }
 
-int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
+int APC_Media_SITL::get_thermal_gain(uint8_t *gain)
 {
+    auto *media = _state;
     if (media == NULL || gain == NULL) {
         errno = EINVAL;
         return -1;
@@ -877,8 +948,9 @@ int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
     return 0;
 }
 
-int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
+int APC_Media_SITL::set_thermal_gain(uint8_t gain)
 {
+    auto *media = _state;
     if (media == NULL || gain > 1U) {
         errno = EINVAL;
         return -1;
@@ -887,8 +959,9 @@ int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
     return 0;
 }
 
-int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *palette)
+int APC_Media_SITL::get_thermal_palette(uint8_t *palette)
 {
+    auto *media = _state;
     if (media == NULL || palette == NULL) {
         errno = EINVAL;
         return -1;
@@ -897,8 +970,9 @@ int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *pale
     return 0;
 }
 
-int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palette)
+int APC_Media_SITL::set_thermal_palette(uint8_t palette)
 {
+    auto *media = _state;
     if (media == NULL || palette > 11U || palette == 1U) {
         errno = EINVAL;
         return -1;
@@ -907,8 +981,9 @@ int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palet
     return 0;
 }
 
-int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
+int APC_Media_SITL::set_inverted(bool inverted)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -917,8 +992,9 @@ int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
     return 0;
 }
 
-int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
+int APC_Media_SITL::set_lens(enum ca_media_lens lens)
 {
+    auto *media = _state;
     if (media == NULL || (lens != CA_MEDIA_LENS_WIDE &&
                           lens != CA_MEDIA_LENS_ZOOM)) {
         errno = EINVAL;
@@ -930,8 +1006,9 @@ int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
     return 0;
 }
 
-int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_main)
+int APC_Media_SITL::set_thermal_main(bool thermal_main)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -944,13 +1021,15 @@ int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_mai
     return 0;
 }
 
-bool ca_media_impl_thermal_main(const struct ca_media_impl *media)
+bool APC_Media_SITL::thermal_main() const
 {
+    const auto *media = _state;
     return media != NULL && media->thermal_main;
 }
 
-void ca_media_impl_close(struct ca_media_impl *media)
+void APC_Media_SITL::shutdown()
 {
+    auto *media = _state;
     if (media == NULL) return;
 #ifdef CAMERA_APP_SITL
     atomic_store(&media->video_stop, true);
@@ -968,11 +1047,12 @@ void ca_media_impl_close(struct ca_media_impl *media)
 #endif
     ca_recorder_close(&media->recorder);
     free(media->capture_root);
-    delete media;
+    _state = nullptr; delete media;
 }
 
-unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal)
+unsigned APC_Media_SITL::frame_rate(bool thermal) const
 {
+    const auto *media = _state;
 #ifdef CAMERA_APP_SITL
     if (media && media->sitl_frame_rate) return media->sitl_frame_rate;
 #else
@@ -981,8 +1061,9 @@ unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool therma
     return thermal ? APCAM_THERMAL_FRAME_RATE : APCAM_FRAME_RATE;
 }
 
-int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_SITL::apply_image(const struct ca_config *settings)
 {
+    auto *media = _state;
     if (!media || !settings) { errno = EINVAL; return -1; }
 #ifdef CAMERA_APP_SITL
     pthread_mutex_lock(&media->image_lock);
@@ -992,10 +1073,13 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
     return 0;
 }
 
-bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
-
-int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+bool APC_Media_SITL::ready() const
 {
+    const auto *media = _state; return media != NULL; }
+
+int APC_Media_SITL::exposure(unsigned lens, struct ca_exposure *s)
+{
+    auto *media = _state;
     s->source=1;
 #ifdef CAMERA_APP_SITL
     pthread_mutex_lock(&media->image_lock);
@@ -1012,8 +1096,9 @@ int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca
 #endif
 }
 
-int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_SITL::apply_overlay(const struct ca_config *settings)
 {
+    auto *media = _state;
     if (!media || !settings) { errno=EINVAL; return -1; }
 #ifdef CAMERA_APP_SITL
     pthread_mutex_lock(&media->image_lock);
@@ -1023,4 +1108,9 @@ int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_con
     pthread_mutex_unlock(&media->image_lock);
 #endif
     return 0;
+}
+
+std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
+{
+    return APC_Media_SITL::create(config);
 }
