@@ -5,6 +5,7 @@ Build the four SITL targets first. Uses isolated ports and runtime directories.
 """
 import argparse
 import binascii
+import math
 import os
 from pathlib import Path
 import re
@@ -61,19 +62,55 @@ def download(link):
     return xml
 
 
-def read(link, name, index=-1):
+def read(link, name, index=-1, decoder=decode_value):
     link.mav.param_ext_request_read_send(42, CAMERA, name.encode(), index)
     response = receive(link, 'PARAM_EXT_VALUE', lambda m: index == m.param_index if index >= 0 else m.param_id == name)
-    return decode_value(response)
+    return decoder(response)
 
 
-def write(link, definition, name, value, result=M.PARAM_ACK_ACCEPTED, wire_type=None):
+def write(link, definition, name, value, result=M.PARAM_ACK_ACCEPTED, wire_type=None, decoder=decode_value):
     parameter = definition.parameters[name]
     link.mav.param_ext_set_send(42, CAMERA, name.encode(), struct.pack("<" + parameter.fmt, value).ljust(128, b"\0"),
                                 parameter.wire_type if wire_type is None else wire_type)
     ack = receive(link, 'PARAM_EXT_ACK', lambda m: m.param_id == name and m.param_result != M.PARAM_ACK_IN_PROGRESS, timeout=30)
     assert ack.param_result == result, ack
-    return decode_value(ack)
+    return decoder(ack)
+
+
+def unavailable_optical_checks(link, definition):
+    """A failed optical controller must not leave holes in PARAM_EXT lists."""
+    def decode_unavailable_zoom(message):
+        # MAVProxy deliberately rejects non-finite editable values. Decode the
+        # raw wire value here to verify the camera replies with unknown (NaN).
+        if message.param_id != 'CAM_OPT_ZOOM':
+            return decode_value(message)
+        assert message.param_type == M.MAV_PARAM_EXT_TYPE_REAL32
+        return struct.unpack('<f', message._param_value_raw[:4])[0]
+
+    link.mav.param_ext_request_list_send(42, CAMERA)
+    values, indices = {}, set()
+    deadline = time.monotonic() + 10
+    while len(values) < len(definition.parameters):
+        assert time.monotonic() < deadline, set(definition.parameters) - set(values)
+        message = receive(link, 'PARAM_EXT_VALUE')
+        assert message.param_count == len(definition.parameters)
+        values[message.param_id] = decode_unavailable_zoom(message)
+        indices.add(message.param_index)
+    assert set(values) == set(definition.parameters)
+    assert indices == set(range(len(definition.parameters)))
+    assert math.isnan(values['CAM_OPT_ZOOM'])
+    assert math.isnan(read(link, 'CAM_OPT_ZOOM', decoder=decode_unavailable_zoom))
+    index = list(definition.parameters).index('CAM_OPT_ZOOM')
+    assert math.isnan(read(link, '', index, decoder=decode_unavailable_zoom))
+    assert math.isnan(write(link, definition, 'CAM_OPT_ZOOM', 2, M.PARAM_ACK_FAILED, decoder=decode_unavailable_zoom))
+    assert math.isnan(read(link, 'CAM_OPT_ZOOM', decoder=decode_unavailable_zoom))
+    # Failure is confined to optical control; wide zoom remains operational.
+    write(link, definition, 'CAM_ZOOM', 2)
+    assert read(link, 'CAM_ZOOM') == 2
+    assert read(link, 'CAM_LENS') == 0
+    # Allow several logging snapshots; unchanged NaN must not be logged anew.
+    time.sleep(1.2)
+    print('PASS unavailable optical zoom: complete list, named/indexed reads, rejected writes and usable wide lens', flush=True)
 
 
 def protocol_checks(link, definition, target):
@@ -371,13 +408,15 @@ def mavproxy_checks(endpoint, directory, link, definition):
             cli.close(force=True)
 
 
-def test_target(target, output, build_root=ROOT / 'build'):
+def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=False):
     build = build_root / ('sitl' if target == 'mt11' else target + '-sitl')
     directory = Path(tempfile.mkdtemp(prefix=target + '-', dir=output))
     config = directory / 'camera.ini'
     template = ROOT / ('camera_app/camera.ini' if target == 'mt11' else
                         'sitl/zr10.ini' if target == 'zr10' else 'packaging/' + target + '/camera.ini')
     config.write_text(re.sub(r'(?m)^system_id\s*=.*$', f'system_id = 42\ncamera_component_id = {CAMERA}', re.sub(r'(?m)^camera_component_id\s*=.*\n?', '', template.read_text())))
+    if optical_unavailable:
+        config.write_text(re.sub(r'(?m)^disarmed\s*=.*$', 'disarmed = true', config.read_text()))
     tcp_port, gimbal_port = port(), port()
     ready, gimbal_ready = directory / 'camera.ready', directory / 'gimbal.ready'
     env = dict(os.environ, CAMERA_APP_BACKEND=target, CAMERA_APP_CONFIG=str(config),
@@ -386,10 +425,14 @@ def test_target(target, output, build_root=ROOT / 'build'):
                CAMERA_APP_MAVLINK_TCP_PORT=str(tcp_port), CAMERA_APP_MAVLINK_UDP_PORT=str(port()),
                CAMERA_APP_READY_PATH=str(ready), CAMERA_APP_RECORD_ROOT=str(directory / 'record'),
                CAMERA_APP_RECORD_STATE=str(directory / 'record.state'),
+               CAMERA_APP_LOG_ROOT=str(directory / 'logs'),
                CAMERA_APP_CAPTURE_ROOT=str(directory / 'capture'),
                CAMERA_APP_SITL_VIDEO1=str(build / ('rgb.h264' if target == 'mt11' else 'main.h264')),
                CAMERA_APP_SITL_VIDEO2=str(build / ('thermal.h264' if target == 'mt11' else 'sub.h264')),
                CAMERA_APP_SITL_PHOTO=str(build / 'photo.jpg'))
+    env.pop('CAMERA_APP_TEST_OPTICAL_UNAVAILABLE', None)
+    if optical_unavailable:
+        env['CAMERA_APP_TEST_OPTICAL_UNAVAILABLE'] = '1'
     camera = gimbal = link = None
     try:
         with (directory / 'camera.log').open('w') as log, (directory / 'gimbal.log').open('w') as glog:
@@ -420,6 +463,25 @@ def test_target(target, output, build_root=ROOT / 'build'):
             assert xml == (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
             (directory / 'camera.xml').write_bytes(xml)
             definition = CameraDefinition(xml)
+            if optical_unavailable:
+                unavailable_optical_checks(link, definition)
+                stop(camera)
+                camera = None
+                logs = list((directory / 'logs').glob('*.BIN'))
+                assert logs, directory
+                samples = []
+                for log in logs:
+                    reader = mavutil.mavlink_connection(str(log))
+                    while True:
+                        message = reader.recv_match(type='PARM')
+                        if message is None:
+                            break
+                        if message.Name == 'CAM_OPT_ZOOM':
+                            samples.append(message.Value)
+                    reader.close()
+                assert len(samples) == 1 and math.isnan(samples[0]), samples
+                print('PASS unavailable optical zoom logged once as NaN', flush=True)
+                return
             protocol_checks(link, definition, target)
             lens_zoom_checks(link, definition, target)
             live_config_checks(link, definition, target, directory, camera, int(env['CAMERA_APP_RTSP_PORT']))
@@ -443,3 +505,5 @@ if __name__ == '__main__':
     args.output.mkdir(parents=True, exist_ok=True)
     for target in args.targets:
         test_target(target, args.output.resolve(), args.build_root.resolve())
+        if target == 'mt11':
+            test_target(target, args.output.resolve(), args.build_root.resolve(), optical_unavailable=True)
