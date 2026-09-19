@@ -28,7 +28,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "camera_app/event_poll.h"
+#ifdef __linux__
 #include <linux/sockios.h>
+#endif
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -215,12 +217,18 @@ static size_t route_send_room(struct ca_mavlink_server *server, const struct rou
 {
     if (route->kind == ROUTE_PROXY) return SIZE_MAX;
     if (route->kind == ROUTE_UART) return sizeof(server->uart_output) - server->uart_output_length;
+#ifdef SIOCOUTQ
     int fd = route->kind == ROUTE_UDP ? server->udp_fd : server->clients[route->client].fd;
     int buffer = 0, queued = 0;
     socklen_t length = sizeof(buffer);
     if (fd < 0 || getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buffer, &length) < 0 ||
         ioctl(fd, SIOCOUTQ, &queued) < 0 || queued < 0) return SIZE_MAX;
     return queued >= buffer ? 0 : (size_t)(buffer - queued);
+#else
+    /* Cygwin has no socket send-queue query. Retain bounded bursts and the
+     * nonblocking send path, as when the ioctl is unsupported at runtime. */
+    return SIZE_MAX;
+#endif
 }
 
 static int bind_socket(int type, unsigned port)
