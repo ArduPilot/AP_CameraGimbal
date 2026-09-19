@@ -33,7 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && !defined(__APPLE__)
 #include <sys/reboot.h>
 #include <sys/syscall.h>
 #endif
@@ -46,6 +46,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 /* Shared web UI with target-specific paths, capabilities and update formats.
  * Z1-Mini uses the kernel SoC thermal sensor and MAVLink for web controls. */
@@ -802,7 +805,7 @@ static bool send_all(int fd, const void *buffer, size_t length)
 static void send_text_error(int fd, int status, const char *reason,
                             const char *message, const char *extra_headers);
 static void send_text_errorf(int fd, int status, const char *reason,
-                             enum string_id id, ...);
+                             int id, ...);
 
 static void send_response(int fd, int status, const char *reason,
                           const char *content_type, const char *body,
@@ -833,7 +836,7 @@ static void send_response(int fd, int status, const char *reason,
 }
 
 #if APCAM_TARGET == APCAM_TARGET_ZR10
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && !defined(__APPLE__)
 #include <sys/syscall.h>
 
 /* The installed uClibc predates renameat2, but the 4.9 kernel supports it. */
@@ -854,7 +857,7 @@ static int renameat2(int olddir, const char *oldname, int newdir,
 /* Publishing an uploaded file must never replace an existing file. */
 static int publish_no_replace(int directory, const char *temporary, const char *published)
 {
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__APPLE__)
     if (linkat(directory, temporary, directory, published, 0) < 0) return -1;
     (void)unlinkat(directory, temporary, 0);
     return 0;
@@ -958,9 +961,10 @@ static void send_text_error(int fd, int status, const char *reason,
                   utf8_complete_length(message, strlen(message)), extra_headers);
 }
 
-/* plain-text reply built from a translated format, newline terminated */
+/* Plain-text translated reply. The final named varargs argument must use
+ * its promoted type (int, rather than enum string_id) for va_start. */
 static void send_text_errorf(int fd, int status, const char *reason,
-                             enum string_id id, ...)
+                             int id, ...)
 {
     APC_StringBuffer body;
     va_list ap;
@@ -968,7 +972,7 @@ static void send_text_errorf(int fd, int status, const char *reason,
 
     body.reset();
     va_start(ap, id);
-    ok = body.vappendf(T(id), ap) && body.append("\n");
+    ok = body.vappendf(T(static_cast<string_id>(id)), ap) && body.append("\n");
     va_end(ap);
     send_text_error(fd, status, reason, ok ? body.data() : "\n", NULL);
     body.reset();
@@ -3069,14 +3073,18 @@ static const char *camera_label(enum camera_kind kind)
 
 static enum camera_kind pid_camera_kind(pid_t pid)
 {
-    char proc_path[64];
     char executable[PATH_MAX];
-    ssize_t length;
-
+#ifdef __APPLE__
+    ssize_t length = proc_pidpath(pid, executable, sizeof(executable));
+    if (length <= 0) return CAMERA_NONE;
+    length = strlen(executable);
+#else
+    char proc_path[64];
     snprintf(proc_path, sizeof(proc_path), "/proc/%ld/exe", (long)pid);
-    length = readlink(proc_path, executable, sizeof(executable) - 1);
+    ssize_t length = readlink(proc_path, executable, sizeof(executable) - 1);
     if (length < 0) return CAMERA_NONE;
     executable[length] = '\0';
+#endif
 #ifdef WEB_PORTABLE_SITL
     /* Cygwin may omit .exe and use another spelling of the Windows path.
      * Match file identity and the runtime, so one launcher cannot restart a
@@ -3106,8 +3114,9 @@ static enum camera_kind pid_camera_kind(pid_t pid)
         executable[length - (ssize_t)suffix_length] = '\0';
     }
 
-#if APCAM_TARGET == APCAM_TARGET_ZR10
-    /* The initial SD test leaves the original executable at its stock path. */
+#if APCAM_TARGET == APCAM_TARGET_ZR10 || defined(__APPLE__)
+    /* macOS canonicalizes /var to /private/var.
+     * The initial SD test leaves the original executable at its stock path. */
 
     char resolved[PATH_MAX];
     if (realpath(REPLACEMENT_CAMERA_PATH, resolved) != NULL &&
@@ -3120,6 +3129,24 @@ static enum camera_kind pid_camera_kind(pid_t pid)
 
 static size_t camera_pids_kind(enum camera_kind wanted, pid_t *pids, size_t max_pids)
 {
+#ifdef __APPLE__
+    int bytes = proc_listpids(PROC_ALL_PIDS, 0, nullptr, 0);
+    if (bytes <= 0 || bytes > INT_MAX - 1024) return 0;
+    bytes += 1024; // Allow for processes created between the two calls.
+    auto *all = static_cast<pid_t *>(malloc(bytes));
+    if (!all) return 0;
+    int used = proc_listpids(PROC_ALL_PIDS, 0, all, bytes);
+    size_t count = 0;
+    for (int i = 0; i < used / (int)sizeof(pid_t); i++) {
+        enum camera_kind found = pid_camera_kind(all[i]);
+        if (found != CAMERA_NONE && (wanted == CAMERA_ANY || wanted == found)) {
+            if (count < max_pids) pids[count] = all[i];
+            count++;
+        }
+    }
+    free(all);
+    return count;
+#else
     DIR *proc = opendir("/proc");
     const struct dirent *entry;
     size_t count = 0;
@@ -3140,6 +3167,7 @@ static size_t camera_pids_kind(enum camera_kind wanted, pid_t *pids, size_t max_
     }
     closedir(proc);
     return count;
+#endif
 }
 
 static size_t camera_pids(pid_t *pids, size_t max_pids)
@@ -6682,7 +6710,7 @@ static bool remove_path_tree(const char *path);
 /* Atomically swap two paths; unsupported filesystems fail safely. */
 static int exchange_paths(const char *a, const char *b)
 {
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__APPLE__)
 #ifdef WEB_PORTABLE_SITL
     /* The simulator's Cygwin filesystem has no renameat2 exchange. Keep the
      * old tree recoverable while swapping this isolated temporary runtime. */
@@ -7735,7 +7763,7 @@ static void apply_configured_timezone(void)
 
 static void handle_request(int fd, const char *peer)
 {
-    struct request request = {0};
+    struct request request = {};
     int receive_status = receive_request(fd, &request);
     char session_token[65];
     bool login_route;
@@ -8074,7 +8102,7 @@ static void handle_request(int fd, const char *peer)
                 send_page(fd, error, true);
             }
         } else if (strcmp(request.path, "/parameters") == 0) {
-            struct ini_update updates[80] = {0};
+            struct ini_update updates[80] = {};
             enum camera_kind kind = configuration_camera_kind();
             size_t update_count = 0;
             size_t old_length = 0;

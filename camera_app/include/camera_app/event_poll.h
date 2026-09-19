@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__APPLE__)
 #include <poll.h>
 #define CA_POLL_IN POLLIN
 #define CA_POLL_OUT POLLOUT

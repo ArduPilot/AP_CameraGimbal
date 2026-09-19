@@ -95,6 +95,26 @@ or explicitly resetting a configuration, so web changes remain effective.
 Windows users can run the standalone installer or portable ZIP without installing
 Python, Cygwin or FFmpeg. See [Windows packaging and usage](../windows/README.md).
 
+On macOS, install Xcode Command Line Tools (`xcode-select --install`) and
+Homebrew, then prepare a native SITL environment:
+
+```sh
+brew install python ffmpeg coreutils
+git submodule update --init --recursive
+python3 -m venv build/terrain-venv
+. build/terrain-venv/bin/activate
+pip install PyQt6 psutil pymavlink lxml -r sitl/requirements-video.txt
+make dependencies
+python3 sitl_launch.py
+```
+
+`coreutils` supplies `sha256sum` for dependency verification. The Mac launcher
+uses `psutil` to find its processes, including cameras restarted by the web UI.
+For 3D video, also install the terrain requirements and a MAVProxy checkout
+with map3d as described below. Hardware firmware cross-compilation still uses
+Linux; these instructions build native macOS simulators. Linux-only system
+statistics and host IP configuration are unavailable in macOS SITL.
+
 The launcher supports PyQt6 or PyQt5 (for example, install `python3-pyqt6` on
 Debian/Ubuntu). Terrain mode automatically uses `build/terrain-venv/bin/python`
 when present, or the `CAMERA_GIMBAL_SITL_PYTHON` override. The port and MAVLink

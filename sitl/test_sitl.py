@@ -48,12 +48,37 @@ def request(sock, sequence, opcode, payload=b"", timeout=2.0):
     raise TimeoutError(f"no SIYI opcode 0x{opcode:02x} reply")
 
 
-def reserve_port(socktype):
-    sock = socket.socket(socket.AF_INET, socktype)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
+_reserved_ports = set()
+
+
+def reserve_port(socktype, span=1):
+    """Choose unused test ports, including adjacent live-video listeners.
+
+    BSD commonly allocates consecutive ephemeral ports. Remember a whole range
+    so a later web-port allocation cannot collide with RTSP's live port (+1).
+    """
+    for _ in range(1000):
+        sockets = []
+        try:
+            sock = socket.socket(socket.AF_INET, socktype)
+            sockets.append(sock)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            ports = {(socktype, port + offset) for offset in range(span)}
+            if port + span > 65536 or ports & _reserved_ports:
+                continue
+            for offset in range(1, span):
+                adjacent = socket.socket(socket.AF_INET, socktype)
+                sockets.append(adjacent)
+                adjacent.bind(("127.0.0.1", port + offset))
+            _reserved_ports.update(ports)
+            return port
+        except OSError:
+            pass
+        finally:
+            for sock in sockets:
+                sock.close()
+    raise RuntimeError("Could not allocate isolated test ports")
 
 
 def web_request(port, path):
@@ -117,7 +142,7 @@ def main():
     expected_vendor_rate = Gimbal(1, args.backend).vendor_rate_response("yaw", 10)
     gimbal_port = reserve_port(socket.SOCK_DGRAM)
     camera_port = reserve_port(socket.SOCK_DGRAM)
-    rtsp_port = reserve_port(socket.SOCK_STREAM)
+    rtsp_port = reserve_port(socket.SOCK_STREAM, span=2)
     web_port = reserve_port(socket.SOCK_STREAM)
     ready = runtime / "run/camera-app.ready"
     gimbal_ready = runtime / "run/test-gimbal.ready"
@@ -206,11 +231,21 @@ def main():
             # A positive web/SIYI rate command moves right. Both the reported
             # yaw and yaw rate must therefore increase in either mounting.
             client.send(siyi(2, 0x07, bytes((10, 0))))
-            time.sleep(0.25)
-            moved = request(client, 3, 0x0D)
-            moved_yaw, _, _, moved_yaw_rate = struct.unpack_from("<hhhh", moved)
-            moved_yaw /= 10.0
-            moved_yaw_rate /= 10.0
+            # The calibrated A8 model accelerates to its commanded rate.
+            # Wait for feedback convergence instead of assuming 250 ms is
+            # enough on every host and at every telemetry scheduling phase.
+            deadline = time.monotonic() + 2.0
+            while True:
+                time.sleep(0.05)
+                moved = request(client, 3, 0x0D)
+                moved_yaw, _, _, moved_yaw_rate = struct.unpack_from("<hhhh", moved)
+                moved_yaw /= 10.0
+                moved_yaw_rate /= 10.0
+                if (yaw_sign * (moved_yaw - initial_yaw) > 1.0 and
+                        abs(moved_yaw_rate - yaw_sign * expected_vendor_rate) < 0.2):
+                    break
+                if time.monotonic() >= deadline:
+                    break
             assert yaw_sign * (moved_yaw - initial_yaw) > 1.0, (initial_yaw, moved_yaw)
             assert abs(moved_yaw_rate - yaw_sign * expected_vendor_rate) < 0.2, moved_yaw_rate
             client.send(siyi(4, 0x07, b"\x00\x00"))
@@ -273,9 +308,13 @@ def main():
         control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         control.connect(("127.0.0.1", camera_port))
         control.send(siyi(80, 0x07, bytes((10, 0))))
-        time.sleep(0.15)
-        with web_request(web_port, "/live/attitude.json") as response:
-            moving = json.load(response)
+        deadline = time.monotonic() + 2.0
+        while True:
+            time.sleep(0.05)
+            with web_request(web_port, "/live/attitude.json") as response:
+                moving = json.load(response)
+            if abs(moving["yaw_rate_dps"] - expected_vendor_rate) < 0.2 or time.monotonic() >= deadline:
+                break
         assert abs(moving["yaw_rate_dps"] - expected_vendor_rate) < 0.2, moving
         control.send(siyi(81, 0x07, b"\x00\x00"))
         control.close()
@@ -293,6 +332,12 @@ def main():
             moved = json.load(response)
         assert moved["yaw_deg"] > pulse_start["yaw_deg"] + 3.0, \
             (pulse_start, moved)
+        deadline = time.monotonic() + 2.0
+        while abs(moved["yaw_rate_dps"]) >= 0.2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            with web_request(web_port, "/live/attitude.json") as response:
+                moved = json.load(response)
+        assert abs(moved["yaw_rate_dps"]) < 0.2, moved
         time.sleep(0.3)
         with web_request(web_port, "/live/attitude.json") as response:
             settled = json.load(response)

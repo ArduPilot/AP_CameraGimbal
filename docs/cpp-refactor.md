@@ -17,7 +17,12 @@ Camera `CFLAGS` remain shared warning/optimization settings, with the C
 language standard removed before applying `CXXFLAGS`. ARM release binaries
 link the C++ runtime statically so they do not require newer libraries on the
 camera. The Windows native builder uses the same C++ sources and still bundles
-its Cygwin dependencies.
+its Cygwin dependencies. Native macOS SITL uses Apple Clang and libc++, with
+small host-only wrappers for Linux descriptor flags, monotonic waits and file
+sync. Its web service uses macOS process APIs, and the launcher uses psutil to
+find detached restart children. XOP is prepared into a separate host source
+tree for the select-based event loop; the downloaded SDK tree stays unchanged.
+See `sitl/README.md` for Mac setup.
 
 The compatibility changes include explicit pointer/enum conversions, ordered
 initializers, C-linkage declarations at external boundaries, and C++ atomics.
@@ -87,5 +92,5 @@ targets, including calibrated FOV and unsupported zoom. The web suite includes
 buffer ownership, escaping, reuse and allocation-overflow checks.
 
 The source/compiler change still requires device testing before merging,
-especially MT11 USB thermal capture and each vendor SDK pipeline. Linux
-cross-compilation is not proof of hardware or Windows runtime behaviour.
+especially MT11 USB thermal capture and each vendor SDK pipeline. Host
+compilation and simulator tests are not proof of vendor hardware behaviour.
