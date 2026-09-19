@@ -12,6 +12,8 @@ bool ca_media_impl_recording(const struct ca_media_impl *media);
 const char *ca_media_impl_recording_path(const struct ca_media_impl *media);
 int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom);
 float ca_media_impl_zoom(const struct ca_media_impl *media);
+int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens lens, float zoom);
+float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_lens lens);
 /* Effective FOV of the visible/thermal sensor, including current zoom. */
 float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal);
 unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal);

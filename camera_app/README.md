@@ -91,7 +91,7 @@ claims both USB interfaces through `usbfs`, and explicitly negotiates the
 640x1024 temperature frame rather than depending on state left by the vendor
 application. Graceful shutdown releases the interfaces and restores
 `uvcvideo`.
-Zoom-factor commands reproduce the stock hybrid scale: 1x through 3.44x crop
+SIYI vendor-protocol zoom-factor commands reproduce the stock hybrid scale: 1x through 3.44x crop
 the wide sensor, then the app switches to the zoom sensor and maps the reported
 factor to E5739 optical travel relative to the 3.44x crossover. The focus motor
 follows the factory infinity-focus curve on zoom changes. `autofocus [X Y]`
@@ -1006,13 +1006,29 @@ Names, types and permitted values match the XML. Lists are paced, reads accept
 names or indices, and writes reject unsupported types, out-of-range values and
 non-finite floats. The original `PARAM_*` service remains available separately.
 
-Live controls include camera mode, absolute zoom on MT11/A8, MT11 RGB lens and
+Live controls include zoom multipliers on MT11/A8, MT11 RGB lens and
 video-source selection, thermal palette/gain and autofocus. Live controls report
 running state and are not persisted. Autofocus is an action that returns to Idle
 when read. ZR10 has native rate zoom without reliable absolute readback, so its
 XML does not advertise absolute zoom. A8 has a fixed-focus lens; focus commands
-are compatibility no-ops and are not advertised. Z1-Mini advertises video mode
-only, its available recording/stream profiles, and automatic recording.
+are compatibility no-ops and are not advertised. Z1-Mini advertises its
+available recording/stream profiles and automatic recording. Camera mode is
+omitted from the XML because selecting Photo or Video does not change capture
+behaviour.
+
+XML zoom controls use lens-relative multipliers in 0.1x steps. A8 exposes
+1–6x digital zoom. MT11 exposes `CAM_ZOOM` (wide digital, 1–10x) and
+`CAM_OPT_ZOOM` (optical, 1–3.2x); the lens selector shows the applicable slider.
+Each lens retains its zoom, including across pipeline reconfiguration. Here 1x
+means that lens at its widest setting, not the wide camera's FOV. The zoom
+lens's nominal baseline FOV remains an estimate pending optical calibration.
+MAVLink range commands and `CAMERA_SETTINGS.zoomLevel` retain the required
+0–100 percent scale over the selected lens's range. Range, step and rate zoom
+commands preserve both the selected RGB lens and the thermal/RGB stream source.
+SIYI vendor commands retain their original automatic hybrid lens selection.
+Optical initialization configures the MT11 lens pinmux, power and SPI before
+homing; if initialization fails, optical requests fail rather than substituting
+digital zoom. The wide lens remains usable.
 
 Recording policy, photo scope and supported image settings apply immediately
 and are persisted. Selecting While Armed uses the latest selected-system,

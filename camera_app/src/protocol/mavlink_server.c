@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include "camera_app/mavlink_server.h"
-#include "apcam/target.h"
+#include "apcam/lens.h"
 #include "apcam/config_status.h"
 
 #include "camera_app/backend.h"
@@ -630,10 +630,30 @@ static void send_camera_information(struct ca_mavlink_server *server,
     (void)send_message(server, route, &message);
 }
 
+static float selected_zoom_max(const struct ca_mavlink_server *server)
+{
+    return APCAM_HAVE_ZOOM_LENS && ca_media_lens(server->media) == CA_MEDIA_LENS_ZOOM ?
+        APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_CONTROL_MAX;
+}
+
+static float selected_zoom(const struct ca_mavlink_server *server)
+{
+    return ca_media_lens_zoom(server->media, ca_media_lens(server->media));
+}
+
+static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
+{
+#if APCAM_HAVE_ZOOM_LENS
+    return ca_media_set_lens_zoom(server->media, ca_media_lens(server->media), zoom);
+#else
+    return ca_backend_set_zoom(server->backend, zoom);
+#endif
+}
+
 static float zoom_percent(const struct ca_mavlink_server *server)
 {
-    float zoom = ca_media_zoom(server->media);
-    return (zoom - 1.0f) * (100.0f / (APCAM_ZOOM_CONTROL_MAX - 1.0f));
+    float zoom = selected_zoom(server);
+    return (zoom - 1.0f) * (100.0f / (selected_zoom_max(server) - 1.0f));
 }
 
 static void send_camera_settings(struct ca_mavlink_server *server,
@@ -1297,7 +1317,7 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
             return MAV_RESULT_DENIED;
         }
         server->zoom_rate = 0.0f;
-        return ca_backend_set_zoom(server->backend, 1.0f + value * ((APCAM_ZOOM_CONTROL_MAX - 1.0f) / 100.0f)) == 0
+        return set_selected_zoom(server, 1.0f + value * ((selected_zoom_max(server) - 1.0f) / 100.0f)) == 0
                    ? MAV_RESULT_ACCEPTED
                    : MAV_RESULT_FAILED;
     }
@@ -1310,10 +1330,10 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
     }
     if (zoom_type == 0U && isfinite(value)) {
         if (value == 0.0f) return MAV_RESULT_ACCEPTED;
-        float zoom = ca_media_zoom(server->media) + (value < 0.0f ? -0.1f : 0.1f);
+        float zoom = selected_zoom(server) + (value < 0.0f ? -0.1f : 0.1f);
         if (zoom < 1.0f) zoom = 1.0f;
-        if (zoom > APCAM_ZOOM_CONTROL_MAX) zoom = APCAM_ZOOM_CONTROL_MAX;
-        return ca_backend_set_zoom(server->backend, zoom) == 0
+        if (zoom > selected_zoom_max(server)) zoom = selected_zoom_max(server);
+        return set_selected_zoom(server, zoom) == 0
                    ? MAV_RESULT_ACCEPTED
                    : MAV_RESULT_FAILED;
     }
@@ -2177,8 +2197,12 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
         *value = (float)ca_config_param_get(video_format_parameter((size_t)p->config_index)
             ? &server->parameters : &server->settings, (size_t)p->config_index);
         return true;
-    case CA_CAMERA_MODE: *value = server->camera_mode; return true;
-    case CA_CAMERA_ZOOM: *value = zoom_percent(server); return true;
+    case CA_CAMERA_ZOOM:
+        *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
+        return isfinite(*value);
+    case CA_CAMERA_OPTICAL_ZOOM:
+        *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM);
+        return isfinite(*value);
     case CA_CAMERA_AUTOFOCUS: *value = 0; return true;
     case CA_CAMERA_LENS: *value = (float)ca_media_lens(server->media); return true;
     case CA_CAMERA_SOURCE: *value = ca_media_thermal_main(server->media) ? 1 : 0; return true;
@@ -2266,11 +2290,16 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
     switch (p->operation) {
     case CA_CAMERA_CONFIG:
         return apply_camera_config(server, (size_t)p->config_index, value);
-    case CA_CAMERA_MODE: server->camera_mode = (uint8_t)value; return 0;
-    case CA_CAMERA_ZOOM: return set_zoom(server, 2, value) == MAV_RESULT_ACCEPTED ? 0 : -1;
+    case CA_CAMERA_ZOOM:
+        server->zoom_rate = 0;
+        return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
+    case CA_CAMERA_OPTICAL_ZOOM:
+        server->zoom_rate = 0;
+        return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM, value);
     case CA_CAMERA_AUTOFOCUS:
         return value == 0 || set_focus(server, FOCUS_TYPE_AUTO, 0) == MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_LENS:
+        server->zoom_rate = 0;
         return ca_media_set_lens(server->media, (enum ca_media_lens)(int)value);
     case CA_CAMERA_SOURCE: return ca_media_set_thermal_main(server->media, value != 0);
     case CA_CAMERA_PALETTE: return ca_media_set_thermal_palette(server->media, (uint8_t)value);
@@ -2857,10 +2886,10 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
     update_target_location(server, now);
     if (server->zoom_rate != 0.0f && elapsed > 0.0f) {
-        float zoom = ca_media_zoom(server->media) + server->zoom_rate * 2.0f * elapsed;
+        float zoom = selected_zoom(server) + server->zoom_rate * 2.0f * elapsed;
         if (zoom <= 1.0f) { zoom = 1.0f; server->zoom_rate = 0.0f; }
-        if (zoom >= APCAM_ZOOM_CONTROL_MAX) { zoom = APCAM_ZOOM_CONTROL_MAX; server->zoom_rate = 0.0f; }
-        (void)ca_backend_set_zoom(server->backend, zoom);
+        if (zoom >= selected_zoom_max(server)) { zoom = selected_zoom_max(server); server->zoom_rate = 0.0f; }
+        if (set_selected_zoom(server, zoom) < 0) server->zoom_rate = 0;
     }
     if (server->captures_remaining != 0 && now >= server->next_capture_ms) {
         (void)capture_one(server, server->next_image_index++);

@@ -6,6 +6,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/spi/spidev.h>
+#include <linux/i2c.h>
+#include <linux/i2c-dev.h>
+#include <sys/mman.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -202,6 +205,7 @@ static int home_channel(struct ca_e5739 *motor, bool zoom, unsigned stop_pin,
             gpio_get(motor, stop_pin, &value) < 0) return -1;
     }
     if (value == initial) {
+        ca_log("E5739 %s homing: no end-stop edge (input=%u direction=%u)", name, value, approach_direction);
         errno = ETIMEDOUT;
         return -1;
     }
@@ -216,6 +220,7 @@ static int home_channel(struct ca_e5739 *motor, bool zoom, unsigned stop_pin,
             gpio_get(motor, stop_pin, &value) < 0) return -1;
     }
     if (value != initial) {
+        ca_log("E5739 %s homing: no return edge (input=%u)", name, value);
         errno = ETIMEDOUT;
         return -1;
     }
@@ -353,12 +358,50 @@ int ca_e5739_lookup_focus_range(const char *path, float requested_zoom,
     return 0;
 }
 
+/* The boot image leaves these pads in peripheral mode. Configure the lens
+ * SPI bus, motor GPIOs and end-stop inputs before attempting to home. */
+static int configure_pins(struct ca_e5739 *motor)
+{
+    uint8_t address[2] = {0}, revision = 0xff;
+    struct i2c_msg messages[] = {
+        {.addr = 0x50, .len = sizeof(address), .buf = address},
+        {.addr = 0x50, .flags = I2C_M_RD, .len = 1, .buf = &revision},
+    };
+    struct i2c_rdwr_ioctl_data transfer = {.msgs = messages, .nmsgs = 2};
+    int i2c = open("/dev/i2c-3", O_RDWR | O_CLOEXEC);
+    bool board2 = i2c >= 0 && ioctl(i2c, I2C_RDWR, &transfer) == 2 && revision != 0xff;
+    if (i2c >= 0) close(i2c);
+    int fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+    if (fd < 0) return -1;
+    volatile uint32_t *pads = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x102f0000);
+    if (pads == MAP_FAILED) { int saved = errno; close(fd); errno = saved; return -1; }
+    pads[0x50 / 4] = pads[0x54 / 4] = board2 ? 0 : 0x1200;
+    pads[0x60 / 4] = 0x1250;
+    pads[0x64 / 4] = pads[0x68 / 4] = 0x1200;
+    pads[0x70 / 4] = pads[0x74 / 4] = pads[0x78 / 4] = 0x1253;
+    pads[0x7c / 4] = 0x1053;
+    (void)pads[0x7c / 4];
+    munmap((void *)pads, 4096);
+    volatile uint32_t *clock = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x110d2000);
+    int saved = errno;
+    close(fd);
+    if (clock == MAP_FAILED) { errno = saved; return -1; }
+    clock[0x100 / 4] |= 0x10;
+    (void)clock[0x100 / 4];
+    munmap((void *)clock, 4096);
+    struct ot_gpio_argument power = {.bank = 11, .pin = 0, .value = 1};
+    if (ioctl(motor->gpio_fd, OT_GPIO_SET_DIR, &power) < 0 ||
+        ioctl(motor->gpio_fd, OT_GPIO_SET_VALUE, &power) < 0) return -1;
+    ca_log("E5739 lens pinmux and power configured board=%u", board2 ? 2U : 1U);
+    return 0;
+}
+
 static int configure_controller(struct ca_e5739 *motor)
 {
     uint8_t mode = E5739_SPI_MODE;
     uint8_t bits = E5739_SPI_BITS;
     uint32_t speed = E5739_SPI_SPEED;
-    static const struct {
+    struct {
         uint8_t address;
         uint16_t value;
     } registers[] = {
@@ -367,6 +410,10 @@ static int configure_controller(struct ca_e5739 *motor)
         {0x28U, 0xc8c8U}, {0x29U, 0x0c00U}, {0x2aU, 0x0000U},
     };
 
+    if (configure_pins(motor) < 0) return -1;
+    struct ot_gpio_argument drive = {.bank = 12, .pin = 2};
+    if (ioctl(motor->gpio_fd, OT_GPIO_GET_VALUE, &drive) < 0) return -1;
+    if (!drive.value) registers[3].value = registers[6].value = 0xffff;
     if (ioctl(motor->spi_fd, SPI_IOC_WR_MODE, &mode) < 0 ||
         ioctl(motor->spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0 ||
         ioctl(motor->spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0 ||

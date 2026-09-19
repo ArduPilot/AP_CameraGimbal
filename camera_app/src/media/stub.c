@@ -628,9 +628,40 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     return 0;
 }
 
+int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens lens, float zoom)
+{
+    float maximum = lens == CA_MEDIA_LENS_ZOOM ? APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_MAX;
+    if (!media || !isfinite(zoom) || zoom < 1 || zoom > maximum ||
+        (lens != CA_MEDIA_LENS_WIDE && lens != CA_MEDIA_LENS_ZOOM) ||
+        (lens == CA_MEDIA_LENS_ZOOM && !APCAM_HAVE_ZOOM_LENS)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (lens == CA_MEDIA_LENS_ZOOM) {
+        media->optical_ratio = zoom;
+        media->digital_ratio[lens] = 1;
+    } else media->digital_ratio[lens] = zoom;
+    media->zoom = media->lens == CA_MEDIA_LENS_ZOOM ?
+        APCAM_ZOOM_LENS_BASE * media->optical_ratio * media->digital_ratio[media->lens] :
+        media->digital_ratio[media->lens];
+    update_hfov(media);
+    return 0;
+}
+
+float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_lens lens)
+{
+    if (!media) return NAN;
+    if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[lens];
+    if (lens == CA_MEDIA_LENS_ZOOM && APCAM_HAVE_ZOOM_LENS) return media->optical_ratio;
+    return NAN;
+}
+
 float ca_media_impl_zoom(const struct ca_media_impl *media)
 {
-    return media != NULL ? media->zoom : 1.0f;
+    if (!media) return 1;
+    return APCAM_HAVE_ZOOM_LENS ? (media->lens == CA_MEDIA_LENS_ZOOM ?
+        APCAM_ZOOM_LENS_BASE * media->optical_ratio * media->digital_ratio[media->lens] :
+        media->digital_ratio[media->lens]) : media->zoom;
 }
 
 enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *media)

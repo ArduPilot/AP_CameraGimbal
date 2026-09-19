@@ -546,9 +546,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     media->digital_ratio[CA_MT11_WIDE_GROUP] = 1.0f;
     if (ca_e5739_open(&media->e5739,
                       "/app/cfg/zoom/E5739_focus.txt") < 0) {
-        ca_log("E5739 optical zoom unavailable; retaining VPSS digital-crop "
-               "fallback (implementation gap; this gap will only be logged "
-               "once)");
+        ca_log("E5739 optical zoom unavailable; optical zoom requests will fail");
     }
     stage = "main RTSP VPSS-to-VENC binding";
     if (sample_comm_vpss_bind_venc(media->selected_group,
@@ -1041,7 +1039,7 @@ static int select_lens_locked(struct ca_media_impl *media, enum ca_media_lens le
     }
     media->lens = lens;
     float hfov = lens == CA_MEDIA_LENS_ZOOM
-        ? ca_zoom_lens_hfov(media->e5739 != NULL ? ca_e5739_zoom(media->e5739) : 1.0f,
+        ? ca_zoom_lens_hfov(media->e5739 != NULL ? ca_e5739_zoom(media->e5739) : NAN,
                             media->digital_ratio[group])
         : ca_lens1_hfov(media->digital_ratio[group]);
     atomic_store(&media->visible_hfov_deg, hfov);
@@ -1065,13 +1063,16 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     group = lens == CA_MEDIA_LENS_WIDE ? CA_MT11_WIDE_GROUP
                                         : CA_MT11_ZOOM_GROUP;
     requested_optical = ca_e5739_system_to_optical(zoom);
-    digital_ratio = lens == CA_MEDIA_LENS_WIDE
-                        ? zoom
-                        : (media->e5739 != NULL
-                               ? 1.0f
-                               : zoom / CA_E5739_SYSTEM_CROSSOVER);
+    digital_ratio = lens == CA_MEDIA_LENS_WIDE ? zoom : 1.0f;
     pthread_mutex_lock(&media->actuator_lock);
     pthread_mutex_lock(&media->lock);
+    float previous_optical = media->e5739 ? ca_e5739_zoom(media->e5739) : 1;
+    if (lens == CA_MEDIA_LENS_ZOOM && !media->e5739) {
+        pthread_mutex_unlock(&media->lock);
+        pthread_mutex_unlock(&media->actuator_lock);
+        errno = ENODEV;
+        return -1;
+    }
     if (media->e5739 != NULL &&
         ca_e5739_set_zoom(media->e5739, requested_optical,
                           &optical_ratio) < 0) {
@@ -1091,7 +1092,7 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
             if (media->e5739 != NULL &&
                 ca_e5739_set_zoom(
                     media->e5739,
-                    ca_e5739_system_to_optical(media->zoom),
+                    previous_optical,
                                   &rollback_optical) < 0) {
                 ca_log("E5739 rollback to %.2fx also failed: %s", media->zoom,
                        strerror(errno));
@@ -1123,6 +1124,57 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     return 0;
 }
 
+int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens lens, float zoom)
+{
+    float maximum = lens == CA_MEDIA_LENS_ZOOM ? APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_MAX;
+    if (!media || !isfinite(zoom) || zoom < 1 || zoom > maximum ||
+        (lens != CA_MEDIA_LENS_WIDE && lens != CA_MEDIA_LENS_ZOOM)) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&media->actuator_lock);
+    pthread_mutex_lock(&media->lock);
+    int result = -1;
+    ot_vpss_grp group = lens == CA_MEDIA_LENS_WIDE ? CA_MT11_WIDE_GROUP : CA_MT11_ZOOM_GROUP;
+    float digital = lens == CA_MEDIA_LENS_WIDE ? zoom : 1;
+    float previous_optical = media->e5739 ? ca_e5739_zoom(media->e5739) : NAN;
+    float optical = previous_optical;
+    if (lens == CA_MEDIA_LENS_ZOOM) {
+        if (!media->e5739) { errno = ENODEV; goto done; }
+        if (ca_e5739_set_zoom(media->e5739, zoom, &optical) < 0) goto done;
+    }
+    if (fabsf(digital - media->digital_ratio[group]) > 0.001f &&
+        ca_mt11_set_digital_zoom(group, digital) != TD_SUCCESS) {
+        if (lens == CA_MEDIA_LENS_ZOOM)
+            (void)ca_e5739_set_zoom(media->e5739, previous_optical, &optical);
+        errno = EIO;
+        goto done;
+    }
+    media->digital_ratio[group] = digital;
+    /* Refresh FOV without changing the selected lens or stream source. */
+    if (select_lens_locked(media, media->lens) < 0) goto done;
+    media->zoom = media->lens == CA_MEDIA_LENS_WIDE ? media->digital_ratio[CA_MT11_WIDE_GROUP] :
+        APCAM_ZOOM_LENS_BASE * (media->e5739 ? ca_e5739_zoom(media->e5739) : 1) *
+        media->digital_ratio[CA_MT11_ZOOM_GROUP];
+    (void)ss_mpi_venc_request_idr(0, TD_TRUE);
+    ca_log("RGB %s zoom requested=%.2fx optical=%.2fx digital=%.2fx selected=%s",
+           lens == CA_MEDIA_LENS_WIDE ? "wide" : "optical", zoom, optical, digital,
+           media->lens == CA_MEDIA_LENS_WIDE ? "wide" : "zoom");
+    result = 0;
+done:
+    pthread_mutex_unlock(&media->lock);
+    pthread_mutex_unlock(&media->actuator_lock);
+    return result;
+}
+
+float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_lens lens)
+{
+    if (!media) return NAN;
+    if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[CA_MT11_WIDE_GROUP];
+    if (lens == CA_MEDIA_LENS_ZOOM && media->e5739) return ca_e5739_zoom(media->e5739);
+    return NAN;
+}
+
 float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
 {
     if (media == NULL) return 0.0f;
@@ -1131,7 +1183,10 @@ float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
 
 float ca_media_impl_zoom(const struct ca_media_impl *media)
 {
-    return media != NULL ? media->zoom : 1.0f;
+    if (!media) return 1;
+    return media->lens == CA_MEDIA_LENS_WIDE ? media->digital_ratio[CA_MT11_WIDE_GROUP] :
+        APCAM_ZOOM_LENS_BASE * (media->e5739 ? ca_e5739_zoom(media->e5739) : 1) *
+        media->digital_ratio[CA_MT11_ZOOM_GROUP];
 }
 
 int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
@@ -1152,7 +1207,7 @@ int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
     }
     (void)ss_mpi_venc_request_idr(0, TD_TRUE);
     ca_log("RGB lens=%s zoom=%.1fx zoom-sensor digital_crop=%.2fx",
-           lens == CA_MEDIA_LENS_WIDE ? "wide" : "zoom", media->zoom,
+           lens == CA_MEDIA_LENS_WIDE ? "wide" : "zoom", ca_media_impl_zoom(media),
            media->digital_ratio[CA_MT11_ZOOM_GROUP]);
     pthread_mutex_unlock(&media->lock);
     return 0;

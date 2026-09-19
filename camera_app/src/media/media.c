@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <time.h>
-#include "apcam/target.h"
+#include "apcam/lens.h"
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
@@ -149,6 +149,7 @@ const struct ca_config *ca_media_settings(const struct ca_media *media)
 
 struct live_controls {
     float zoom;
+    float lens_zoom[2];
     enum ca_media_lens lens;
     bool thermal_main;
     int gain, palette;
@@ -159,8 +160,16 @@ static int restore_controls(struct ca_media *media, const struct live_controls *
     int result = 0;
     if (ca_media_impl_set_inverted(media->impl, media->inverted) < 0) result = -1;
     if (APCAM_NUM_LENSES > 1 && ca_media_impl_set_lens(media->impl, state->lens) < 0) result = -1;
+#if APCAM_HAVE_ZOOM_LENS
+    for (unsigned lens = 0; lens < 2; lens++) {
+        if (isfinite(state->lens_zoom[lens]) &&
+            ca_media_impl_set_lens_zoom(media->impl, (enum ca_media_lens)lens,
+                                       state->lens_zoom[lens]) < 0) result = -1;
+    }
+#else
     if (APCAM_HAVE_ZOOM && isfinite(state->zoom) &&
         ca_media_impl_set_zoom(media->impl, state->zoom) < 0) result = -1;
+#endif
     if (APCAM_HAVE_THERMAL) {
         if (ca_media_impl_set_thermal_main(media->impl, state->thermal_main) < 0) result = -1;
         if (state->gain >= 0 && ca_media_impl_set_thermal_gain(media->impl, (uint8_t)state->gain) < 0) result = -1;
@@ -179,9 +188,13 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
         old->main_codec != settings->main_codec || old->sub_codec != settings->sub_codec;
     if (pipeline) {
         if (media->impl && ca_media_impl_recording(media->impl)) { errno = EBUSY; return -1; }
-        struct live_controls state = {.zoom = 1, .gain = -1, .palette = -1};
+        struct live_controls state = {.zoom = 1, .lens_zoom = {1, 1}, .gain = -1, .palette = -1};
         if (media->impl) {
             state.zoom = ca_media_impl_zoom(media->impl);
+#if APCAM_HAVE_ZOOM_LENS
+            for (unsigned lens = 0; lens < 2; lens++)
+                state.lens_zoom[lens] = ca_media_impl_lens_zoom(media->impl, (enum ca_media_lens)lens);
+#endif
             state.lens = ca_media_impl_lens(media->impl);
             state.thermal_main = ca_media_impl_thermal_main(media->impl);
             uint8_t value;
@@ -284,6 +297,28 @@ int ca_media_set_zoom(struct ca_media *media, float zoom)
 }
 float ca_media_zoom(const struct ca_media *media)
 { return IMPL ? ca_media_impl_zoom(IMPL) : 1; }
+int ca_media_set_lens_zoom(struct ca_media *media, enum ca_media_lens lens, float zoom)
+{
+    REQUIRE_IMPL;
+#if APCAM_HAVE_ZOOM_LENS
+    int result = ca_media_impl_set_lens_zoom(IMPL, lens, zoom);
+    int saved = errno;
+    apply_overlay_after_control(media, "lens zoom");
+    errno = saved;
+    return result;
+#else
+    if (lens != CA_MEDIA_LENS_WIDE) { errno = EINVAL; return -1; }
+    return ca_media_set_zoom(media, zoom);
+#endif
+}
+float ca_media_lens_zoom(const struct ca_media *media, enum ca_media_lens lens)
+{
+#if APCAM_HAVE_ZOOM_LENS
+    return IMPL ? ca_media_impl_lens_zoom(IMPL, lens) : NAN;
+#else
+    return lens == CA_MEDIA_LENS_WIDE ? ca_media_zoom(media) : NAN;
+#endif
+}
 float ca_media_hfov(const struct ca_media *media, bool thermal)
 { return IMPL ? ca_media_impl_hfov(IMPL, thermal) : NAN; }
 unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)

@@ -183,16 +183,16 @@ def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, ro
         write(link, definition, 'CAM_SOURCE', 0)
         write(link, definition, 'CAM_LENS', 0)
         # Wide digital zoom doubles the tangent-space box size.
-        write(link, definition, 'CAM_ZOOM', 100 / 9)
+        write(link, definition, 'CAM_ZOOM', 2)
         zoomed = viewer.frame()
         zx, zy = round(cx-2*half_w), round(cy-2*half_h)
         assert zoomed[zy, zx+5].min() > 180
         # At maximum zoom all thermal boundaries are outside the RGB view.
-        write(link, definition, 'CAM_ZOOM', 100)
+        write(link, definition, 'CAM_ZOOM', 10)
         outside = viewer.frame()
         write(link, definition, 'OSD_THERMAL_FOV', 0)
         assert np.abs(viewer.frame().astype(float)-outside).mean() < 3
-        write(link, definition, 'CAM_ZOOM', 0)
+        write(link, definition, 'CAM_ZOOM', 1)
         # Explicitly opt in to recording the enabled cross and thermal box.
         write(link, definition, 'OSD_RECORD', 1)
         write(link, definition, 'OSD_CROSS', 1)
@@ -222,7 +222,7 @@ def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, ro
 
 
 def integration(backend):
-    from test_camera_definition import CameraDefinition, download, write, connect, port, stop, wait_ready, M, receive
+    from test_camera_definition import CameraDefinition, download, write, read, connect, port, stop, wait_ready, M, receive
     build = ROOT / 'build' / ('sitl' if backend == 'mt11' else backend + '-sitl')
     with tempfile.TemporaryDirectory(prefix='sitl-image-controls-') as tmp:
         root = Path(tmp)
@@ -279,9 +279,24 @@ def integration(backend):
                         assert np.abs(restored.astype(float) - baseline).mean() < 3, name
                         print(f'PASS {backend} PARAM_EXT {name} changes live pixels and restores them', flush=True)
                 if 'CAM_ZOOM' in definition.parameters:
-                    write(link, definition, 'CAM_ZOOM', 50.0)
+                    write(link, definition, 'CAM_ZOOM', 3.0)
                     assert np.abs(viewer.frame().astype(float) - baseline).mean() > 10
-                    write(link, definition, 'CAM_ZOOM', 0.0)
+                    write(link, definition, 'CAM_ZOOM', 1.0)
+                if 'CAM_OPT_ZOOM' in definition.parameters:
+                    write(link, definition, 'CAM_LENS', 1)
+                    optical_baseline = viewer.frame()
+                    write(link, definition, 'CAM_OPT_ZOOM', 2.0)
+                    assert read(link, 'CAM_LENS') == 1
+                    # The tele lens already crops the chart by 3.44x at its
+                    # minimum. Doubling this leaves the uniform centre; the
+                    # ideal chart difference is only 6.4 levels (before H264).
+                    difference = np.abs(viewer.frame().astype(float) - optical_baseline).mean()
+                    assert difference > 4, difference
+                    assert read(link, 'CAM_ZOOM') == 1
+                    write(link, definition, 'CAM_OPT_ZOOM', 1.0)
+                    write(link, definition, 'CAM_LENS', 0)
+                    assert np.abs(viewer.frame().astype(float) - baseline).mean() < 3
+                    print('PASS optical zoom changes pixels without switching lens or changing wide zoom', flush=True)
                 if 'CAM_PALETTE' in definition.parameters:
                     thermal = Viewer(rtsp, 'video2')
                     white = thermal.frame()
