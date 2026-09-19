@@ -310,12 +310,17 @@ def main():
             connection, mavutil.mavlink.MAV_CMD_SET_CAMERA_ZOOM,
             [mavutil.mavlink.ZOOM_TYPE_RANGE, 20.0, 1.0],
         )
+        # ArduPilot's ZT30 profile maps 20% to a requested 6.8x system
+        # zoom. MT11's 3.44x base lens quantises that to 1.9x optical:
+        # 3.44 * 1.9 = 6.536x, reported as 6.5x by SIYI's tenths field.
+        # Check achieved zoom, not the unquantised request.
+        expected_zoom = 6.5
         deadline = time.monotonic() + 5
         zoom = query_zoom(camera_port)
-        while time.monotonic() < deadline and abs(zoom - 6.8) >= 0.11:
+        while time.monotonic() < deadline and abs(zoom - expected_zoom) >= 0.01:
             time.sleep(0.1)
             zoom = query_zoom(camera_port)
-        assert abs(zoom - 6.8) < 0.11, zoom
+        assert abs(zoom - expected_zoom) < 0.01, zoom
         command(
             connection, mavutil.mavlink.MAV_CMD_IMAGE_START_CAPTURE,
             [1.0, 0.0, 1.0],
