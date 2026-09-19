@@ -1926,6 +1926,14 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
     return 0;
 }
 
+static bool video_format_parameter(size_t index)
+{
+    const char *name = ca_config_param_name(index);
+    return strcmp(name, "REC_RESOLUTION") == 0 ||
+        strcmp(name, "VIDEO_MAIN_RES") == 0 || strcmp(name, "VIDEO_SUB_RES") == 0 ||
+        strcmp(name, "VIDEO_MAIN_CODEC") == 0 || strcmp(name, "VIDEO_SUB_CODEC") == 0;
+}
+
 static int apply_camera_config(struct ca_mavlink_server *server, size_t index, float value)
 {
     struct ca_config previous = server->settings, next = previous;
@@ -1933,6 +1941,18 @@ static int apply_camera_config(struct ca_mavlink_server *server, size_t index, f
     bool was_tracking = server->target_location_active;
     if (ca_config_param_assign(&next, index, value) < 0) return -1;
     if (apply_runtime_config(server, &next) < 0) {
+        if (errno == EBUSY && was_recording && video_format_parameter(index)) {
+            /* Match web saves: leave the active recording intact and let
+             * reload_config apply the saved format after recording stops. */
+            if (ca_config_param_save(&server->parameters, server->config_path, index, value) < 0) {
+                parameter_status(server, "Parameter could not be saved");
+                return -1;
+            }
+            server->config_pending = true;
+            ca_binlog_parameter(ca_config_param_name(index), value, false);
+            parameter_status(server, "Format saved; applies when recording stops");
+            return 0;
+        }
         parameter_status(server, errno == EBUSY ?
             "Stop recording before changing video format" : "Camera could not apply parameter");
         return -1;
@@ -2144,7 +2164,10 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
     uint8_t thermal;
     switch (p->operation) {
     case CA_CAMERA_CONFIG:
-        *value = (float)ca_config_param_get(&server->settings, (size_t)p->config_index);
+        /* Format choices describe the saved configuration, including changes
+         * waiting for a recording to finish, just as in the web UI. */
+        *value = (float)ca_config_param_get(video_format_parameter((size_t)p->config_index)
+            ? &server->parameters : &server->settings, (size_t)p->config_index);
         return true;
     case CA_CAMERA_MODE: *value = server->camera_mode; return true;
     case CA_CAMERA_ZOOM: *value = zoom_percent(server); return true;

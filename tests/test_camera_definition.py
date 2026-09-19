@@ -30,6 +30,9 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('CAM_LENS' in params, target == 'mt11')
                 self.assertEqual('CAM_AUTOFOCUS' in params, target == 'mt11')
                 self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8'))
+                if 'CAM_ZOOM' in params:
+                    self.assertEqual((params['CAM_ZOOM'].get('min'), params['CAM_ZOOM'].get('max'),
+                                      params['CAM_ZOOM'].get('step')), ('0', '100', '1'))
                 self.assertEqual('IMG_ISO' in params, target in ('mt11', 'a8'))
                 expected_res = ({'0', '1', '2'} if target in ('mt11', 'a8')
                                 else {'0', '1', '3'} if target == 'zr10' else {'1'})
