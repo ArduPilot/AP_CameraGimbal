@@ -1025,6 +1025,10 @@ lens's nominal baseline FOV remains an estimate pending optical calibration.
 MAVLink range commands and `CAMERA_SETTINGS.zoomLevel` retain the required
 0–100 percent scale over the selected lens's range. Range, step and rate zoom
 commands preserve both the selected RGB lens and the thermal/RGB stream source.
+SITL models MT11's 0.1x optical calibration steps, rounding up like the lens
+controller. Continuous zoom accumulates an unquantised target so slow rates
+work in both directions; repeated rate commands preserve fractional progress.
+Direct zoom commands and lens changes cancel the previous rate command.
 SIYI vendor commands retain their original automatic hybrid lens selection.
 Optical initialization configures the MT11 lens pinmux, power and SPI before
 homing; if initialization fails, optical requests fail rather than substituting

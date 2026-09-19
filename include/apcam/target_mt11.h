@@ -79,6 +79,8 @@
 /* Approximate command/actuator lag from onset and stopping motion; includes
  * unseparated transport/feedback latency. See docs/mt11-rate-calibration.md. */
 #define APCAM_SIM_RATE_TIME_CONSTANT 0.04f
+/* E5739 calibration selects the first factor at or above the request. */
+#define APCAM_SIM_OPTICAL_ZOOM_STEP 0.1f
 
 #define APCAM_LENS2_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS2_NAME "Zoom RGB"
