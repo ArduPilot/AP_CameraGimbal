@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -286,6 +287,95 @@ class FTPTest(unittest.TestCase):
         self.assertEqual(self.request(4, data=b'/record/camera.xml')[1], b'\x0a')
         (root / 'record/2026-09-18' / ('x' * 250)).write_bytes(b'')
         self.assertEqual(self.entries(b'/record/2026-09-18'), ['Fa.mp4\t1024', 'Fb.mp4\t0'])
+
+    def test_card_symlink_confinement(self):
+        root = self.card()
+        outside = root / 'outside'
+        (outside / 'nested').mkdir(parents=True)
+        (outside / 'secret').write_bytes(b'not exported')
+        (outside / 'nested/secret').write_bytes(b'not exported')
+        os.symlink(outside, root / 'record/escape')
+        os.symlink('../outside', root / 'capture/escape')
+        for base in (b'/record/escape', b'/capture/escape'):
+            for path in (base, base + b'/', base + b'/secret',
+                         base + b'/nested', base + b'/nested/secret'):
+                for opcode in (3, 16, 4):
+                    with self.subTest(path=path, opcode=opcode):
+                        header, payload = self.request(opcode, data=path)
+                        self.assertEqual((header[2], payload), (129, b'\x0a'))
+        # Cygwin accepts backslashes as separators; they must not bypass
+        # component validation even though Linux treats them as plain names.
+        for path in (b'/record/..\\outside', b'/record/..\\outside/secret',
+                     b'/record/..\\outside\\secret', b'/record/C:/'):
+            for opcode in (3, 16, 4):
+                with self.subTest(path=path, opcode=opcode):
+                    header, payload = self.request(opcode, data=path)
+                    self.assertEqual((header[2], payload), (129, b'\x0a'))
+        self.assertFalse(any(s.active for s in self.ftp.sessions))
+
+    @unittest.skipIf(sys.platform == 'cygwin', 'Windows locks directories containing open files')
+    def test_card_open_session_survives_directory_replacement(self):
+        root = self.card()
+        outside = root / 'outside-session'
+        outside.mkdir()
+        (outside / 'secret').write_bytes(b'not exported')
+        # Replacing a directory with a symlink must not redirect an open session.
+        source = root / 'record/stable'
+        source.mkdir()
+        (source / 'secret').write_bytes(b'exported')
+        session = self.request(4, data=b'/record/stable/secret')[0][1]
+        source.rename(root / 'record/moved')
+        os.symlink(outside, source)
+        self.assertEqual(self.request(5, session, size=100)[1], b'exported')
+        self.assertEqual(self.request(4, data=b'/record/stable/secret')[1], b'\x0a')
+
+    def test_card_pagination_skips_unexportable_entries(self):
+        root = self.card()
+        directory = root / 'record/pagination'
+        directory.mkdir()
+        (directory / ('a' * 240)).write_bytes(b'')
+        os.symlink('missing', directory / 'a-link')
+        names = ['b%02d-' % i + 'x' * 40 for i in range(20)]
+        for name in names:
+            (directory / name).write_bytes(b'abc')
+            os.utime(directory / name, (1700000000, 1700000000))
+        for opcode in (3, 16):
+            with self.subTest(opcode=opcode):
+                suffix = '\t1700000000' if opcode == 16 else ''
+                expected = ['F' + name + '\t3' + suffix for name in names]
+                self.assertEqual(self.entries(b'/record/pagination', opcode), expected)
+                first = self.request(opcode, data=b'/record/pagination', offset=2)
+                self.assertEqual(self.request(opcode, data=b'/record/pagination', offset=2), first)
+                self.assertEqual(first[1].split(b'\0')[0].decode(), expected[2])
+                self.assertEqual(self.request(opcode, data=b'/record/pagination', offset=len(names))[1], b'\x06')
+        for name in names:
+            (directory / name).unlink()
+        for opcode in (3, 16):
+            self.assertEqual(self.entries(b'/record/pagination', opcode), [])
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires FIFO support')
+    def test_card_fifo_open_does_not_block(self):
+        root = self.card()
+        os.mkfifo(root / 'record/fifo')
+        # Run in a bounded subprocess so a blocking open fails instead of
+        # hanging the whole CI job. Exercise production request handling.
+        script = """
+import ctypes, runpy, sys
+cls = runpy.run_path(sys.argv[1])['FTPTest']
+cls.setUpClass()
+test = cls()
+test.setUp()
+try:
+    test.init(ctypes.byref(test.ftp), sys.argv[2].encode(), None, None)
+    header, payload = test.request(4, data=b'/record/fifo')
+    assert (header[2], payload) == (129, bytes([10])), (header, payload)
+    assert not any(s.active for s in test.ftp.sessions)
+finally:
+    test.tearDown()
+    cls.tearDownClass()
+"""
+        subprocess.run([sys.executable, '-c', script, str(Path(__file__).resolve()),
+                        str(root / 'record')], check=True, timeout=10)
 
     def test_card_download_and_bursts(self):
         root = self.card()
