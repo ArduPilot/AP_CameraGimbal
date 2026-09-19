@@ -13,7 +13,7 @@ struct ca_gimbal_attitude;
 enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_GIMB, CA_LOG_PIDP, CA_LOG_PIDY, CA_LOG_MODE, CA_LOG_CMD,
     CA_LOG_CAM, CA_LOG_VID, CA_LOG_GCMD, CA_LOG_STAT, CA_LOG_TIME, CA_LOG_ROI,
-    CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE };
+    CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE, CA_LOG_SYS };
 struct __attribute__((packed)) ca_log_vendor { uint64_t time_us; uint8_t opcode; uint16_t length; char payload[64]; };
 struct __attribute__((packed)) ca_log_parm { uint64_t time_us; char name[16]; float value; };
 struct __attribute__((packed)) ca_log_msg { uint64_t time_us; char text[64]; };
@@ -27,6 +27,16 @@ struct __attribute__((packed)) ca_log_cam { uint64_t time_us; uint8_t scope; int
 struct __attribute__((packed)) ca_log_vid { uint64_t time_us; uint8_t active; int32_t result; char path[64]; };
 struct __attribute__((packed)) ca_log_gcmd { uint64_t time_us; uint8_t mode; float pitch,yaw,wirep,wirey; int32_t result; };
 struct __attribute__((packed)) ca_log_stat { uint64_t time_us; uint32_t dropped,queued,errors; };
+/* SYS validity bits: temperature, CPU busy, free RAM, available RAM, SD space.
+ * Memory/storage are bytes, temperature Celsius and CPU busy 0..100 percent. */
+enum ca_sys_valid { CA_SYS_TEMP=1, CA_SYS_CPU=2, CA_SYS_MEM_FREE=4,
+    CA_SYS_MEM_AVAILABLE=8, CA_SYS_SD_FREE=16 };
+struct __attribute__((packed)) ca_log_sys {
+    uint64_t time_us;
+    float cpu_temp, cpu_load;
+    uint64_t mem_free, mem_available, sd_free;
+    uint8_t valid;
+};
 struct __attribute__((packed)) ca_log_time { uint64_t time_us, utc_us; };
 struct __attribute__((packed)) ca_log_roi { uint64_t time_us; int32_t lat,lon; float alt; uint8_t active; };
 #define CA_BINLOG(id, type, ...) do { struct type r_ = { .time_us=ca_binlog_time_us(), __VA_ARGS__ }; ca_binlog_emit(id, &r_, sizeof(r_)); } while (0)

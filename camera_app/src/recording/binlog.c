@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "camera_app/binlog.h"
+#include "camera_app/system_stats.h"
 #include "camera_app/config.h"
 #include "camera_app/backend.h"
 #include "camera_app/log.h"
@@ -42,6 +43,7 @@ struct __attribute__((packed)) fmt_record {
 #define FMT(id, type, name, format, labels) {0xa3,0x95,128,id,3+sizeof(struct type),name,format,labels}
 static const struct fmt_record formats[] = {
     {0xa3,0x95,128,128,89,"FMT","BBnNZ","Type,Length,Name,Format,Columns"},
+    FMT(CA_LOG_SYS,ca_log_sys,"SYS","QffQQQB","TimeUS,CPUTemp,CPULoad,MemFree,MemAvail,SDFree,Valid"),
     FMT(CA_LOG_AE,ca_exposure,"AE","QBBHBBifffffff","TimeUS,Lens,Src,Valid,Mode,State,Result,US,AG,DG,IG,Y,Targ,Err"),
     FMT(CA_LOG_VEND,ca_log_vendor,"VEND","QBHZ","TimeUS,Opcode,Length,Payload"),
     FMT(CA_LOG_PARM,ca_log_parm,"PARM","QNf","TimeUS,Name,Value"),
@@ -203,7 +205,8 @@ static void *writer(void *unused)
     int fd=-1;
     uint8_t buffer[65536];
     size_t used=0;
-    uint64_t flushed=ca_binlog_time_us(),synced=flushed;
+    uint64_t flushed=ca_binlog_time_us(),synced=flushed,system_sampled=flushed;
+    struct ca_system_stats system_stats={0};
     for (;;) {
         struct entry entry={0};
         pthread_mutex_lock(&logger.mutex);
@@ -228,7 +231,28 @@ static void *writer(void *unused)
             synced=now;
         }
         if (lifecycle || quit) { if (fd>=0) close(fd); fd=-1; }
-        if (available && entry.kind==1) { fd=open_log(); if (fd<0) failed=true; }
+        if (available && entry.kind==1) {
+            fd=open_log();
+            if (fd<0) failed=true;
+            else {
+                struct ca_log_sys baseline;
+                system_stats=(struct ca_system_stats){0};
+                ca_system_stats_sample(&system_stats,fd,&baseline);
+                system_sampled=baseline.time_us;
+            }
+        }
+        if (fd>=0 && !failed && now>=system_sampled && now-system_sampled>=5000000U) {
+            struct __attribute__((packed)) { uint8_t sync[3]; struct ca_log_sys data; }
+                record={.sync={0xa3,0x95,CA_LOG_SYS}};
+            ca_system_stats_sample(&system_stats,fd,&record.data);
+            system_sampled=record.data.time_us;
+            /* Reserve room for both this record and the queued entry below. */
+            if (used+sizeof(record)+entry.length>sizeof(buffer)) {
+                failed=write_all(fd,buffer,used)<0;
+                used=0; flushed=now;
+            }
+            if (!failed) { memcpy(buffer+used,&record,sizeof(record)); used+=sizeof(record); }
+        }
         if (failed) {
             int error=errno;
             if (fd>=0) close(fd);

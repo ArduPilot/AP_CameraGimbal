@@ -1111,3 +1111,20 @@ Separate RGB/thermal recording encoders run only while recording, so stream
 overlays can be selected independently without changing the live image.
 The hardware/SITL raster comparison is `tests/test_overlay.py`; live encoded
 video checks are included in `make sitl-image-controls-test`.
+
+### System health BIN logging
+
+While BIN logging is active, `SYS` records are written every five seconds by
+its background writer. `CPUTemp` is the SoC temperature in degrees Celsius;
+`CPULoad` is aggregate CPU busy percentage (0–100) over the preceding sample
+interval, excluding idle and I/O wait. `MemFree` and `MemAvail` are Linux free
+and available RAM in bytes; `SDFree` is available space in bytes on the volume
+holding the log (microSD on hardware, the runtime filesystem in SITL).
+
+`Valid` bits 0–4 mark temperature, CPU load, free RAM, available RAM and storage
+space respectively. Unavailable temperature/load values are NaN; unavailable
+memory/storage values are zero with their validity bit clear. MT11 uses its
+three on-die sensors and Z1-Mini uses its kernel thermal sensor. A8, ZR10 and
+SITL currently report temperature unavailable. Older kernels without
+`MemAvailable` still report `MemFree`. No sensor or filesystem polling runs on
+the gimbal control thread.

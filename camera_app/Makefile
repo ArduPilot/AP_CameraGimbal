@@ -85,7 +85,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.c) src/main.c \
 	src/config.c \
-	src/log.c src/recording/binlog.c src/protocol/manual_control.c \
+	src/log.c src/recording/binlog.c src/recording/system_stats.c src/protocol/manual_control.c \
 	src/media/autofocus.c src/media/media.c src/media/overlay.c \
 	src/protocol/mavlink.c \
 	src/protocol/mavlink_server.c src/protocol/camera_definition.c src/protocol/camera_ftp.c \
@@ -280,7 +280,7 @@ $(AUTOFOCUS_TEST_TARGET): tests/test_autofocus.c src/media/autofocus.c
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $^
 
 $(HOST_TARGET): $(COMMON_SOURCES) src/media/stub.c $(MAVLINK_DEPS)
-	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(filter %.c,$^) -lm
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.c,$^) -lm
 
 $(A8_HOST_TARGET): CAMERA_BACKEND=a8
 $(A8_HOST_TARGET): $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src/backends/siyi/control.c
@@ -515,7 +515,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.c \
 		src/streaming/live_video_server.c src/recording/mp4_minimp4.c \
 		src/log.c src/recording/video_metadata.c src/recording/metadata.c -lpthread -lm
 
-test: thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -587,7 +587,7 @@ clean:
 	rm -f tests/test_gimbal_rate
 	rm -f tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
-	rm -f tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
+	rm -f tests/test_system_stats tests/test_binlog_sys tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.c=.o) $(COMMON_SOURCES:.c=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \
 		tests/test.ffprobe.err tests/test.fragmented.ffprobe.err
 	rm -rf build
@@ -630,7 +630,7 @@ $(Z1_HOST_TARGET): $(Z1_HOST_OBJECTS) $(SITL_CPP_OBJECTS)
 	$(HOST_CPP) -o $@ $^ -lpthread -lm
 build/z1mini-host/c/%.o: %.c $(MINIMP4_HEADER) $(MAVLINK_DEPS)
 	mkdir -p $(dir $@)
-	$(HOST_CC) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(CFLAGS) -Wno-unused-function -Wno-error=sign-compare -Wno-error=unused-variable -Wno-error=implicit-fallthrough -DCA_Z1_TEST -c $< -o $@
+	$(HOST_CC) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(CFLAGS) -Wno-unused-function -Wno-error=sign-compare -Wno-error=unused-variable -Wno-error=implicit-fallthrough -DCA_Z1_TEST -DCAMERA_APP_HOST -c $< -o $@
 -include $(Z1_HOST_OBJECTS:.o=.d)
 
 endif
@@ -705,3 +705,14 @@ build/tests/test_a8_exposure: tests/test_a8_exposure.c src/backends/a8/isp.c src
 	mkdir -p $(dir $@)
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -fsyntax-only src/backends/a8/isp.c
 	$(HOST_CC) -O2 -Wall -Wextra -Werror -std=c11 -Iinclude -o $@ $< -ldl
+
+.PHONY: system-stats-test
+system-stats-test: tests/test_system_stats tests/test_binlog_sys
+	./tests/test_system_stats
+	$(PYTHON) tests/test_binlog_sys.py ./tests/test_binlog_sys
+
+tests/test_system_stats: tests/test_system_stats.c src/recording/system_stats.c include/camera_app/system_stats.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(HOST_CC) -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude $(CFLAGS) -o $@ $< -lm
+
+tests/test_binlog_sys: tests/test_binlog_sys.c src/recording/binlog.c src/recording/system_stats.c src/config.c build/binlog_version.h include/camera_app/system_stats.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.c,$^) -lpthread -lm
