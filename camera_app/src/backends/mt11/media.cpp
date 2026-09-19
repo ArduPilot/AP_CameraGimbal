@@ -1,7 +1,7 @@
-#include <new>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include <new>
 #include "camera_app/overlay.h"
 #include "e5739.h"
 #include "isp.h"
@@ -12,7 +12,7 @@
 #include "camera_app/binlog.h"
 #include "camera_app/autofocus.h"
 #include "camera_app/live_video_server.h"
-#include "camera_app/media_impl.h"
+#include "camera_app/APC_Media_Backend.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/mp4.h"
 #include "camera_app/raw_thermal.h"
@@ -33,7 +33,8 @@
 #include <time.h>
 #include <unistd.h>
 
-struct ca_media_impl {
+class APC_Media_MT11;
+struct APC_Media_MT11_State {
     struct ca_media_config config;
     struct ca_overlay_hw *overlay;
     sample_vi_cfg vi_cfg[2];
@@ -93,7 +94,61 @@ struct ca_media_impl {
     struct ca_e5739 *e5739;
     uint16_t autofocus_x;
     uint16_t autofocus_y;
+
+    APC_Media_MT11 *owner = nullptr;
 };
+
+// Driver state is private to this translation unit. The owner survives all
+// capture callbacks and joins them before releasing SDK resources.
+class APC_Media_MT11 final : public APC_Media_Backend {
+public:
+    ~APC_Media_MT11() override { shutdown(); }
+    static std::unique_ptr<APC_Media_Backend> create(const ca_media_config &config)
+    {
+        auto *driver = new (std::nothrow) APC_Media_MT11();
+        if (!driver) { errno = ENOMEM; return nullptr; }
+        if (driver->init(&config) < 0) {
+            const int saved = errno;
+            delete driver;
+            errno = saved;
+            return nullptr;
+        }
+        return std::unique_ptr<APC_Media_Backend>(driver);
+    }
+    bool ready() const override;
+    int set_recording(bool active) override;
+    bool recording() const override;
+    const char * recording_path() const override;
+    int set_zoom(float zoom) override;
+    float zoom() const override;
+    int set_lens_zoom(enum ca_media_lens lens, float zoom) override;
+    float lens_zoom(enum ca_media_lens lens) const override;
+    float hfov(bool thermal) const override;
+    unsigned frame_rate(bool thermal) const override;
+    int set_lens(enum ca_media_lens lens) override;
+    enum ca_media_lens lens() const override;
+    int set_thermal_main(bool thermal_main) override;
+    bool thermal_main() const override;
+    int autofocus(uint16_t x, uint16_t y) override;
+    int manual_focus(int direction) override;
+    int set_focus_percent(float percent) override;
+    bool thermal_range(struct ca_thermal_range *range) override;
+    int capture_photo(enum ca_photo_scope scope) override;
+    int get_thermal_gain(uint8_t *gain) override;
+    int set_thermal_gain(uint8_t gain) override;
+    int get_thermal_palette(uint8_t *palette) override;
+    int set_thermal_palette(uint8_t palette) override;
+    int set_inverted(bool inverted) override;
+    int exposure(unsigned lens, struct ca_exposure *sample) override;
+    int apply_overlay(const struct ca_config *settings) override;
+    int apply_image(const struct ca_config *settings) override;
+private:
+    APC_Media_MT11() = default;
+    int init(const ca_media_config *config);
+    void shutdown();
+    APC_Media_MT11_State *_state = nullptr;
+};
+
 
 #define CA_MT11_VENC_COUNT 4U
 #define CA_MT11_MAIN_VENC 0U
@@ -106,7 +161,7 @@ struct ca_media_impl {
 #define MT11_FACTORY_SCENE_DIR \
     "/app/cfg/sensor_auto/sensor_imx586_imx678_scene"
 
-static int switch_rtsp_sources_locked(struct ca_media_impl *media,
+static int switch_rtsp_sources_locked(struct APC_Media_MT11_State *media,
                                       bool thermal_main);
 
 static bool video_key_frame(enum ca_video_codec codec, const uint8_t *data,
@@ -133,7 +188,7 @@ static bool video_key_frame(enum ca_video_codec codec, const uint8_t *data,
     return false;
 }
 
-static void consume_frame(struct ca_media_impl *media, unsigned channel,
+static void consume_frame(struct APC_Media_MT11_State *media, unsigned channel,
                           uint8_t *data, size_t length, uint64_t pts)
 {
     bool is_rtsp = channel <= CA_MT11_SUB_VENC;
@@ -145,7 +200,7 @@ static void consume_frame(struct ca_media_impl *media, unsigned channel,
     bool thermal = is_rtsp
         ? ((channel == CA_MT11_MAIN_VENC) == atomic_load(&media->thermal_main))
         : channel == CA_MT11_THERMAL_RECORD_VENC;
-    float hfov_deg = ca_media_impl_hfov(media, thermal);
+    float hfov_deg = media->owner->hfov(thermal);
     if (!atomic_exchange(&media->encoded_frame_logged[channel], true)) {
         ca_log("VENC channel %u first encoded frame bytes=%zu key=%u", channel,
                length, key_frame ? 1U : 0U);
@@ -182,7 +237,7 @@ static void consume_frame(struct ca_media_impl *media, unsigned channel,
 
 static void *capture_thread(void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_MT11_State *media = (struct APC_Media_MT11_State*)(opaque);
     while (!atomic_load(&media->stop)) {
         bool consumed = false;
         for (unsigned channel = 0; channel < CA_MT11_VENC_COUNT; channel++) {
@@ -249,7 +304,7 @@ static void *capture_thread(void *opaque)
     return NULL;
 }
 
-static int make_recording_path(struct ca_media_impl *media)
+static int make_recording_path(struct APC_Media_MT11_State *media)
 {
     time_t now = time(NULL);
     struct tm local;
@@ -296,7 +351,7 @@ static void thermal_frame(const uint8_t *display_yuyv,
                           const uint16_t *radiometric_y16,
                           const struct timespec *captured_at, void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_MT11_State *media = (struct APC_Media_MT11_State*)(opaque);
     struct ca_thermal_range range = {};
     unsigned frame_number;
     td_s32 result;
@@ -335,7 +390,7 @@ static void thermal_frame(const uint8_t *display_yuyv,
     }
 }
 
-static void media_cleanup(struct ca_media_impl *media)
+static void media_cleanup(struct APC_Media_MT11_State *media)
 {
     atomic_store(&media->manual_focus_direction, 0);
     if (media->autofocus_thread_started) {
@@ -366,7 +421,7 @@ static void media_cleanup(struct ca_media_impl *media)
     }
     ca_live_video_server_close(media->live_video);
     media->live_video = NULL;
-    (void)ca_media_impl_set_recording(media, false);
+    (void)media->owner->set_recording(false);
     ca_rtsp_close(media->rtsp);
     media->rtsp = NULL;
     for (int channel = (int)CA_MT11_VENC_COUNT - 1; channel >= 0; channel--) {
@@ -424,23 +479,25 @@ static unsigned stream_bitrate(unsigned width, unsigned height)
     return 2048U;
 }
 
-int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_config *config)
+int APC_Media_MT11::init(const struct ca_media_config *config)
 {
-    struct ca_media_impl *media;
+    struct APC_Media_MT11_State *media;
     struct ca_mt11_output_sizes sizes = {};
     unsigned main_width, main_height, sub_width, sub_height;
     unsigned record_width, record_height;
     ot_venc_start_param start = {.recv_pic_num = -1};
     const char *stage = "argument validation";
-    if (result == NULL || config == NULL || config->backend == NULL ||
+    if (config == NULL || config->backend == NULL ||
         strcmp(config->backend, "mt11") != 0 ||
         config->capture_root == NULL || config->record_root == NULL ||
         config->frame_rate != 30U) {
         errno = EINVAL;
         return -1;
     }
-    media = new (std::nothrow) ca_media_impl{};
-    if (media == NULL) return -1;
+    media = new (std::nothrow) APC_Media_MT11_State{};
+    if (media == NULL) { errno = ENOMEM; return -1; }
+    _state = media;
+    media->owner = this;
     media->config = *config;
     ca_video_resolution_size(config->settings.main_resolution,
                              &main_width, &main_height);
@@ -614,7 +671,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
         goto fail;
     }
     if (config->settings.orientation == CA_MOUNT_INVERTED &&
-        ca_media_impl_set_inverted(media, true) < 0) {
+        media->owner->set_inverted(true) < 0) {
         stage = "inverted output configuration";
         goto fail;
     }
@@ -629,7 +686,7 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
            CA_MT11_THERMAL_ENCODE_WIDTH, CA_MT11_THERMAL_ENCODE_HEIGHT,
            ca_video_codec_name(config->settings.sub_codec),
            record_width, record_height, config->rtsp_port);
-    *result = media;
+
     return 0;
 fail:
     ca_log("media startup failed at %s", stage);
@@ -638,13 +695,14 @@ fail:
     pthread_mutex_destroy(&media->actuator_lock);
     pthread_mutex_destroy(&media->venc_lock);
     pthread_mutex_destroy(&media->lock);
-    delete media;
+    _state = nullptr; delete media;
     errno = EIO;
     return -1;
 }
 
-int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
+int APC_Media_MT11::set_recording(bool active)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -702,19 +760,21 @@ int ca_media_impl_set_recording(struct ca_media_impl *media, bool active)
     return 0;
 }
 
-bool ca_media_impl_recording(const struct ca_media_impl *media)
+bool APC_Media_MT11::recording() const
 {
+    const auto *media = _state;
     return media != NULL && atomic_load(&media->recording);
 }
 
-const char *ca_media_impl_recording_path(const struct ca_media_impl *media)
+const char * APC_Media_MT11::recording_path() const
 {
+    const auto *media = _state;
     return media != NULL ? media->recording_path[0] : "";
 }
 
-bool ca_media_impl_thermal_range(struct ca_media_impl *media,
-                            struct ca_thermal_range *range)
+bool APC_Media_MT11::thermal_range(struct ca_thermal_range *range)
 {
+    auto *media = _state;
     bool valid;
 
     if (media == NULL || range == NULL) return false;
@@ -748,7 +808,7 @@ static void jpeg_attributes(ot_venc_chn_attr *attr, td_u32 width,
     attr->gop_attr.gop_mode = OT_VENC_GOP_MODE_NORMAL_P;
 }
 
-static int capture_group_jpeg(struct ca_media_impl *media, ot_vpss_grp group,
+static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp group,
                               ot_vpss_chn channel, td_u32 width,
                               td_u32 height, char suffix)
 {
@@ -857,7 +917,7 @@ done:
     return result;
 }
 
-static int capture_raw_thermal(struct ca_media_impl *media)
+static int capture_raw_thermal(struct APC_Media_MT11_State *media)
 {
     const size_t bytes = CA_MT11_THERMAL_WIDTH * CA_MT11_THERMAL_HEIGHT *
                          sizeof(*media->thermal_latest);
@@ -892,8 +952,9 @@ static int capture_raw_thermal(struct ca_media_impl *media)
     return 0;
 }
 
-int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope scope)
+int APC_Media_MT11::capture_photo(enum ca_photo_scope scope)
 {
+    auto *media = _state;
     int result = 0;
     int failure_errno = 0;
     unsigned width, height;
@@ -936,8 +997,9 @@ int ca_media_impl_capture_photo(struct ca_media_impl *media, enum ca_photo_scope
     return result;
 }
 
-int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
+int APC_Media_MT11::get_thermal_gain(uint8_t *gain)
 {
+    auto *media = _state;
     if (media == NULL || gain == NULL) {
         errno = EINVAL;
         return -1;
@@ -945,8 +1007,9 @@ int ca_media_impl_get_thermal_gain(struct ca_media_impl *media, uint8_t *gain)
     return ca_mt11_thermal_get_gain(media->thermal, gain);
 }
 
-int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
+int APC_Media_MT11::set_thermal_gain(uint8_t gain)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -954,8 +1017,9 @@ int ca_media_impl_set_thermal_gain(struct ca_media_impl *media, uint8_t gain)
     return ca_mt11_thermal_set_gain(media->thermal, gain);
 }
 
-int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *palette)
+int APC_Media_MT11::get_thermal_palette(uint8_t *palette)
 {
+    auto *media = _state;
     if (media == NULL || palette == NULL) {
         errno = EINVAL;
         return -1;
@@ -963,8 +1027,9 @@ int ca_media_impl_get_thermal_palette(struct ca_media_impl *media, uint8_t *pale
     return ca_mt11_thermal_get_palette(media->thermal, palette);
 }
 
-int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palette)
+int APC_Media_MT11::set_thermal_palette(uint8_t palette)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -972,8 +1037,9 @@ int ca_media_impl_set_thermal_palette(struct ca_media_impl *media, uint8_t palet
     return ca_mt11_thermal_set_palette(media->thermal, palette);
 }
 
-int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
+int APC_Media_MT11::set_inverted(bool inverted)
 {
+    auto *media = _state;
     td_s32 result;
     if (media == NULL) {
         errno = EINVAL;
@@ -991,7 +1057,7 @@ int ca_media_impl_set_inverted(struct ca_media_impl *media, bool inverted)
     return 0;
 }
 
-static int select_lens_locked(struct ca_media_impl *media, enum ca_media_lens lens)
+static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_lens lens)
 {
     ot_vpss_grp group = lens == CA_MEDIA_LENS_WIDE ? CA_MT11_WIDE_GROUP
                                                     : CA_MT11_ZOOM_GROUP;
@@ -1049,8 +1115,9 @@ static int select_lens_locked(struct ca_media_impl *media, enum ca_media_lens le
     return 0;
 }
 
-int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
+int APC_Media_MT11::set_zoom(float zoom)
 {
+    auto *media = _state;
     enum ca_media_lens lens;
     ot_vpss_grp group;
     float requested_optical;
@@ -1127,8 +1194,9 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     return 0;
 }
 
-int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens lens, float zoom)
+int APC_Media_MT11::set_lens_zoom(enum ca_media_lens lens, float zoom)
 {
+    auto *media = _state;
     float maximum = lens == CA_MEDIA_LENS_ZOOM ? APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_MAX;
     if (!media || !isfinite(zoom) || zoom < 1 || zoom > maximum ||
         (lens != CA_MEDIA_LENS_WIDE && lens != CA_MEDIA_LENS_ZOOM)) {
@@ -1170,30 +1238,34 @@ done:
     return result;
 }
 
-float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_lens lens)
+float APC_Media_MT11::lens_zoom(enum ca_media_lens lens) const
 {
+    const auto *media = _state;
     if (!media) return NAN;
     if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[CA_MT11_WIDE_GROUP];
     if (lens == CA_MEDIA_LENS_ZOOM && media->e5739) return ca_e5739_zoom(media->e5739);
     return NAN;
 }
 
-float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
+float APC_Media_MT11::hfov(bool thermal) const
 {
+    const auto *media = _state;
     if (media == NULL) return 0.0f;
     return thermal ? CA_THERMAL_HFOV_DEG : atomic_load(&media->visible_hfov_deg);
 }
 
-float ca_media_impl_zoom(const struct ca_media_impl *media)
+float APC_Media_MT11::zoom() const
 {
+    const auto *media = _state;
     if (!media) return 1;
     return media->lens == CA_MEDIA_LENS_WIDE ? media->digital_ratio[CA_MT11_WIDE_GROUP] :
         APCAM_ZOOM_LENS_BASE * (media->e5739 ? ca_e5739_zoom(media->e5739) : 1) *
         media->digital_ratio[CA_MT11_ZOOM_GROUP];
 }
 
-int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
+int APC_Media_MT11::set_lens(enum ca_media_lens lens)
 {
+    auto *media = _state;
     if (media == NULL || (lens != CA_MEDIA_LENS_WIDE &&
                           lens != CA_MEDIA_LENS_ZOOM)) {
         errno = EINVAL;
@@ -1210,18 +1282,19 @@ int ca_media_impl_set_lens(struct ca_media_impl *media, enum ca_media_lens lens)
     }
     (void)ss_mpi_venc_request_idr(0, TD_TRUE);
     ca_log("RGB lens=%s zoom=%.1fx zoom-sensor digital_crop=%.2fx",
-           lens == CA_MEDIA_LENS_WIDE ? "wide" : "zoom", ca_media_impl_zoom(media),
+           lens == CA_MEDIA_LENS_WIDE ? "wide" : "zoom", media->owner->zoom(),
            media->digital_ratio[CA_MT11_ZOOM_GROUP]);
     pthread_mutex_unlock(&media->lock);
     return 0;
 }
 
-enum ca_media_lens ca_media_impl_lens(const struct ca_media_impl *media)
+enum ca_media_lens APC_Media_MT11::lens() const
 {
+    const auto *media = _state;
     return media != NULL ? media->lens : CA_MEDIA_LENS_WIDE;
 }
 
-static td_s32 reconfigure_rtsp_venc(struct ca_media_impl *media,
+static td_s32 reconfigure_rtsp_venc(struct APC_Media_MT11_State *media,
                                     unsigned channel,
                                     const ot_venc_chn_attr *new_attr)
 {
@@ -1247,7 +1320,7 @@ static td_s32 reconfigure_rtsp_venc(struct ca_media_impl *media,
     return result;
 }
 
-static int switch_rtsp_sources_locked(struct ca_media_impl *media,
+static int switch_rtsp_sources_locked(struct APC_Media_MT11_State *media,
                                       bool thermal_main)
 {
     bool current = atomic_load(&media->thermal_main);
@@ -1365,8 +1438,9 @@ fail:
     return -1;
 }
 
-int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_main)
+int APC_Media_MT11::set_thermal_main(bool thermal_main)
 {
+    auto *media = _state;
     if (media == NULL) {
         errno = EINVAL;
         return -1;
@@ -1397,13 +1471,14 @@ int ca_media_impl_set_thermal_main(struct ca_media_impl *media, bool thermal_mai
     return 0;
 }
 
-bool ca_media_impl_thermal_main(const struct ca_media_impl *media)
+bool APC_Media_MT11::thermal_main() const
 {
+    const auto *media = _state;
     return media != NULL && atomic_load(&media->thermal_main);
 }
 
 struct focus_measurement {
-    struct ca_media_impl *media;
+    struct APC_Media_MT11_State *media;
     uint16_t x;
     uint16_t y;
     uint64_t last_pts;
@@ -1545,7 +1620,7 @@ static int measure_focus(void *opaque, uint64_t *score)
 
 static void *autofocus_thread(void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_MT11_State *media = (struct APC_Media_MT11_State*)(opaque);
     struct focus_measurement measurement = {
         .media = media,
         .x = media->autofocus_x,
@@ -1580,7 +1655,7 @@ static void *autofocus_thread(void *opaque)
 
 static void *manual_focus_thread(void *opaque)
 {
-    struct ca_media_impl *media = (struct ca_media_impl*)(opaque);
+    struct APC_Media_MT11_State *media = (struct APC_Media_MT11_State*)(opaque);
     const struct timespec delay = {.tv_sec = 0, .tv_nsec = 50000000L};
     int current = -1;
 
@@ -1630,8 +1705,9 @@ static void *manual_focus_thread(void *opaque)
     return NULL;
 }
 
-int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
+int APC_Media_MT11::manual_focus(int direction)
 {
+    auto *media = _state;
     int thread_result;
 
     if (media == NULL || direction < -1 || direction > 1) {
@@ -1679,8 +1755,9 @@ int ca_media_impl_manual_focus(struct ca_media_impl *media, int direction)
     return 0;
 }
 
-int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
+int APC_Media_MT11::set_focus_percent(float percent)
 {
+    auto *media = _state;
     int minimum;
     int maximum;
     int current;
@@ -1725,8 +1802,9 @@ int ca_media_impl_set_focus_percent(struct ca_media_impl *media, float percent)
     return result;
 }
 
-int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
+int APC_Media_MT11::autofocus(uint16_t x, uint16_t y)
 {
+    auto *media = _state;
     bool expected = false;
     int thread_result;
 
@@ -1770,25 +1848,28 @@ int ca_media_impl_autofocus(struct ca_media_impl *media, uint16_t x, uint16_t y)
     return 0;
 }
 
-void ca_media_impl_close(struct ca_media_impl *media)
+void APC_Media_MT11::shutdown()
 {
+    auto *media = _state;
     if (media == NULL) return;
     media_cleanup(media);
     pthread_mutex_destroy(&media->photo_lock);
     pthread_mutex_destroy(&media->actuator_lock);
     pthread_mutex_destroy(&media->venc_lock);
     pthread_mutex_destroy(&media->lock);
-    delete media;
+    _state = nullptr; delete media;
 }
 
-unsigned ca_media_impl_frame_rate(const struct ca_media_impl *media, bool thermal)
+unsigned APC_Media_MT11::frame_rate(bool thermal) const
 {
+    const auto *media = _state;
     (void)media;
     return thermal ? APCAM_THERMAL_FRAME_RATE : APCAM_FRAME_RATE;
 }
 
-int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_MT11::apply_image(const struct ca_config *settings)
 {
+    auto *media = _state;
     pthread_mutex_lock(&media->lock);
     int result = ca_mt11_apply_isp_config(settings, true);
     if (result == 0) ca_config_copy_image(&media->config.settings, settings);
@@ -1797,18 +1878,22 @@ int ca_media_impl_apply_image(struct ca_media_impl *media, const struct ca_confi
     return 0;
 }
 
-bool ca_media_impl_ready(const struct ca_media_impl *media) { return media != NULL; }
-
-int ca_media_impl_exposure(struct ca_media_impl *media, unsigned lens, struct ca_exposure *s)
+bool APC_Media_MT11::ready() const
 {
+    const auto *media = _state; return media != NULL; }
+
+int APC_Media_MT11::exposure(unsigned lens, struct ca_exposure *s)
+{
+    auto *media = _state;
     pthread_mutex_lock(&media->lock);
     int result=ca_mt11_exposure(lens,s);
     pthread_mutex_unlock(&media->lock);
     return result;
 }
 
-int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_config *settings)
+int APC_Media_MT11::apply_overlay(const struct ca_config *settings)
 {
+    auto *media = _state;
     struct ca_overlay_channel channels[4]= {};
     pthread_mutex_lock(&media->lock);
     pthread_mutex_lock(&media->venc_lock);
@@ -1820,10 +1905,15 @@ int ca_media_impl_apply_overlay(struct ca_media_impl *media, const struct ca_con
             .height=media->venc_attr[c].venc_attr.pic_height,
             .cross=settings->osd_cross && (c<2 || settings->osd_recording),
             .thermal_box=settings->osd_thermal_fov && !thermal && (c<2 || settings->osd_recording),
-            .hfov=ca_media_impl_hfov(media,false)};
+            .hfov=media->owner->hfov(false)};
     }
     int result=ca_overlay_hw_set(&media->overlay,channels,4);
     pthread_mutex_unlock(&media->venc_lock);
     pthread_mutex_unlock(&media->lock);
     return result;
+}
+
+std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
+{
+    return APC_Media_MT11::create(config);
 }

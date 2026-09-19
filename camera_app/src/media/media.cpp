@@ -1,7 +1,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "camera_app/media_impl.h"
+#include "camera_app/APC_Media.h"
+#include <new>
 #include "camera_app/log.h"
 #include "camera_app/binlog.h"
 #include "camera_app/metadata.h"
@@ -14,25 +15,15 @@
 #include <math.h>
 #include <stdlib.h>
 
-struct ca_media {
-    struct ca_media_impl *impl;
-    struct ca_media_config config;
-    bool inverted;
-    uint8_t cached_gain, cached_palette;
-    bool cached_thermal;
-    pthread_mutex_t controls_lock;
-    pthread_cond_t controls_wake;
-    pthread_t controls_thread;
-    bool controls_running, controls_stop;
-    unsigned controls_generation;
-    pthread_t exposure_thread;
-    bool exposure_running;
-    pthread_cond_t exposure_wake;
+// Compatibility handle retained by existing MAVLink/vendor callbacks.
+struct ca_media final : public APC_Media {
+    using APC_Media::APC_Media;
 };
 
-static void apply_overlay_after_control(struct ca_media *media, const char *control)
+
+void APC_Media::_apply_overlay_after_control(const char *control)
 {
-    if (ca_media_impl_apply_overlay(media->impl, &media->config.settings) < 0) {
+    if (_backend->apply_overlay(&_config.settings) < 0) {
         ca_log("video overlay update failed after %s; %s",
                control, strerror(errno));
     }
@@ -40,116 +31,132 @@ static void apply_overlay_after_control(struct ca_media *media, const char *cont
 
 /* Thermal USB transactions can take hundreds of milliseconds. Refresh their
  * diagnostic cache off the control loop, never holding the cache lock over I/O. */
-static void *monitor_controls(void *opaque)
+void APC_Media::_monitor_controls()
 {
-    struct ca_media *media=(struct ca_media*)(opaque);
-    pthread_mutex_lock(&media->controls_lock);
-    while (!media->controls_stop) {
-        unsigned generation=media->controls_generation;
-        pthread_mutex_unlock(&media->controls_lock);
+    _controls_lock.lock();
+    while (!_controls_stop) {
+        unsigned generation=_controls_generation;
+        _controls_lock.unlock();
         uint8_t gain,palette;
-        bool valid=ca_media_impl_get_thermal_gain(media->impl,&gain)==0 &&
-            ca_media_impl_get_thermal_palette(media->impl,&palette)==0;
-        pthread_mutex_lock(&media->controls_lock);
-        if (valid && generation==media->controls_generation) {
-            media->cached_gain=gain; media->cached_palette=palette;
-            media->cached_thermal=true;
+        bool valid=_backend->get_thermal_gain(&gain)==0 &&
+            _backend->get_thermal_palette(&palette)==0;
+        _controls_lock.lock();
+        if (valid && generation==_controls_generation) {
+            _cached_gain=gain; _cached_palette=palette;
+            _cached_thermal=true;
         }
-        if (!media->controls_stop) {
+        if (!_controls_stop) {
             struct timespec until;
             clock_gettime(CLOCK_REALTIME,&until);
             until.tv_sec++;
-            pthread_cond_timedwait(&media->controls_wake,&media->controls_lock,&until);
+            _controls_wake.wait_until(_controls_lock,until);
         }
     }
-    pthread_mutex_unlock(&media->controls_lock);
-    return NULL;
+    _controls_lock.unlock();
+    return;
 }
 /* Independent of slow thermal USB reads. The backend is joined before any
  * pipeline teardown, including reconfiguration and rollback. */
-static void *monitor_exposure(void *opaque)
+void APC_Media::_monitor_exposure()
 {
-    struct ca_media *media=(struct ca_media*)(opaque);
-    pthread_mutex_lock(&media->controls_lock);
-    while (!media->controls_stop) {
-        pthread_mutex_unlock(&media->controls_lock);
+    _controls_lock.lock();
+    while (!_controls_stop) {
+        _controls_lock.unlock();
         if (ca_binlog_active()) {
-            for (unsigned lens=0; lens<APCAM_NUM_LENSES; lens++) {
+            for (unsigned lens=0; lens<_camera.num_lenses(); lens++) {
                 struct ca_exposure sample=ca_exposure_empty(lens,ca_binlog_time_us());
-                sample.result=ca_media_impl_exposure(media->impl,lens,&sample);
+                sample.result=_backend->exposure(lens,&sample);
                 ca_binlog_emit(CA_LOG_AE,&sample,sizeof(sample));
             }
         }
-        pthread_mutex_lock(&media->controls_lock);
-        if (!media->controls_stop) {
+        _controls_lock.lock();
+        if (!_controls_stop) {
             struct timespec until;
             clock_gettime(CLOCK_REALTIME,&until);
             until.tv_nsec+=200000000;
             if (until.tv_nsec>=1000000000) { until.tv_sec++; until.tv_nsec-=1000000000; }
-            pthread_cond_timedwait(&media->exposure_wake,&media->controls_lock,&until);
+            _exposure_wake.wait_until(_controls_lock,until);
         }
     }
-    pthread_mutex_unlock(&media->controls_lock);
-    return NULL;
+    _controls_lock.unlock();
+    return;
 }
-static void stop_controls_monitor(struct ca_media *media)
+void APC_Media::_stop_controls_monitor()
 {
-    if (!media->controls_running && !media->exposure_running) return;
-    pthread_mutex_lock(&media->controls_lock);
-    media->controls_stop=true;
-    pthread_cond_signal(&media->controls_wake);
-    pthread_cond_signal(&media->exposure_wake);
-    pthread_mutex_unlock(&media->controls_lock);
-    if (media->controls_running) pthread_join(media->controls_thread,NULL);
-    if (media->exposure_running) pthread_join(media->exposure_thread,NULL);
-    media->exposure_running=false;
-    media->controls_running=false;
+    if (!_controls_running && !_exposure_running) return;
+    {
+        APC_LockGuard guard(_controls_lock);
+        _controls_stop=true;
+        _controls_wake.signal();
+        _exposure_wake.signal();
+    }
+    if (_controls_running) pthread_join(_controls_thread,NULL);
+    if (_exposure_running) pthread_join(_exposure_thread,NULL);
+    _exposure_running=false;
+    _controls_running=false;
 }
-static void start_controls_monitor(struct ca_media *media)
+void APC_Media::_start_controls_monitor()
 {
-    if (!media->impl || media->controls_running || media->exposure_running) return;
-    media->controls_stop=false;
-    media->cached_thermal=false;
-    int error=pthread_create(&media->exposure_thread,NULL,monitor_exposure,media);
+    if (!_backend || _controls_running || _exposure_running) return;
+    _controls_stop=false;
+    _cached_thermal=false;
+    int error = pthread_create(&_exposure_thread, nullptr, [](void *opaque) -> void * {
+        static_cast<APC_Media *>(opaque)->_monitor_exposure();
+        return nullptr;
+    }, this);
     if (error) ca_log("cannot start exposure monitor: %s",strerror(error));
-    else media->exposure_running=true;
-    if (!APCAM_HAVE_THERMAL) return;
-    error=pthread_create(&media->controls_thread,NULL,monitor_controls,media);
+    else _exposure_running=true;
+    if (!_camera.has_thermal()) return;
+    error = pthread_create(&_controls_thread, nullptr, [](void *opaque) -> void * {
+        static_cast<APC_Media *>(opaque)->_monitor_controls();
+        return nullptr;
+    }, this);
     if (error) ca_log("cannot start thermal controls monitor: %s",strerror(error));
-    else media->controls_running=true;
+    else _controls_running=true;
 }
 
 int ca_media_open(struct ca_media **result, const struct ca_media_config *config)
 {
     if (!result || !config) { errno = EINVAL; return -1; }
-    struct ca_media *media = (struct ca_media*)(calloc(1, sizeof(*media)));
-    if (!media) return -1;
-    pthread_mutex_init(&media->controls_lock,NULL);
-    pthread_cond_init(&media->controls_wake,NULL);
-    pthread_cond_init(&media->exposure_wake,NULL);
-    media->config = *config;
-    media->inverted = config->settings.orientation == CA_MOUNT_INVERTED;
-    if (ca_media_impl_open(&media->impl, config) < 0) {
-        pthread_cond_destroy(&media->controls_wake);
-        pthread_cond_destroy(&media->exposure_wake);
-        pthread_mutex_destroy(&media->controls_lock);
-        free(media); return -1;
+    auto *media = new (std::nothrow) ca_media(*config);
+    if (!media) { errno = ENOMEM; return -1; }
+    if (media->initialize() < 0) {
+        const int saved = errno;
+        delete media;
+        errno = saved;
+        return -1;
     }
-    if (ca_media_impl_apply_overlay(media->impl, &config->settings) < 0) {
-        ca_log("initial video overlay could not be applied; camera remains available: %s",
-               strerror(errno));
-    }
-    start_controls_monitor(media);
     *result = media;
     return 0;
 }
 
-const struct ca_config *ca_media_settings(const struct ca_media *media)
+int APC_Media::initialize()
 {
-    return &media->config.settings;
+    if (_backend) { errno = EALREADY; return -1; }
+    const int error = _controls_lock.error() ? _controls_lock.error() :
+        _controls_wake.error() ? _controls_wake.error() : _exposure_wake.error();
+    if (error) { errno = error; return -1; }
+    if (_open_backend(&_config) < 0) return -1;
+    if (_backend->apply_overlay(&_config.settings) < 0) {
+        ca_log("initial video overlay could not be applied; camera remains available: %s",
+               strerror(errno));
+    }
+    _start_controls_monitor();
+    return 0;
 }
 
-struct live_controls {
+int APC_Media::_open_backend(const ca_media_config *config)
+{
+    _backend = APC_Media_Backend::create(*config);
+    return _backend ? 0 : -1;
+}
+
+const struct ca_config * APC_Media::settings() const
+{
+    return &_config.settings;
+}
+
+struct APC_Media::LiveControls {
     float zoom;
     float lens_zoom[2];
     enum ca_media_lens lens;
@@ -157,82 +164,80 @@ struct live_controls {
     int gain, palette;
 };
 
-static int restore_controls(struct ca_media *media, const struct live_controls *state)
+int APC_Media::_restore_controls(const LiveControls *state)
 {
     int result = 0;
-    if (ca_media_impl_set_inverted(media->impl, media->inverted) < 0) result = -1;
-    if (APCAM_NUM_LENSES > 1 && ca_media_impl_set_lens(media->impl, state->lens) < 0) result = -1;
-#if APCAM_HAVE_ZOOM_LENS
-    for (unsigned lens = 0; lens < 2; lens++) {
-        if (isfinite(state->lens_zoom[lens]) &&
-            ca_media_impl_set_lens_zoom(media->impl, (enum ca_media_lens)lens,
-                                       state->lens_zoom[lens]) < 0) result = -1;
+    if (_backend->set_inverted(_inverted) < 0) result = -1;
+    if (_camera.num_lenses() > 1 && _backend->set_lens(state->lens) < 0) result = -1;
+    if (_camera.has_independent_lens_zoom()) {
+        for (unsigned lens = 0; lens < 2; lens++) {
+            if (isfinite(state->lens_zoom[lens]) &&
+                _backend->set_lens_zoom((enum ca_media_lens)lens,
+                                        state->lens_zoom[lens]) < 0) result = -1;
+        }
+    } else if (_camera.has_zoom() && isfinite(state->zoom) &&
+               _backend->set_zoom(state->zoom) < 0) {
+        result = -1;
     }
-#else
-    if (APCAM_HAVE_ZOOM && isfinite(state->zoom) &&
-        ca_media_impl_set_zoom(media->impl, state->zoom) < 0) result = -1;
-#endif
-    if (APCAM_HAVE_THERMAL) {
-        if (ca_media_impl_set_thermal_main(media->impl, state->thermal_main) < 0) result = -1;
-        if (state->gain >= 0 && ca_media_impl_set_thermal_gain(media->impl, (uint8_t)state->gain) < 0) result = -1;
-        if (state->palette >= 0 && ca_media_impl_set_thermal_palette(media->impl, (uint8_t)state->palette) < 0) result = -1;
+    if (_camera.has_thermal()) {
+        if (_backend->set_thermal_main(state->thermal_main) < 0) result = -1;
+        if (state->gain >= 0 && _backend->set_thermal_gain((uint8_t)state->gain) < 0) result = -1;
+        if (state->palette >= 0 && _backend->set_thermal_palette((uint8_t)state->palette) < 0) result = -1;
     }
     return result;
 }
 
-int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
+int APC_Media::configure(const struct ca_config *settings)
 {
-    if (!media || !settings) { errno = EINVAL; return -1; }
-    const struct ca_config *old = &media->config.settings;
-    bool pipeline = !media->impl || old->main_resolution != settings->main_resolution ||
+    if (!settings) { errno = EINVAL; return -1; }
+    const struct ca_config *old = &_config.settings;
+    bool pipeline = !_backend || old->main_resolution != settings->main_resolution ||
         old->sub_resolution != settings->sub_resolution ||
         old->recording_resolution != settings->recording_resolution ||
         old->main_codec != settings->main_codec || old->sub_codec != settings->sub_codec;
     if (pipeline) {
-        if (media->impl && ca_media_impl_recording(media->impl)) { errno = EBUSY; return -1; }
-        struct live_controls state = {};
+        if (_backend && _backend->recording()) { errno = EBUSY; return -1; }
+        LiveControls state = {};
         state.zoom = 1;
         state.lens_zoom[0] = state.lens_zoom[1] = 1;
         state.gain = -1;
         state.palette = -1;
-        if (media->impl) {
-            state.zoom = ca_media_impl_zoom(media->impl);
-#if APCAM_HAVE_ZOOM_LENS
-            for (unsigned lens = 0; lens < 2; lens++)
-                state.lens_zoom[lens] = ca_media_impl_lens_zoom(media->impl, (enum ca_media_lens)lens);
-#endif
-            state.lens = ca_media_impl_lens(media->impl);
-            state.thermal_main = ca_media_impl_thermal_main(media->impl);
+        if (_backend) {
+            state.zoom = _backend->zoom();
+            if (_camera.has_independent_lens_zoom()) {
+                for (unsigned lens = 0; lens < 2; lens++)
+                    state.lens_zoom[lens] = _backend->lens_zoom((enum ca_media_lens)lens);
+            }
+            state.lens = _backend->lens();
+            state.thermal_main = _backend->thermal_main();
             uint8_t value;
-            if (APCAM_HAVE_THERMAL && ca_media_impl_get_thermal_gain(media->impl, &value) == 0) state.gain = value;
-            if (APCAM_HAVE_THERMAL && ca_media_impl_get_thermal_palette(media->impl, &value) == 0) state.palette = value;
+            if (_camera.has_thermal() && _backend->get_thermal_gain(&value) == 0) state.gain = value;
+            if (_camera.has_thermal() && _backend->get_thermal_palette(&value) == 0) state.palette = value;
         }
-        struct ca_media_config next = media->config;
+        struct ca_media_config next = _config;
         next.settings = *settings;
-        stop_controls_monitor(media);
-        ca_media_impl_close(media->impl);
-        media->impl = NULL;
+        _stop_controls_monitor();
+        _backend.reset();
         ca_log("reconfiguring media pipeline without restarting camera app");
-        if (ca_media_impl_open(&media->impl, &next) < 0 || restore_controls(media, &state) < 0 ||
-            ca_media_impl_apply_overlay(media->impl, settings) < 0) {
+        if (_open_backend(&next) < 0 || _restore_controls(&state) < 0 ||
+            _backend->apply_overlay(settings) < 0) {
             int saved_errno = errno;
-            ca_media_impl_close(media->impl);
-            media->impl = NULL;
-            if (ca_media_impl_open(&media->impl, &media->config) < 0 || restore_controls(media, &state) < 0 ||
-                ca_media_impl_apply_overlay(media->impl, old) < 0)
+            _backend.reset();
+            if (_open_backend(&_config) < 0 || _restore_controls(&state) < 0 ||
+                _backend->apply_overlay(old) < 0)
                 ca_log("media configuration rollback failed; retry configuration");
-            start_controls_monitor(media);
+            _start_controls_monitor();
             errno = saved_errno ? saved_errno : EIO;
             return -1;
         }
-        start_controls_monitor(media);
-        media->config = next;
+        _start_controls_monitor();
+        _config = next;
         return 0;
     }
     if (!ca_config_image_equal(old, settings)) {
-        if (ca_media_impl_apply_image(media->impl, settings) < 0) {
+        if (_backend->apply_image(settings) < 0) {
             int saved_errno = errno;
-            if (ca_media_impl_apply_image(media->impl, old) < 0)
+            if (_backend->apply_image(old) < 0)
                 ca_log("image configuration rollback failed");
             errno = saved_errno;
             return -1;
@@ -240,127 +245,121 @@ int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
     }
     if (old->osd_cross != settings->osd_cross || old->osd_thermal_fov != settings->osd_thermal_fov ||
         old->osd_recording != settings->osd_recording) {
-        if (ca_media_impl_apply_overlay(media->impl, settings) < 0) {
+        if (_backend->apply_overlay(settings) < 0) {
             int saved = errno;
-            (void)ca_media_impl_apply_overlay(media->impl, old);
+            (void)_backend->apply_overlay(old);
             if (!ca_config_image_equal(old, settings))
-                (void)ca_media_impl_apply_image(media->impl, old);
+                (void)_backend->apply_image(old);
             errno = saved;
             return -1;
         }
     }
-    media->config.settings = *settings;
+    _config.settings = *settings;
     return 0;
 }
 
-void ca_media_close(struct ca_media *media)
+APC_Media::~APC_Media()
 {
-    if (!media) return;
-    stop_controls_monitor(media);
-    if (ca_media_recording(media)) (void)ca_media_set_recording(media, false);
-    ca_media_impl_close(media->impl);
-    pthread_cond_destroy(&media->controls_wake);
-    pthread_cond_destroy(&media->exposure_wake);
-    pthread_mutex_destroy(&media->controls_lock);
-    free(media);
+    _stop_controls_monitor();
+    if (recording()) (void)set_recording(false);
+    _backend.reset();
 }
 
 /* The stable handle is retained by gimbal callbacks and the MAVLink server;
  * only the private implementation changes during pipeline reconfiguration. */
-#define IMPL (media ? media->impl : NULL)
-#define REQUIRE_IMPL do { if (!IMPL) { errno = ENODEV; return -1; } } while (0)
-bool ca_media_ready(const struct ca_media *media)
-{ return IMPL && ca_media_impl_ready(IMPL); }
-int ca_media_set_recording(struct ca_media *media, bool active)
+#define REQUIRE_IMPL do { if (!_backend) { errno = ENODEV; return -1; } } while (0)
+bool APC_Media::ready() const
+{ return _backend && _backend->ready(); }
+int APC_Media::set_recording(bool active)
 {
     REQUIRE_IMPL;
-    bool previous=ca_media_impl_recording(IMPL);
+    bool previous=_backend->recording();
     struct ca_log_vid r={.time_us=ca_binlog_time_us(),.active=active};
-    const char *path=ca_media_impl_recording_path(IMPL);
+    const char *path=_backend->recording_path();
     if (path) snprintf(r.path,sizeof(r.path),"%s",path);
-    r.result=ca_media_impl_set_recording(IMPL,active);
+    r.result=_backend->set_recording(active);
     int saved_errno=errno;
     if (active) {
-        path=ca_media_impl_recording_path(IMPL);
+        path=_backend->recording_path();
         if (path) snprintf(r.path,sizeof(r.path),"%s",path);
     }
     if (previous!=active || r.result<0) ca_binlog_emit(CA_LOG_VID,&r,sizeof(r));
     errno=saved_errno;
     return r.result;
 }
-bool ca_media_recording(const struct ca_media *media)
-{ return IMPL && ca_media_impl_recording(IMPL); }
-const char *ca_media_recording_path(const struct ca_media *media)
-{ return IMPL ? ca_media_impl_recording_path(IMPL) : NULL; }
-int ca_media_set_zoom(struct ca_media *media, float zoom)
+bool APC_Media::recording() const
+{ return _backend && _backend->recording(); }
+const char * APC_Media::recording_path() const
+{ return _backend ? _backend->recording_path() : NULL; }
+int APC_Media::set_zoom(float zoom)
 {
     REQUIRE_IMPL;
-    int result=ca_media_impl_set_zoom(IMPL, zoom);
+    int result=_backend->set_zoom(zoom);
     int saved=errno;
-    apply_overlay_after_control(media, "zoom");
+    _apply_overlay_after_control("zoom");
     if (result<0) { errno=saved; return result; }
     return 0;
 }
-float ca_media_zoom(const struct ca_media *media)
-{ return IMPL ? ca_media_impl_zoom(IMPL) : 1; }
-int ca_media_set_lens_zoom(struct ca_media *media, enum ca_media_lens lens, float zoom)
+float APC_Media::zoom() const
+{ return _backend ? _backend->zoom() : 1; }
+int APC_Media::set_lens_zoom(enum ca_media_lens lens, float zoom)
 {
     REQUIRE_IMPL;
-#if APCAM_HAVE_ZOOM_LENS
-    int result = ca_media_impl_set_lens_zoom(IMPL, lens, zoom);
-    int saved = errno;
-    apply_overlay_after_control(media, "lens zoom");
-    errno = saved;
-    return result;
-#else
-    if (lens != CA_MEDIA_LENS_WIDE) { errno = EINVAL; return -1; }
-    return ca_media_set_zoom(media, zoom);
-#endif
+    if (_camera.has_independent_lens_zoom()) {
+        int result = _backend->set_lens_zoom(lens, zoom);
+        int saved = errno;
+        _apply_overlay_after_control("lens zoom");
+        errno = saved;
+        return result;
+    } else {
+        if (lens != CA_MEDIA_LENS_WIDE) { errno = EINVAL; return -1; }
+        return set_zoom(zoom);
+    }
 }
-float ca_media_lens_zoom(const struct ca_media *media, enum ca_media_lens lens)
+float APC_Media::lens_zoom(enum ca_media_lens lens) const
 {
-#if APCAM_HAVE_ZOOM_LENS
-    return IMPL ? ca_media_impl_lens_zoom(IMPL, lens) : NAN;
-#else
-    return lens == CA_MEDIA_LENS_WIDE ? ca_media_zoom(media) : NAN;
-#endif
+    if (_camera.has_independent_lens_zoom()) {
+        return _backend ? _backend->lens_zoom(lens) : NAN;
+    } else {
+        return lens == CA_MEDIA_LENS_WIDE ? zoom() : NAN;
+    }
 }
-float ca_media_hfov(const struct ca_media *media, bool thermal)
-{ return IMPL ? ca_media_impl_hfov(IMPL, thermal) : NAN; }
-unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)
-{ return IMPL ? ca_media_impl_frame_rate(IMPL, thermal) : 0; }
-int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
+float APC_Media::hfov(bool thermal) const
+{ return _backend ? _backend->hfov(thermal) : NAN; }
+unsigned APC_Media::frame_rate(bool thermal) const
+{ return _backend ? _backend->frame_rate(thermal) : 0; }
+int APC_Media::set_lens(enum ca_media_lens lens)
 {
     REQUIRE_IMPL;
-    int result=ca_media_impl_set_lens(IMPL, lens);
+    int result=_backend->set_lens(lens);
     int saved=errno;
-    apply_overlay_after_control(media, "lens change");
+    _apply_overlay_after_control("lens change");
     if (result<0) { errno=saved; return result; }
     return 0;
 }
-enum ca_media_lens ca_media_lens(const struct ca_media *media)
-{ return IMPL ? ca_media_impl_lens(IMPL) : CA_MEDIA_LENS_WIDE; }
-int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
+enum ca_media_lens APC_Media::lens() const
+{ return _backend ? _backend->lens() : CA_MEDIA_LENS_WIDE; }
+int APC_Media::set_thermal_main(bool thermal_main)
 {
     REQUIRE_IMPL;
-    int result=ca_media_impl_set_thermal_main(IMPL, thermal_main);
+    int result=_backend->set_thermal_main(thermal_main);
     int saved=errno;
-    apply_overlay_after_control(media, "video source change");
+    _apply_overlay_after_control("video source change");
     if (result<0) { errno=saved; return result; }
     return 0;
 }
-bool ca_media_thermal_main(const struct ca_media *media)
-{ return IMPL && ca_media_impl_thermal_main(IMPL); }
-int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y)
-{ REQUIRE_IMPL; return ca_media_impl_autofocus(IMPL, x, y); }
-int ca_media_manual_focus(struct ca_media *media, int direction)
-{ REQUIRE_IMPL; return ca_media_impl_manual_focus(IMPL, direction); }
-int ca_media_set_focus_percent(struct ca_media *media, float percent)
-{ REQUIRE_IMPL; return ca_media_impl_set_focus_percent(IMPL, percent); }
-bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
-{ return IMPL && ca_media_impl_thermal_range(IMPL, range) &&
+bool APC_Media::thermal_main() const
+{ return _backend && _backend->thermal_main(); }
+int APC_Media::autofocus(uint16_t x, uint16_t y)
+{ REQUIRE_IMPL; return _backend->autofocus(x, y); }
+int APC_Media::manual_focus(int direction)
+{ REQUIRE_IMPL; return _backend->manual_focus(direction); }
+int APC_Media::set_focus_percent(float percent)
+{ REQUIRE_IMPL; return _backend->set_focus_percent(percent); }
+bool APC_Media::thermal_range(struct ca_thermal_range *range)
+{ return _backend && _backend->thermal_range(range) &&
          ca_thermal_range_fresh(range, ca_binlog_time_us()); }
-int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
+int APC_Media::capture_photo(enum ca_photo_scope scope)
 {
     REQUIRE_IMPL;
     struct ca_metadata snapshot;
@@ -374,61 +373,181 @@ int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
     r.roll = snapshot.gimbal_roll_rad*57.295779513f;
     r.pitch = snapshot.gimbal_pitch_rad*57.295779513f;
     r.yaw = snapshot.gimbal_yaw_rad*57.295779513f;
-    r.result=ca_media_impl_capture_photo(IMPL,scope);
+    r.result=_backend->capture_photo(scope);
     int saved_errno=errno;
     ca_binlog_emit(CA_LOG_CAM,&r,sizeof(r));
     errno=saved_errno;
     return r.result;
 }
-bool ca_media_cached_thermal_controls(struct ca_media *media, uint8_t *gain, uint8_t *palette)
+bool APC_Media::cached_thermal_controls(uint8_t *gain, uint8_t *palette)
 {
-    if (!media) return false;
-    pthread_mutex_lock(&media->controls_lock);
-    bool valid=media->cached_thermal;
-    *gain=media->cached_gain; *palette=media->cached_palette;
-    pthread_mutex_unlock(&media->controls_lock);
+    APC_LockGuard guard(_controls_lock);
+    bool valid=_cached_thermal;
+    *gain=_cached_gain; *palette=_cached_palette;
     return valid;
 }
-int ca_media_get_thermal_gain(struct ca_media *media, uint8_t *gain)
-{ REQUIRE_IMPL; int result=ca_media_impl_get_thermal_gain(IMPL, gain);
+int APC_Media::get_thermal_gain(uint8_t *gain)
+{ REQUIRE_IMPL; int result=_backend->get_thermal_gain(gain);
   if (!result) {
-      pthread_mutex_lock(&media->controls_lock);
-      media->cached_gain=*gain;
-      media->controls_generation++;
-      pthread_mutex_unlock(&media->controls_lock);
+      APC_LockGuard guard(_controls_lock);
+      _cached_gain=*gain;
+      _controls_generation++;
   }
   return result; }
-int ca_media_set_thermal_gain(struct ca_media *media, uint8_t gain)
-{ REQUIRE_IMPL; int result=ca_media_impl_set_thermal_gain(IMPL, gain);
+int APC_Media::set_thermal_gain(uint8_t gain)
+{ REQUIRE_IMPL; int result=_backend->set_thermal_gain(gain);
   if (!result) {
-      pthread_mutex_lock(&media->controls_lock);
-      media->cached_gain=gain;
-      media->controls_generation++;
-      pthread_mutex_unlock(&media->controls_lock);
+      APC_LockGuard guard(_controls_lock);
+      _cached_gain=gain;
+      _controls_generation++;
   }
   return result; }
-int ca_media_get_thermal_palette(struct ca_media *media, uint8_t *palette)
-{ REQUIRE_IMPL; int result=ca_media_impl_get_thermal_palette(IMPL, palette);
+int APC_Media::get_thermal_palette(uint8_t *palette)
+{ REQUIRE_IMPL; int result=_backend->get_thermal_palette(palette);
   if (!result) {
-      pthread_mutex_lock(&media->controls_lock);
-      media->cached_palette=*palette;
-      media->controls_generation++;
-      pthread_mutex_unlock(&media->controls_lock);
+      APC_LockGuard guard(_controls_lock);
+      _cached_palette=*palette;
+      _controls_generation++;
   }
   return result; }
-int ca_media_set_thermal_palette(struct ca_media *media, uint8_t palette)
-{ REQUIRE_IMPL; int result=ca_media_impl_set_thermal_palette(IMPL, palette);
+int APC_Media::set_thermal_palette(uint8_t palette)
+{ REQUIRE_IMPL; int result=_backend->set_thermal_palette(palette);
   if (!result) {
-      pthread_mutex_lock(&media->controls_lock);
-      media->cached_palette=palette;
-      media->controls_generation++;
-      pthread_mutex_unlock(&media->controls_lock);
+      APC_LockGuard guard(_controls_lock);
+      _cached_palette=palette;
+      _controls_generation++;
   }
   return result; }
-int ca_media_set_inverted(struct ca_media *media, bool inverted)
+int APC_Media::set_inverted(bool inverted)
 {
     REQUIRE_IMPL;
-    if (ca_media_impl_set_inverted(IMPL, inverted) < 0) return -1;
-    media->inverted = inverted;
+    if (_backend->set_inverted(inverted) < 0) return -1;
+    _inverted = inverted;
     return 0;
 }
+
+// Legacy protocol entry points; new services can use APC_Media directly.
+int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
+{
+    if (!media) { errno = EINVAL; return -1; }
+    return media->configure(settings);
+}
+const struct ca_config * ca_media_settings(const struct ca_media *media)
+{
+    return media ? media->settings() : (nullptr);
+}
+bool ca_media_ready(const struct ca_media *media)
+{
+    return media ? media->ready() : (false);
+}
+int ca_media_set_recording(struct ca_media *media, bool active)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_recording(active);
+}
+bool ca_media_recording(const struct ca_media *media)
+{
+    return media ? media->recording() : (false);
+}
+const char * ca_media_recording_path(const struct ca_media *media)
+{
+    return media ? media->recording_path() : (nullptr);
+}
+int ca_media_set_zoom(struct ca_media *media, float zoom)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_zoom(zoom);
+}
+float ca_media_zoom(const struct ca_media *media)
+{
+    return media ? media->zoom() : (1);
+}
+int ca_media_set_lens_zoom(struct ca_media *media, enum ca_media_lens lens, float zoom)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_lens_zoom(lens, zoom);
+}
+float ca_media_lens_zoom(const struct ca_media *media, enum ca_media_lens lens)
+{
+    return media ? media->lens_zoom(lens) : (APC_Camera::get_singleton().has_independent_lens_zoom() ? NAN : (lens == CA_MEDIA_LENS_WIDE ? 1 : NAN));
+}
+float ca_media_hfov(const struct ca_media *media, bool thermal)
+{
+    return media ? media->hfov(thermal) : (NAN);
+}
+unsigned ca_media_frame_rate(const struct ca_media *media, bool thermal)
+{
+    return media ? media->frame_rate(thermal) : (0);
+}
+int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_lens(lens);
+}
+enum ca_media_lens ca_media_lens(const struct ca_media *media)
+{
+    return media ? media->lens() : (CA_MEDIA_LENS_WIDE);
+}
+int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_thermal_main(thermal_main);
+}
+bool ca_media_thermal_main(const struct ca_media *media)
+{
+    return media ? media->thermal_main() : (false);
+}
+int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->autofocus(x, y);
+}
+int ca_media_manual_focus(struct ca_media *media, int direction)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->manual_focus(direction);
+}
+int ca_media_set_focus_percent(struct ca_media *media, float percent)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_focus_percent(percent);
+}
+bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
+{
+    return media ? media->thermal_range(range) : (false);
+}
+int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->capture_photo(scope);
+}
+bool ca_media_cached_thermal_controls(struct ca_media *media, uint8_t *gain, uint8_t *palette)
+{
+    return media ? media->cached_thermal_controls(gain, palette) : (false);
+}
+int ca_media_get_thermal_gain(struct ca_media *media, uint8_t *gain)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->get_thermal_gain(gain);
+}
+int ca_media_set_thermal_gain(struct ca_media *media, uint8_t gain)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_thermal_gain(gain);
+}
+int ca_media_get_thermal_palette(struct ca_media *media, uint8_t *palette)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->get_thermal_palette(palette);
+}
+int ca_media_set_thermal_palette(struct ca_media *media, uint8_t palette)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_thermal_palette(palette);
+}
+int ca_media_set_inverted(struct ca_media *media, bool inverted)
+{
+    if (!media) { errno = ENODEV; return -1; }
+    return media->set_inverted(inverted);
+}
+void ca_media_close(struct ca_media *media) { delete media; }

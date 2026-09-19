@@ -713,7 +713,7 @@ a8-exposure-test: build/tests/test_a8_exposure
 build/tests/test_a8_exposure: tests/test_a8_exposure.cpp src/backends/a8/isp.cpp src/backends/a8/isp.h include/camera_app/config.h
 	mkdir -p $(dir $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -fsyntax-only src/backends/a8/isp.cpp
-	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -Iinclude -o $@ $< -ldl
+	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -o $@ $< -ldl
 
 .PHONY: system-stats-test
 system-stats-test: tests/test_system_stats tests/test_binlog_sys
@@ -725,3 +725,6 @@ tests/test_system_stats: tests/test_system_stats.cpp src/recording/system_stats.
 
 tests/test_binlog_sys: tests/test_binlog_sys.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/config.cpp build/binlog_version.h include/camera_app/system_stats.h include/camera_app/binlog.h $(APCAM_HEADERS)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lpthread -lm
+
+# Shared schema and C++ ownership changes must invalidate host regression binaries.
+$(TEST_TARGET) tests/test_config tests/test_thermal_monitor build/tests/test_a8_exposure: $(wildcard ../include/apcam/*.h) $(wildcard include/camera_app/APC_*.h)

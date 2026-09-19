@@ -1,6 +1,7 @@
 #pragma once
 
 #include "target.h"
+#include "lens.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -79,6 +80,7 @@ public:
     virtual unsigned recording_resolutions() const = 0;
     virtual unsigned num_recording_channels() const = 0;
     virtual float zoom_control_max() const = 0;
+    virtual bool has_independent_lens_zoom() const = 0;
 
     bool has_thermal() const
     {
@@ -144,6 +146,7 @@ public:
     unsigned recording_resolutions() const override { return APCAM_RECORDING_RESOLUTIONS; }
     unsigned num_recording_channels() const override { return APCAM_NUM_RECORDING_CHANNELS; }
     float zoom_control_max() const override { return APCAM_ZOOM_CONTROL_MAX; }
+    bool has_independent_lens_zoom() const override { return APCAM_HAVE_ZOOM_LENS; }
 };
 
 inline const APC_Camera &APC_Camera::get_singleton()
