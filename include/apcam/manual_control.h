@@ -1,3 +1,4 @@
+#include "compiler.h"
 #ifndef APCAM_MANUAL_CONTROL_H
 #define APCAM_MANUAL_CONTROL_H
 #include <stdint.h>
@@ -23,5 +24,5 @@ struct apcam_manual_packet {
     float value;
     int32_t result;
 };
-_Static_assert(sizeof(struct apcam_manual_packet) == 32, "manual control IPC layout");
+APC_STATIC_ASSERT(sizeof(struct apcam_manual_packet) == 32, "manual control IPC layout");
 #endif

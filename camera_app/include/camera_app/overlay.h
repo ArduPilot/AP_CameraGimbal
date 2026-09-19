@@ -5,6 +5,10 @@
 
 #define CA_OVERLAY_REGIONS 5
 #define CA_OVERLAY_LINES 8
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ca_overlay_line { int x0, y0, x1, y1; unsigned region; bool dashed; };
 struct ca_overlay_geometry {
     struct ca_overlay_line lines[CA_OVERLAY_LINES];
@@ -28,4 +32,8 @@ struct ca_overlay_channel {
 struct ca_overlay_hw;
 int ca_overlay_hw_set(struct ca_overlay_hw **hw, const struct ca_overlay_channel *channels, unsigned count);
 void ca_overlay_hw_close(struct ca_overlay_hw *hw);
+#ifdef __cplusplus
+}
+#endif
+
 #endif

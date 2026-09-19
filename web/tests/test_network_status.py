@@ -7,7 +7,7 @@ import tempfile
 WEB = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #define main camera_web_main
-#include "mt11-web.c"
+#include "mt11-web.cpp"
 #undef main
 #include <assert.h>
 
@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='web-network-status-') as directory:
     source = root / 'test.c'
     source.write_text(SOURCE)
     binary = root / 'test'
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-std=c11',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-std=gnu++17',
                     '-DMT11_WEB_TEST', '-DAPCAM_TARGET=APCAM_TARGET_MT11', f'-I{WEB}', f'-DREPLACEMENT_CONFIG_PATH="{root / "camera.ini"}"',
                     f'-DCAMERA_READY_PATH="{root / "ready"}"', str(source), '-o', str(binary), '-lm'], check=True)
     subprocess.run([str(binary)], check=True)

@@ -83,11 +83,11 @@ if not (MAVLINK / 'all/mavlink.h').exists():
 with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     root = Path(directory)
     exchange_test = root / 'exchange-test'
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-ffunction-sections', '-fdata-sections',
                     '-Wl,--gc-sections', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
                     '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
-                    f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.c'),
+                    f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.cpp'),
                     '-o', str(exchange_test), '-lm'], check=True)
     subprocess.run([str(exchange_test), str(root)], check=True)
     gcu, settings, run, media = root / 'gcu', root / 'settings', root / 'run', root / 'mnt'
@@ -107,12 +107,12 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
                  RUNTIME_DIR=run, CAMERA_READY_PATH=run / 'ready', REPLACEMENT_CAMERA_PATH=gcu / 'ap/camera-app',
                  SOC_TEMPERATURE_PATH=run / 'soc_temp')
     exchange_failure = root / 'disable-atomic-exchange'
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
                     '-DGCU_PACKAGE_MAX_EXTRACTED=4096',
                     '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', f'-I{MAVLINK}',
                     *[f'-D{name}="{path}"' for name, path in paths.items()],
-                    str(WEB / 'mt11-web.c'), '-o', str(binary), '-lm'], check=True)
+                    str(WEB / 'mt11-web.cpp'), '-o', str(binary), '-lm'], check=True)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]

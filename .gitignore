@@ -29,3 +29,5 @@ __pycache__/
 
 /camera_app/tests/test_system_stats
 /camera_app/tests/test_binlog_sys
+
+/web/tests/test_string_buffer

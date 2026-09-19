@@ -79,6 +79,10 @@ jobs:
           echo "$PWD/build/terrain-venv/bin" >> "$GITHUB_PATH"
       - name: Fetch pinned build sources
         run: make dependencies
+      - name: Test C++ web buffer ownership and escaping
+        run: |
+          make -C web tests/test_string_buffer
+          web/tests/test_string_buffer
       - name: Test configuration migration, IP addresses, routes and rollback
         run: |
           make -C camera_app tests/test_config host

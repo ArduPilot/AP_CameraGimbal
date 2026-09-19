@@ -10,6 +10,10 @@
  * sessions. */
 #define CA_CAMERA_FTP_ROOTS 3
 #define CA_CAMERA_FTP_ROOT_MAX 256
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ca_camera_ftp_session {
     uint8_t system, component, id;
     bool active;
@@ -42,4 +46,8 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
 bool ca_camera_ftp_burst_next(struct ca_camera_ftp *ftp, uint8_t system,
                               uint8_t component, uint8_t response[251], bool final);
 void ca_camera_ftp_close(struct ca_camera_ftp *ftp);
+#ifdef __cplusplus
+}
+#endif
+
 #endif

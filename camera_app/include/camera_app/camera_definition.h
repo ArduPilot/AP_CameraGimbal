@@ -16,6 +16,10 @@ enum ca_camera_operation {
     CA_CAMERA_LENS, CA_CAMERA_SOURCE, CA_CAMERA_PALETTE, CA_CAMERA_GAIN,
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ca_camera_parameter {
     const char *name;
     const char *description;
@@ -38,4 +42,8 @@ char *ca_camera_definition(size_t *length);
 /* CRC-16/CCITT-FALSE of the exact exported bytes, excluding the terminating NUL.
  * Map zero to 0xffff: MAVLink reserves version zero for unknown. */
 uint16_t ca_camera_definition_version(const char *xml, size_t length);
+#ifdef __cplusplus
+}
+#endif
+
 #endif
