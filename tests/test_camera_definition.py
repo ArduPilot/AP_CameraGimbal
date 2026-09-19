@@ -20,7 +20,7 @@ class Definitions(unittest.TestCase):
             with self.subTest(target=target):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name'): p for p in root.findall('parameters/parameter')}
-                self.assertIn('CAM_MODE', params)
+                self.assertNotIn('CAM_MODE', params)
                 self.assertIn('OSD_CROSS', params)
                 self.assertEqual('OSD_RECORD' in params, target != 'z1mini')
                 if 'OSD_RECORD' in params:
@@ -31,21 +31,27 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('CAM_LENS' in params, target == 'mt11')
                 self.assertEqual('CAM_AUTOFOCUS' in params, target == 'mt11')
                 self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8'))
+                self.assertEqual('CAM_OPT_ZOOM' in params, target == 'mt11')
+                if target == 'mt11':
+                    self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2)
+                    self.assertEqual(params['CAM_OPT_ZOOM'].get('step'), '0.1')
+                    lens_options = params['CAM_LENS'].findall('options/option')
+                    self.assertEqual([o.findtext('exclusions/exclude') for o in lens_options],
+                                     ['CAM_OPT_ZOOM', 'CAM_ZOOM'])
                 if 'CAM_ZOOM' in params:
                     self.assertEqual((params['CAM_ZOOM'].get('min'), params['CAM_ZOOM'].get('max'),
-                                      params['CAM_ZOOM'].get('step')), ('0', '100', '1'))
+                                      params['CAM_ZOOM'].get('step')), ('1', '10' if target == 'mt11' else '6', '0.1'))
                 self.assertEqual('IMG_ISO' in params, target in ('mt11', 'a8'))
                 expected_res = ({'0', '1', '2'} if target in ('mt11', 'a8')
                                 else {'0', '1', '3'} if target == 'zr10' else {'1'})
                 self.assertEqual({o.get('value') for o in params['VIDEO_MAIN_RES'].findall('options/option')}, expected_res)
                 if target == 'z1mini':
                     self.assertEqual({o.get('value') for o in params['REC_RESOLUTION'].findall('options/option')}, {'1', '2'})
-                    self.assertEqual({o.get('value') for o in params['CAM_MODE'].findall('options/option')}, {'1'})
                 for name, p in params.items():
                     boolean = name in {'OSD_CROSS', 'OSD_RECORD', 'OSD_THERMAL_FOV',
                                        'LOG_DISARMED', 'MAV_POS_TARGET'}
                     self.assertEqual(p.get('type'), 'bool' if boolean else
-                                     'float' if name == 'CAM_ZOOM' else 'int32')
+                                     'float' if name in ('CAM_ZOOM', 'CAM_OPT_ZOOM') else 'int32')
                     if boolean:
                         self.assertEqual((p.get('min'), p.get('max')), ('0', '1'))
                         self.assertIn(p.get('default'), ('0', '1'))
@@ -89,7 +95,7 @@ class DefinitionVersion(unittest.TestCase):
                 self.assertEqual(version, binascii.crc_hqx(xml, 0xffff) or 0xffff)
                 self.assertEqual(version, self.version(xml + b'ignored', len(xml)))
                 # UI-only changes must invalidate the definition cache too.
-                changed = xml.replace(b'Camera mode', b'Capture mode')
+                changed = xml.replace(b'Recording resolution', b'Recording size')
                 self.assertNotEqual(xml, changed)
                 self.assertNotEqual(version, self.version(changed, len(changed)))
 

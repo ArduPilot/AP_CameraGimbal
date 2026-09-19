@@ -106,13 +106,7 @@ def protocol_checks(link, definition, target):
         write(link, definition, name, values[name])
     names = list(definition.parameters)
     assert read(link, '', len(names) - 1) == values[names[-1]]
-    assert read(link, 'CAM_MODE') == (1 if target == 'z1mini' else 0)
-    if target != 'z1mini':
-        write(link, definition, 'CAM_MODE', 1)
-        assert read(link, 'CAM_MODE') == 1
-        link.mav.command_long_send(42, CAMERA, M.MAV_CMD_SET_CAMERA_MODE, 0, 0, 0, 0, 0, 0, 0, 0)
-        receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_SET_CAMERA_MODE)
-        assert read(link, 'CAM_MODE') == 0
+    assert 'CAM_MODE' not in definition.parameters
     write(link, definition, 'REC_AUTOSTART', 2)
     assert read(link, 'REC_AUTOSTART') == 2
     link.mav.param_request_read_send(42, CAMERA, b'REC_AUTOSTART', -1)
@@ -127,9 +121,9 @@ def protocol_checks(link, definition, target):
         write(link, definition, 'IMG_BRIGHTNESS', 101, M.PARAM_ACK_VALUE_UNSUPPORTED)
     if 'CAM_ZOOM' in definition.parameters:
         zoom = definition.parameters['CAM_ZOOM']
-        assert (zoom.minimum, zoom.maximum, zoom.step) == (0, 100, 1)
-        write(link, definition, 'CAM_ZOOM', 25)
-        assert abs(read(link, 'CAM_ZOOM') - 25) < 0.001
+        assert (zoom.minimum, zoom.maximum, zoom.step) == (1, 10 if target == 'mt11' else 6, 0.1)
+        write(link, definition, 'CAM_ZOOM', 2)
+        assert abs(read(link, 'CAM_ZOOM') - 2) < 0.001
         write(link, definition, 'CAM_ZOOM', float('nan'), M.PARAM_ACK_VALUE_UNSUPPORTED)
     if target == 'mt11':
         write(link, definition, 'CAM_PALETTE', 10)
@@ -142,12 +136,73 @@ def protocol_checks(link, definition, target):
         write(link, definition, 'CAM_AUTOFOCUS', 1)
         assert read(link, 'CAM_AUTOFOCUS') == 0
     drain(link)
-    link.mav.param_ext_request_read_send(43, CAMERA, b'CAM_MODE', -1)
+    link.mav.param_ext_request_read_send(43, CAMERA, b'REC_AUTOSTART', -1)
     assert link.recv_match(type='PARAM_EXT_VALUE', blocking=True, timeout=0.25) is None
-    link.mav.param_ext_request_read_send(42, 154, b'CAM_MODE', -1)
+    link.mav.param_ext_request_read_send(42, 154, b'REC_AUTOSTART', -1)
     assert link.recv_match(type='PARAM_EXT_VALUE', blocking=True, timeout=0.25) is None
     link.mav.param_ext_set_send(42, CAMERA, b'UNKNOWN_PARAM', bytes(128), M.MAV_PARAM_EXT_TYPE_INT32)
     assert receive(link, 'PARAM_EXT_ACK').param_result == M.PARAM_ACK_VALUE_UNSUPPORTED
+
+
+def lens_zoom_checks(link, definition, target):
+    if target != 'mt11':
+        return
+
+    def command(kind, value):
+        link.mav.command_long_send(42, CAMERA, M.MAV_CMD_SET_CAMERA_ZOOM,
+                                  0, kind, value, 0, 0, 0, 0, 0)
+        ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_SET_CAMERA_ZOOM)
+        assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+
+    def percentage():
+        drain(link)
+        link.mav.command_long_send(42, CAMERA, M.MAV_CMD_REQUEST_CAMERA_SETTINGS,
+                                  0, 0, 0, 0, 0, 0, 0, 0)
+        return receive(link, 'CAMERA_SETTINGS').zoomLevel
+
+    write(link, definition, 'CAM_SOURCE', 0)
+    write(link, definition, 'CAM_LENS', 0)
+    controls = definition.controls({'CAM_LENS': 0})
+    assert 'CAM_ZOOM' in controls and 'CAM_OPT_ZOOM' not in controls
+    write(link, definition, 'CAM_ZOOM', 2)
+    assert abs(percentage() - 100 / 9) < .01
+    write(link, definition, 'CAM_LENS', 1)
+    assert read(link, 'CAM_OPT_ZOOM') == 1
+    assert percentage() == 0
+    controls = definition.controls({'CAM_LENS': 1})
+    assert 'CAM_ZOOM' not in controls and 'CAM_OPT_ZOOM' in controls
+    write(link, definition, 'CAM_OPT_ZOOM', 2)
+    assert read(link, 'CAM_LENS') == 1
+    assert read(link, 'CAM_ZOOM') == 2
+    command(M.ZOOM_TYPE_RANGE, 50)
+    assert abs(read(link, 'CAM_OPT_ZOOM') - 2.1) < .001
+    assert read(link, 'CAM_LENS') == 1
+    command(M.ZOOM_TYPE_STEP, 1)
+    assert abs(read(link, 'CAM_OPT_ZOOM') - 2.2) < .001
+    command(M.ZOOM_TYPE_CONTINUOUS, -0.5)
+    time.sleep(.3)
+    command(M.ZOOM_TYPE_CONTINUOUS, 0)
+    assert 1 < read(link, 'CAM_OPT_ZOOM') < 2.2
+    assert read(link, 'CAM_LENS') == 1
+    write(link, definition, 'CAM_OPT_ZOOM', 3.2)
+    assert abs(percentage() - 100) < .01
+    write(link, definition, 'CAM_OPT_ZOOM', 3.3, M.PARAM_ACK_VALUE_UNSUPPORTED)
+    write(link, definition, 'CAM_LENS', 0)
+    assert read(link, 'CAM_ZOOM') == 2
+    command(M.ZOOM_TYPE_RANGE, 100)
+    assert read(link, 'CAM_ZOOM') == 10
+    assert read(link, 'CAM_LENS') == 0
+    write(link, definition, 'CAM_ZOOM', 2)
+    write(link, definition, 'CAM_LENS', 1)
+    assert abs(read(link, 'CAM_OPT_ZOOM') - 3.2) < .001
+    # Zoom must not swap thermal/RGB stream sources either.
+    write(link, definition, 'CAM_SOURCE', 1)
+    command(M.ZOOM_TYPE_RANGE, 0)
+    assert read(link, 'CAM_SOURCE') == 1 and read(link, 'CAM_LENS') == 1
+    assert read(link, 'CAM_OPT_ZOOM') == 1
+    write(link, definition, 'CAM_OPT_ZOOM', 2.5)
+    write(link, definition, 'CAM_SOURCE', 0)
+    print('PASS independent lens zoom, XML sliders, standard range/step/rate zoom and stream selection', flush=True)
 
 
 def live_config_checks(link, definition, target, directory, camera, rtsp_port):
@@ -238,7 +293,10 @@ def live_config_checks(link, definition, target, directory, camera, rtsp_port):
         write(link, definition, 'VIDEO_MAIN_CODEC', 0)
         write(link, definition, 'VIDEO_MAIN_RES', old_resolution)
         if 'CAM_ZOOM' in definition.parameters:
-            assert abs(read(link, 'CAM_ZOOM') - 25) < 0.001
+            assert abs(read(link, 'CAM_ZOOM') - 2) < 0.001
+    if target == 'mt11':
+        assert abs(read(link, 'CAM_OPT_ZOOM') - 2.5) < .001
+        assert read(link, 'CAM_LENS') == 1
     # A persistence failure must roll back an already applied live policy.
     config = directory / 'camera.ini'
     backup = directory / 'camera.saved'
@@ -363,6 +421,7 @@ def test_target(target, output, build_root=ROOT / 'build'):
             (directory / 'camera.xml').write_bytes(xml)
             definition = CameraDefinition(xml)
             protocol_checks(link, definition, target)
+            lens_zoom_checks(link, definition, target)
             live_config_checks(link, definition, target, directory, camera, int(env['CAMERA_APP_RTSP_PORT']))
             mavproxy_checks(endpoint, directory, link, definition)
             print(f'PASS {target}: XML download, fetch-all/read/set, live controls and MAVProxy ({directory})', flush=True)

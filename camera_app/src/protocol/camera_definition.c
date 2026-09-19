@@ -1,21 +1,15 @@
 #define _GNU_SOURCE
 #include "camera_app/camera_definition.h"
-#include "apcam/target.h"
+#include "apcam/lens.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
-static const struct ca_config_option modes[] = {
-#if APCAM_HAVE_PHOTO
-    {"Photo", 0},
-#endif
-    {"Video", 1},
-};
 #if APCAM_HAVE_FOCUS
 static const struct ca_config_option autofocus[] = {{"Idle", 0}, {"Autofocus", 1}};
 #endif
-#if APCAM_NUM_LENSES > 1
+#if APCAM_HAVE_ZOOM_LENS
 static const struct ca_config_option lenses[] = {{"Wide RGB", 0}, {"Zoom RGB", 1}};
 #endif
 #if APCAM_HAVE_THERMAL
@@ -28,15 +22,19 @@ static const struct ca_config_option gains[] = {{"Low gain", 0}, {"High gain", 1
 #define CONFIG(name_, description_) \
     {name_, description_, CA_CAMERA_CONFIG, 6, 0, 0, 0, NULL, 0, -1}
 static const struct ca_camera_parameter parameters[] = {
-    OPTIONS("CAM_MODE", "Camera mode", CA_CAMERA_MODE, APCAM_HAVE_PHOTO ? 0 : 1, modes),
 #if APCAM_HAVE_ZOOM && !APCAM_ZOOM_NATIVE_RATE
     /* Native rate-only zoom has no trustworthy absolute position readback. */
-    {"CAM_ZOOM", "Zoom (%)", CA_CAMERA_ZOOM, 9, 0, 0, 100, NULL, 0, -1},
+    {"CAM_ZOOM", APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",
+     CA_CAMERA_ZOOM, 9, 1, 1, APCAM_ZOOM_CONTROL_MAX, NULL, 0, -1},
+#if APCAM_HAVE_ZOOM_LENS
+    {"CAM_OPT_ZOOM", "Optical zoom (x)", CA_CAMERA_OPTICAL_ZOOM, 9,
+     1, 1, APCAM_ZOOM_LENS_OPTICAL_MAX, NULL, 0, -1},
+#endif
 #endif
 #if APCAM_HAVE_FOCUS
     OPTIONS("CAM_AUTOFOCUS", "Autofocus selected RGB lens", CA_CAMERA_AUTOFOCUS, 0, autofocus),
 #endif
-#if APCAM_NUM_LENSES > 1
+#if APCAM_HAVE_ZOOM_LENS
     OPTIONS("CAM_LENS", "RGB lens", CA_CAMERA_LENS, 0, lenses),
 #endif
 #if APCAM_HAVE_THERMAL
@@ -147,7 +145,9 @@ char *ca_camera_definition(size_t *length)
                 p.name, p.type == 9 ? "float" : p.type == 1 ? "bool" : "int32", (double)p.initial);
         if (!p.option_count) {
             fprintf(out, " min=\"%.9g\" max=\"%.9g\"", (double)p.minimum, (double)p.maximum);
-            if (p.type != 9 || p.operation == CA_CAMERA_ZOOM) fputs(" step=\"1\"", out);
+            if (p.operation == CA_CAMERA_ZOOM || p.operation == CA_CAMERA_OPTICAL_ZOOM)
+                fputs(" step=\"0.1\"", out);
+            else if (p.type != 9) fputs(" step=\"1\"", out);
         }
         fputs(">\n      <description>", out);
         xml_text(out, p.description);
@@ -157,16 +157,20 @@ char *ca_camera_definition(size_t *length)
             for (size_t j = 0; j < p.option_count; j++) {
                 fputs("        <option name=\"", out);
                 xml_text(out, p.options[j].name);
-                fprintf(out, "\" value=\"%d\"/>\n", p.options[j].value);
+                fprintf(out, "\" value=\"%d\"", p.options[j].value);
+                if (p.operation == CA_CAMERA_LENS) {
+                    fprintf(out, "><exclusions><exclude>%s</exclude></exclusions></option>\n",
+                            p.options[j].value == 0 ? "CAM_OPT_ZOOM" : "CAM_ZOOM");
+                } else fputs("/>\n", out);
             }
             fputs("      </options>\n", out);
         }
         if (p.operation == CA_CAMERA_AUTOFOCUS) {
             fputs("      <updates><update>CAM_AUTOFOCUS</update></updates>\n", out);
-        } else if (p.operation == CA_CAMERA_ZOOM && APCAM_NUM_LENSES > 1) {
-            fputs("      <updates><update>CAM_LENS</update></updates>\n", out);
         } else if (p.operation == CA_CAMERA_LENS) {
-            fputs("      <updates><update>CAM_ZOOM</update></updates>\n", out);
+            fputs("      <updates><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n", out);
+        } else if (p.operation == CA_CAMERA_SOURCE && APCAM_HAVE_ZOOM_LENS) {
+            fputs("      <updates><update>CAM_LENS</update><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n", out);
         }
         fputs("    </parameter>\n", out);
     }
