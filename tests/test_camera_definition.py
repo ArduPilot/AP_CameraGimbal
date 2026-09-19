@@ -120,7 +120,7 @@ class FTPTest(unittest.TestCase):
         cls.work = tempfile.TemporaryDirectory(prefix='apcam-ftp-test-')
         library = Path(cls.work.name) / 'ftp.so'
         subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
-                        '-I' + str(ROOT / 'camera_app/include'),
+                        '-I' + str(ROOT / 'include'), '-I' + str(ROOT / 'camera_app/include'),
                         str(ROOT / 'camera_app/src/protocol/camera_ftp.cpp'), '-o', str(library)], check=True)
         cls.library = ctypes.CDLL(str(library))
         cls.reply = cls.library.ca_camera_ftp_reply
