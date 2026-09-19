@@ -323,3 +323,11 @@ installation. ZR10 and Z1-Mini packages include assets in their checksums. Nativ
 SITL uses the source webroot, and the standalone Windows payload includes its
 own copy selected with `CAMERA_GIMBAL_SITL_WEBROOT`. There is no dependency on a
 system web server, JavaScript package manager or an internet-hosted UI bundle.
+
+Z1-Mini has an asset-independent recovery page when any webroot file is missing
+or unavailable. Open the camera's main URL, log in with the existing credentials
+and upload a complete `Z1Mini_AP_*.gcu` package. Its small built-in login/upload
+page uses the usual authentication, CSRF checks and atomic firmware installer.
+Only the upload JavaScript is also compiled into the Z1 server, generated from
+the normal source; no CSS, templates or external JavaScript files are needed.
+The normal UI returns automatically when all assets are installed.
