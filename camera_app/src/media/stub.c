@@ -42,6 +42,7 @@ struct ca_media_impl {
     bool has_thermal;
     float digital_ratio[2];
     float optical_ratio;
+    bool optical_available;
     _Atomic float visible_hfov_deg;
     _Atomic enum ca_media_lens lens;
     _Atomic bool thermal_main;
@@ -511,6 +512,8 @@ int ca_media_impl_open(struct ca_media_impl **result, const struct ca_media_conf
     media->has_thermal = APCAM_HAVE_THERMAL;
     media->digital_ratio[0] = media->digital_ratio[1] = 1.0f;
     media->optical_ratio = 1.0f;
+    /* Fault injection for the advertised-but-unavailable optical controls. */
+    media->optical_available = getenv("CAMERA_APP_TEST_OPTICAL_UNAVAILABLE") == NULL;
     atomic_store(&media->visible_hfov_deg,
                  ca_lens1_hfov(media->zoom));
     media->lens = CA_MEDIA_LENS_WIDE;
@@ -618,6 +621,10 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
         errno = EINVAL;
         return -1;
     }
+    if (apcam_uses_zoom_lens(zoom) && !media->optical_available) {
+        errno = ENODEV;
+        return -1;
+    }
     media->zoom = zoom;
     media->lens = apcam_uses_zoom_lens(zoom) ? CA_MEDIA_LENS_ZOOM
                                                   : CA_MEDIA_LENS_WIDE;
@@ -638,6 +645,7 @@ int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens 
         return -1;
     }
     if (lens == CA_MEDIA_LENS_ZOOM) {
+        if (!media->optical_available) { errno = ENODEV; return -1; }
         media->optical_ratio = zoom;
         media->digital_ratio[lens] = 1;
     } else media->digital_ratio[lens] = zoom;
@@ -652,7 +660,8 @@ float ca_media_impl_lens_zoom(const struct ca_media_impl *media, enum ca_media_l
 {
     if (!media) return NAN;
     if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[lens];
-    if (lens == CA_MEDIA_LENS_ZOOM && APCAM_HAVE_ZOOM_LENS) return media->optical_ratio;
+    if (lens == CA_MEDIA_LENS_ZOOM && APCAM_HAVE_ZOOM_LENS && media->optical_available)
+        return media->optical_ratio;
     return NAN;
 }
 

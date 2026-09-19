@@ -2202,7 +2202,9 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
         return isfinite(*value);
     case CA_CAMERA_OPTICAL_ZOOM:
         *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM);
-        return isfinite(*value);
+        /* An unavailable lens still occupies an advertised parameter index.
+         * Reply with NaN so reads and fetch-all complete; writes still fail. */
+        return true;
     case CA_CAMERA_AUTOFOCUS: *value = 0; return true;
     case CA_CAMERA_LENS: *value = (float)ca_media_lens(server->media); return true;
     case CA_CAMERA_SOURCE: *value = ca_media_thermal_main(server->media) ? 1 : 0; return true;
@@ -2259,7 +2261,10 @@ static void update_binlog(struct ca_mavlink_server *server, bool allow_stop)
                 if (!ca_media_cached_thermal_controls(server->media,&gain,&palette)) continue;
                 value=p.operation==CA_CAMERA_GAIN ? gain : palette;
             } else if (!camera_parameter_get(server,&p,&value)) continue;
-            if (!server->log_snapshot_valid || value!=server->logged_camera[i]) ca_binlog_parameter(p.name,value,false);
+            if (!server->log_snapshot_valid ||
+                (value != server->logged_camera[i] &&
+                 !(isnan(value) && isnan(server->logged_camera[i]))))
+                ca_binlog_parameter(p.name, value, false);
             server->logged_camera[i]=value;
         }
         server->log_snapshot_valid=true;
