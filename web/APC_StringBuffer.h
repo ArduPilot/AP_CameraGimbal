@@ -17,11 +17,14 @@ public:
     APC_StringBuffer(const APC_StringBuffer &) = delete;
     APC_StringBuffer &operator=(const APC_StringBuffer &) = delete;
 
-    const char *data() const { return _data; }
+    const char *data() const { return _data ? _data : ""; }
+    void invalidate() { _failed = true; }
+    bool valid() const { return !_failed; }
     size_t size() const { return _length; }
-    void reset() { free(_data); _data = nullptr; _length = _capacity = 0; }
+    void reset() { free(_data); _data = nullptr; _length = _capacity = 0; _failed = false; }
     char *release()
     {
+        if (_failed) { reset(); return nullptr; }
         char *result = _data;
         _data = nullptr;
         _length = _capacity = 0;
@@ -41,6 +44,7 @@ private:
     char *_data = nullptr;
     size_t _length = 0;
     size_t _capacity = 0;
+    bool _failed = false;
 };
 
 inline bool APC_StringBuffer::reserve(size_t extra)
@@ -49,7 +53,9 @@ inline bool APC_StringBuffer::reserve(size_t extra)
     size_t new_cap;
     char *new_data;
 
+    if (_failed) return false;
     if (extra > SIZE_MAX - _length - 1) {
+        _failed = true;
         return false;
     }
     needed = _length + extra + 1;
@@ -66,6 +72,7 @@ inline bool APC_StringBuffer::reserve(size_t extra)
     }
     new_data = static_cast<char *>(realloc(_data, new_cap));
     if (new_data == NULL) {
+        _failed = true;
         return false;
     }
     _data = new_data;

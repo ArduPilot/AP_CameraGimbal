@@ -73,7 +73,8 @@ def lie_about_uncompressed_size(data, names, declared_size):
 
 AP = {'camera-app': b'#!/bin/sh\necho new camera\n', 'z1mini-web': b'#!/bin/sh\necho new web\n',
       'service.sh': b'#!/bin/sh\n', 'ax-capture': b'#!/bin/sh\n', 'camera.ini.default': b'[general]\n',
-      'web.pass.default': b'ardupilot\n', 'README.md': b'readme\n'}
+      'web.pass.default': b'ardupilot\n', 'README.md': b'readme\n',
+      'webroot/head.html': b'<title>new template</title>', 'webroot/style.css': b'body{color:black}'}
 IPC = {'run.sh': b'#!/bin/sh\n./camera_gcu.sh &\n', 'camera_gcu.sh': b'#!/bin/sh\n'}
 
 if not (MAVLINK / 'all/mavlink.h').exists():
@@ -86,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                     '-Wno-address-of-packed-member', '-ffunction-sections', '-fdata-sections',
                     '-Wl,--gc-sections', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI',
-                    '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
+                    '-D__CYGWIN__', '-DWEB_PORTABLE_SITL', f'-DWEBROOT_PATH="{Path(__file__).resolve().parents[1] / "webroot"}"', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
                     f'-I{MAVLINK}', str(WEB / 'tests/test_z1mini_exchange.cpp'),
                     '-o', str(exchange_test), '-lm'], check=True)
     subprocess.run([str(exchange_test), str(root)], check=True)
@@ -100,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     config = (ROOT / 'packaging/z1mini/camera.ini').read_bytes()
     (settings / 'camera.ini').write_bytes(config)
     binary = root / 'z1mini-web'
-    paths = dict(GCU_ROOT=gcu, APP_DIR=gcu / 'ap', APP_SELECTION_DIR=settings, MEDIA_ROOT=media,
+    paths = dict(WEBROOT_PATH=WEB / "webroot", GCU_ROOT=gcu, APP_DIR=gcu / 'ap', APP_SELECTION_DIR=settings, MEDIA_ROOT=media,
                  PASSWORD_PATH=settings / 'web.pass', REPLACEMENT_CONFIG_PATH=settings / 'camera.ini',
                  REPLACEMENT_CONFIG_BACKUP_PATH=settings / 'camera.ini.bak', SESSION_PATH=run / 'sessions',
                  UPGRADE_LOCK_PATH=run / 'upgrade.lock', USER_LOCK_PATH=run / 'users.lock',
@@ -174,6 +175,7 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
             'other target': package(AP, IPC, manifest=b'{"target": "xfrobot-other"}\n'),
             'needs vendor isp': package(AP, IPC, manifest=b'{"target": "xfrobot-z1mini", "vendor_isp_required": true}\n'),
             'unlisted extra file': package(AP | {'unlisted.bin': b'payload'}, IPC),
+            'unlisted web asset': package(AP | {'webroot/unknown.js': b'payload'}, IPC),
             'dot path': raw_zip({'gcu/ap/..': b'x'}),
             'underdeclared extracted size exceeds remaining budget': lie_about_uncompressed_size(
                 package(AP | {'camera-app': b'a' * 1200, 'z1mini-web': b'b' * 1200}, IPC),
@@ -227,6 +229,9 @@ with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
         assert ((gcu / 'ap').stat().st_mode & 0o777) == 0o755
         assert ((gcu / 'ipc').stat().st_mode & 0o777) == 0o755
         assert ((gcu / 'ap/README.md').stat().st_mode & 0o777) == 0o644
+        assert (gcu / 'ap/webroot/head.html').read_bytes() == AP['webroot/head.html']
+        assert (gcu / 'ap/webroot/style.css').read_bytes() == AP['webroot/style.css']
+        assert ((gcu / 'ap/webroot/head.html').stat().st_mode & 0o777) == 0o644
         assert not list(run.glob('firmware-upload.*'))
         assert (settings / 'camera.ini').read_bytes() == config
         # A retained-ISP package is never accepted by the destructive web

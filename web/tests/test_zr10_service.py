@@ -103,7 +103,7 @@ sys.exit(0 if pids else 1)
         "SESSION_PATH": runtime/'sessions', "RUNTIME_DIR": runtime,
     }
     subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-std=gnu++17', '-DAPCAM_TARGET=APCAM_TARGET_ZR10',
-                    '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', '-DWEB_SUPERVISED_TEST',
+                    f'-DWEBROOT_PATH="{Path(__file__).resolve().parents[1] / "webroot"}"', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL', '-DWEB_SUPERVISED_TEST',
                     *[f'-D{key}="{value}"' for key, value in paths.items()],
                     str(repo/'web/mt11-web.cpp'), '-o', str(app/'zr10-web')], check=True)
     with socket.socket() as listener:

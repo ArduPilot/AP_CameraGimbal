@@ -83,7 +83,7 @@ both the MT11 and A8 builds is translated, including parameter labels and
 help, notices, error replies and the text in the page scripts. Technical
 identifiers such as parameter keys, paths, ports and codec names, and the
 captured application output on the Debug page, stay as they are. The strings
-live in one table in `mt11-web.cpp`, indexed by a string id with one column per
+live in `APC_Translations.h`, indexed by a string id with one column per
 language.
 
 The service deliberately implements HTTP rather than TLS. It is intended only
@@ -298,3 +298,28 @@ failures never start the vendor camera application. The AP app serves raw therma
 frames on TCP 7345 on targets with that capability.
 
 Target properties and platform paths come from [the target headers](../include/apcam/README.md).
+
+## C++ server and installed webroot
+
+`APC_HTTPRequest` owns each request buffer and parsing limits;
+`APC_HTTPResponse` owns response framing and the browser security policy.
+Authentication, language selection and firmware transactions retain their
+existing routes. Page-specific data and escaped values are passed to HTML
+fragments in `webroot/`; small conditional rows stay with their C++ renderer.
+All substantial JavaScript and CSS are ordinary files there. Translated scripts
+still receive a per-request `L` object before their JavaScript body.
+
+`APC_WebRoot` permits only names in the build-generated asset manifest. It
+opens flat regular files relative to a directory descriptor, refuses symlinks
+and special files, and limits each asset to 256 KiB. HTML fragments are private:
+only explicit script/style routes are served. Their `{{0}}` substitutions are
+values already escaped by the page for the destination context; templates are
+never used as printf format strings. Missing or invalid templates fail the
+whole page rather than publishing truncated forms.
+
+Every firmware package installs `webroot` alongside the application data
+(`APP_DIR/webroot`); updating an executable alone is no longer a complete web
+installation. ZR10 and Z1-Mini packages include assets in their checksums. Native
+SITL uses the source webroot, and the standalone Windows payload includes its
+own copy selected with `CAMERA_GIMBAL_SITL_WEBROOT`. There is no dependency on a
+system web server, JavaScript package manager or an internet-hosted UI bundle.

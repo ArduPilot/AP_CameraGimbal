@@ -16,6 +16,9 @@ def main():
     for path in (ROOT / 'build/windows/native').iterdir():
         if path.suffix.lower() in ('.exe', '.dll'):
             shutil.copy2(path, PAYLOAD / 'native' / path.name)
+    # Replace the tree to avoid shipping stale templates from an older build.
+    shutil.rmtree(PAYLOAD / 'webroot', ignore_errors=True)
+    shutil.copytree(ROOT / 'web/webroot', PAYLOAD / 'webroot')
     shutil.copy2(ROOT / 'build/targets/targets.json', PAYLOAD / 'targets.json')
     ffmpeg = PAYLOAD / 'native/ffmpeg.exe'
     shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)

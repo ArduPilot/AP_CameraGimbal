@@ -178,6 +178,12 @@ def main():
                           web_source, re.S)
     assert allowlist
     accepted = set(re.findall(r'"(gcu/[^" ]+)"', allowlist.group(1)))
+    web_assets = {
+        'gcu/ap/webroot/' + path.relative_to(ROOT / 'web/webroot').as_posix(): path.read_bytes()
+        for path in (ROOT / 'web/webroot').rglob('*') if path.is_file()
+    }
+    assert web_assets, 'Web assets must be bundled in Z1-Mini updates'
+    accepted.update(web_assets)
     builder = ast.parse((ROOT/'tools/build_z1mini_package.py').read_text())
     app_files, ipc_files = set(), set()
     for node in ast.walk(builder):
@@ -192,7 +198,7 @@ def main():
                         app_files.add(key.value)
                     if isinstance(target.value, ast.Name) and target.value.id == 'members' and isinstance(key, ast.Constant) and isinstance(key.value, str):
                         ipc_files.add(key.value)
-    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files
+    builder_members = {'gcu/ap/' + name for name in app_files} | ipc_files | set(web_assets)
     assert accepted == builder_members, (accepted, builder_members)
     with tempfile.TemporaryDirectory(prefix='z1mini-test-') as temp:
         root = Path(temp)
@@ -320,6 +326,7 @@ def main():
             temp_file = root/'soc_temp'; temp_file.write_text('80125\n')
             webbin = root/'z1mini-web'
             paths = {
+                "WEBROOT_PATH": ROOT / "web/webroot",
                 'APP_DIR':root, 'APP_SELECTION_DIR':root, 'MEDIA_ROOT':root,
                 'PASSWORD_PATH':root/'web.pass', 'REPLACEMENT_CONFIG_PATH':config,
                 'REPLACEMENT_CONFIG_BACKUP_PATH':root/'config.bak', 'SESSION_PATH':root/'sessions',
@@ -407,6 +414,8 @@ def main():
             for path in packages:
                 with zipfile.ZipFile(path) as z:
                     assert z.read('gcu/ap/camera.ini.default') == (ROOT/'packaging/z1mini/camera.ini').read_bytes()
+                    for name, content in web_assets.items():
+                        assert z.read(name) == content, name
             packages += list((ROOT/'build').glob('Z1Mini_AP_*.gcu'))
             packages += list((ROOT/'release').rglob('Z1Mini_AP_*.gcu'))
             for path in packages:

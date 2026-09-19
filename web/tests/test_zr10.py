@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
     binary = root / "zr10-web"
     subprocess.run([
         "c++", "-std=gnu++17", "-Wno-missing-field-initializers", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-        "-std=gnu++17", "-DAPCAM_TARGET=APCAM_TARGET_ZR10", "-DMT11_WEB_TEST", "-DMT11_WEB_SITL",
+        "-std=gnu++17", "-DAPCAM_TARGET=APCAM_TARGET_ZR10", f'-DWEBROOT_PATH="{Path(__file__).resolve().parents[1] / "webroot"}"', "-DMT11_WEB_TEST", "-DMT11_WEB_SITL",
         *[f'-D{name}="{value}"' for name, value in paths.items()],
         str(web / "mt11-web.cpp"), "-o", str(binary),
     ], check=True)

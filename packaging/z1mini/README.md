@@ -34,6 +34,10 @@ vendor camera programs are removed and the package ships the `ipc/run.sh`
 boot hook that `/etc/init.d/rcS` launches. Power-cycle recovery and
 interrupted-update handling still need hardware verification.
 
+Older AP builds from before the external webroot reject the new asset files
+in the web update archive. Use the XFRobot `.gcu` updater once when moving
+from one of those builds; later updates work through the AP web UI.
+
 Once the AP application is running, later packages can be uploaded on the web
 **Status** page. The server streams the `.gcu` to RAM, checks the archive
 listing, extracts it next to `/opt/bin/gcu` with the camera's `unzip`, verifies
