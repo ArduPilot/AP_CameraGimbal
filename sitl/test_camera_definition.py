@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -181,7 +182,7 @@ def protocol_checks(link, definition, target):
     assert receive(link, 'PARAM_EXT_ACK').param_result == M.PARAM_ACK_VALUE_UNSUPPORTED
 
 
-def lens_zoom_checks(link, definition, target):
+def lens_zoom_checks(link, definition, target, vendor_port):
     if target != 'mt11':
         return
 
@@ -221,6 +222,74 @@ def lens_zoom_checks(link, definition, target):
     command(M.ZOOM_TYPE_CONTINUOUS, 0)
     assert 1 < read(link, 'CAM_OPT_ZOOM') < 2.2
     assert read(link, 'CAM_LENS') == 1
+    # The E5739 rounds up to its next 0.1x calibration factor. Test values
+    # between rows so an ideal, unquantised simulator cannot hide regressions.
+    for requested, achieved in ((2.0, 2.0), (2.001, 2.1), (1.999, 2.0), (2.101, 2.2)):
+        assert abs(write(link, definition, 'CAM_OPT_ZOOM', requested) - requested) < .001
+        assert abs(read(link, 'CAM_OPT_ZOOM') - achieved) < .001
+    # Check every step boundary, especially 2.2f - 0.1f rounding just above
+    # the next row and otherwise stalling a downward optical step.
+    write(link, definition, 'CAM_OPT_ZOOM', 3.2)
+    for tenths in range(31, 9, -1):
+        command(M.ZOOM_TYPE_STEP, -1)
+        assert abs(read(link, 'CAM_OPT_ZOOM') - tenths / 10) < .001, tenths
+    for tenths in range(11, 33):
+        command(M.ZOOM_TYPE_STEP, 1)
+        assert abs(read(link, 'CAM_OPT_ZOOM') - tenths / 10) < .001, tenths
+    # Percentage conversion must not push exact row boundaries up one step.
+    for tenths in range(10, 33):
+        command(M.ZOOM_TYPE_RANGE, (tenths - 10) * 100 / 22)
+        assert abs(read(link, 'CAM_OPT_ZOOM') - tenths / 10) < .001, tenths
+    # At 20 ms updates each increment is much smaller than an optical step.
+    # Repeated rate commands must preserve accumulated fractional progress.
+    for rate in (-.05, .05):
+        write(link, definition, 'CAM_OPT_ZOOM', 2)
+        started = time.monotonic()
+        command(M.ZOOM_TYPE_CONTINUOUS, rate)
+        while time.monotonic() - started < 2.5:
+            time.sleep(.05)
+            command(M.ZOOM_TYPE_CONTINUOUS, rate)
+        command(M.ZOOM_TYPE_CONTINUOUS, 0)
+        elapsed = time.monotonic() - started
+        achieved = read(link, 'CAM_OPT_ZOOM')
+        expected = 2 + rate * 2 * elapsed
+        assert -.04 <= achieved - expected <= .14, (rate, elapsed, achieved, expected)
+        time.sleep(.15)
+        assert read(link, 'CAM_OPT_ZOOM') == achieved  # stopped
+    # A new direct setting cancels the old rate; restarting seeds from it.
+    for direct in ('range', 'step', 'parameter', 'lens', 'vendor'):
+        write(link, definition, 'CAM_OPT_ZOOM', 2)
+        command(M.ZOOM_TYPE_CONTINUOUS, -.05)
+        time.sleep(.1)
+        if direct == 'range':
+            command(M.ZOOM_TYPE_RANGE, 50)
+        elif direct == 'step':
+            command(M.ZOOM_TYPE_STEP, 1)
+        elif direct == 'parameter':
+            write(link, definition, 'CAM_OPT_ZOOM', 2.5)
+        elif direct == 'lens':
+            write(link, definition, 'CAM_LENS', 0)
+        else:
+            # A SIYI hybrid zoom command takes control outside MAVLink.
+            packet = struct.pack('<BBBHHB', 0x55, 0x66, 1, 2, 1, 0x0f) + bytes([2, 0])
+            packet += struct.pack('<H', binascii.crc_hqx(packet, 0))
+            with socket.create_connection(('127.0.0.1', vendor_port), timeout=3) as vendor:
+                vendor.sendall(packet)
+                assert vendor.recv(256)
+            assert read(link, 'CAM_LENS') == 0
+        stopped = read(link, 'CAM_OPT_ZOOM')
+        wide = read(link, 'CAM_ZOOM')
+        time.sleep(1.2)  # long enough for the old slow rate to cross a step
+        assert read(link, 'CAM_OPT_ZOOM') == stopped, direct
+        assert read(link, 'CAM_ZOOM') == wide, direct
+        write(link, definition, 'CAM_LENS', 1)
+    # Clamp at each end of the optical range.
+    for initial, rate, limit in ((3.1, 1, 3.2), (1.1, -1, 1)):
+        write(link, definition, 'CAM_OPT_ZOOM', initial)
+        command(M.ZOOM_TYPE_CONTINUOUS, rate)
+        time.sleep(.2)
+        assert abs(read(link, 'CAM_OPT_ZOOM') - limit) < .001
+        command(M.ZOOM_TYPE_CONTINUOUS, 0)
     write(link, definition, 'CAM_OPT_ZOOM', 3.2)
     assert abs(percentage() - 100) < .01
     write(link, definition, 'CAM_OPT_ZOOM', 3.3, M.PARAM_ACK_VALUE_UNSUPPORTED)
@@ -408,7 +477,7 @@ def mavproxy_checks(endpoint, directory, link, definition):
             cli.close(force=True)
 
 
-def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=False):
+def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=False, zoom_only=False):
     build = build_root / ('sitl' if target == 'mt11' else target + '-sitl')
     directory = Path(tempfile.mkdtemp(prefix=target + '-', dir=output))
     config = directory / 'camera.ini'
@@ -463,6 +532,9 @@ def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=F
             assert xml == (ROOT / 'build/camera-definitions' / (target + '.xml')).read_bytes()
             (directory / 'camera.xml').write_bytes(xml)
             definition = CameraDefinition(xml)
+            if zoom_only:
+                lens_zoom_checks(link, definition, target, int(env['CAMERA_APP_PORT']))
+                return
             if optical_unavailable:
                 unavailable_optical_checks(link, definition)
                 stop(camera)
@@ -483,7 +555,7 @@ def test_target(target, output, build_root=ROOT / 'build', optical_unavailable=F
                 print('PASS unavailable optical zoom logged once as NaN', flush=True)
                 return
             protocol_checks(link, definition, target)
-            lens_zoom_checks(link, definition, target)
+            lens_zoom_checks(link, definition, target, int(env['CAMERA_APP_PORT']))
             live_config_checks(link, definition, target, directory, camera, int(env['CAMERA_APP_RTSP_PORT']))
             mavproxy_checks(endpoint, directory, link, definition)
             print(f'PASS {target}: XML download, fetch-all/read/set, live controls and MAVProxy ({directory})', flush=True)
@@ -497,13 +569,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
                         default=['mt11', 'a8', 'zr10', 'z1mini'])
+    parser.add_argument('--zoom-only', action='store_true', help='run MT11 zoom regressions without the MAVProxy console checks')
     parser.add_argument('--component', type=int, choices=range(100, 106), default=100)
     parser.add_argument('--build-root', type=Path, default=ROOT / 'build')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/camera-definition-test')
     args = parser.parse_args()
+    if args.zoom_only and args.targets != ['mt11']:
+        parser.error('--zoom-only requires --targets mt11')
     CAMERA = args.component
     args.output.mkdir(parents=True, exist_ok=True)
     for target in args.targets:
-        test_target(target, args.output.resolve(), args.build_root.resolve())
-        if target == 'mt11':
+        test_target(target, args.output.resolve(), args.build_root.resolve(), zoom_only=args.zoom_only)
+        if target == 'mt11' and not args.zoom_only:
             test_target(target, args.output.resolve(), args.build_root.resolve(), optical_unavailable=True)

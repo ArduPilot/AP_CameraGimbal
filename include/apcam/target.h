@@ -23,6 +23,9 @@
 #ifndef APCAM_TRACKING_RATE_I
 #define APCAM_TRACKING_RATE_I 0.0f
 #endif
+#ifndef APCAM_SIM_OPTICAL_ZOOM_STEP
+#define APCAM_SIM_OPTICAL_ZOOM_STEP 0.0f
+#endif
 /* String forms for configuration defaults; numeric IDs remain stable. */
 #define APCAM_RESOLUTION_NAME(value) ((value) == APCAM_RES_720P ? "1280x720" : \
     (value) == APCAM_RES_1080P ? "1920x1080" : (value) == APCAM_RES_1440P ? "2560x1440" : "3840x2160")

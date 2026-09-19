@@ -104,6 +104,10 @@ jobs:
         run: |
           python3 tests/test_overlay.py
           make sitl-image-controls-test
+      - name: Test quantised MT11 optical zoom and continuous rate control
+        run: |
+          make camera-definitions
+          python3 sitl/test_camera_definition.py --targets mt11 --zoom-only
       - name: Test bounded video fixture catch-up
         run: python3 sitl/test_video_fixture.py
       - name: Check headless Qt runtime

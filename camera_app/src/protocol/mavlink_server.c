@@ -121,9 +121,12 @@ struct ca_mavlink_server {
     uint64_t last_thermal_ms[APCAM_NUM_STREAMS];
 #endif
     float zoom_rate;
+    float zoom_target; /* Integrate requests without discarding sub-step motion. */
+    float zoom_observed;
+    enum ca_media_lens zoom_lens;
+    uint64_t zoom_updated_ms;
     float focus_percent;
     uint64_t started_ms;
-    uint64_t last_periodic_ms;
     uint64_t last_heartbeat_ms;
     uint64_t last_attitude_request_ms;
     uint64_t last_attitude_status_ms;
@@ -644,7 +647,15 @@ static float selected_zoom(const struct ca_mavlink_server *server)
 static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
 {
 #if APCAM_HAVE_ZOOM_LENS
-    return ca_media_set_lens_zoom(server->media, ca_media_lens(server->media), zoom);
+    enum ca_media_lens lens = ca_media_lens(server->media);
+    if (lens == CA_MEDIA_LENS_ZOOM) {
+        /* Range/step arithmetic can land a float ULP above a calibration
+         * boundary (e.g. 2.2f - 0.1f), incorrectly selecting the next row.
+         * Snap only rounding noise; retain meaningful fractional requests. */
+        float tenth = roundf(zoom * 10.0f) / 10.0f;
+        if (fabsf(zoom - tenth) < 0.000001f) zoom = tenth;
+    }
+    return ca_media_set_lens_zoom(server->media, lens, zoom);
 #else
     return ca_backend_set_zoom(server->backend, zoom);
 #endif
@@ -1325,11 +1336,24 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
         if (!isfinite(value) || value < -1.0f || value > 1.0f) {
             return MAV_RESULT_DENIED;
         }
+        if (value != 0.0f) {
+            float zoom = selected_zoom(server);
+            enum ca_media_lens lens = ca_media_lens(server->media);
+            if (!isfinite(zoom)) return MAV_RESULT_FAILED;
+            if (server->zoom_rate == 0.0f || lens != server->zoom_lens ||
+                zoom != server->zoom_observed) {
+                server->zoom_target = server->zoom_observed = zoom;
+                server->zoom_lens = lens;
+                server->zoom_updated_ms = monotonic_ms();
+            }
+        }
+        /* Repeated rate messages must not reset fractional progress. */
         server->zoom_rate = value;
         return MAV_RESULT_ACCEPTED;
     }
     if (zoom_type == 0U && isfinite(value)) {
         if (value == 0.0f) return MAV_RESULT_ACCEPTED;
+        server->zoom_rate = 0.0f;
         float zoom = selected_zoom(server) + (value < 0.0f ? -0.1f : 0.1f);
         if (zoom < 1.0f) zoom = 1.0f;
         if (zoom > selected_zoom_max(server)) zoom = selected_zoom_max(server);
@@ -2751,7 +2775,6 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     server->next_image_index = 1;
     server->focus_percent = NAN;
     server->started_ms = monotonic_ms();
-    server->last_periodic_ms = server->started_ms;
     server->pollset = ca_poll_open();
     if (server->pollset == NULL) goto fail;
     /* Keep the web UI and other transports available for reconfiguration,
@@ -2875,8 +2898,6 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
         pack_capture_status(server, &status);
         broadcast_message(server, &status);
     }
-    float elapsed = (float)(now - server->last_periodic_ms) / 1000.0f;
-    server->last_periodic_ms = now;
     if (server->parameter_list_active) {
         send_parameter(server, server->next_parameter++);
         if (server->next_parameter >= ca_config_param_count()) {
@@ -2890,11 +2911,24 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
         if (list->next >= ca_camera_param_count()) list->active = false;
     }
     update_target_location(server, now);
-    if (server->zoom_rate != 0.0f && elapsed > 0.0f) {
-        float zoom = selected_zoom(server) + server->zoom_rate * 2.0f * elapsed;
-        if (zoom <= 1.0f) { zoom = 1.0f; server->zoom_rate = 0.0f; }
-        if (zoom >= selected_zoom_max(server)) { zoom = selected_zoom_max(server); server->zoom_rate = 0.0f; }
-        if (set_selected_zoom(server, zoom) < 0) server->zoom_rate = 0;
+    if (server->zoom_rate != 0.0f) {
+        float observed = selected_zoom(server);
+        if (!isfinite(observed) || ca_media_lens(server->media) != server->zoom_lens ||
+            observed != server->zoom_observed) {
+            /* A vendor command or pipeline change took control of this lens. */
+            server->zoom_rate = 0;
+        } else if (now > server->zoom_updated_ms) {
+            float elapsed = (float)(now - server->zoom_updated_ms) / 1000.0f;
+            server->zoom_updated_ms = now;
+            server->zoom_target += server->zoom_rate * 2.0f * elapsed;
+            if (server->zoom_target <= 1.0f) { server->zoom_target = 1.0f; server->zoom_rate = 0; }
+            if (server->zoom_target >= selected_zoom_max(server)) {
+                server->zoom_target = selected_zoom_max(server);
+                server->zoom_rate = 0;
+            }
+            if (set_selected_zoom(server, server->zoom_target) < 0) server->zoom_rate = 0;
+            server->zoom_observed = selected_zoom(server);
+        }
     }
     if (server->captures_remaining != 0 && now >= server->next_capture_ms) {
         (void)capture_one(server, server->next_image_index++);

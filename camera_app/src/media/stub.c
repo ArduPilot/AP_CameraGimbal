@@ -614,6 +614,19 @@ float ca_media_impl_hfov(const struct ca_media_impl *media, bool thermal)
     return atomic_load(&media->visible_hfov_deg);
 }
 
+/* Match the hardware calibration lookup's ceiling, including float boundary
+ * comparisons. Division by integer steps matches parsed decimal table factors
+ * without rounding an exactly representable setting to the next step. */
+static float optical_zoom_factor(float requested)
+{
+    if (APCAM_SIM_OPTICAL_ZOOM_STEP <= 0) return requested;
+    unsigned steps = (unsigned)lroundf(1.0f / APCAM_SIM_OPTICAL_ZOOM_STEP);
+    float factor = 1;
+    for (unsigned n = steps; factor < requested && factor < APCAM_ZOOM_LENS_OPTICAL_MAX; n++)
+        factor = fminf((float)(n + 1) / steps, APCAM_ZOOM_LENS_OPTICAL_MAX);
+    return factor;
+}
+
 int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
 {
     if (media == NULL || !isfinite(zoom) || zoom < 1.0f ||
@@ -629,7 +642,7 @@ int ca_media_impl_set_zoom(struct ca_media_impl *media, float zoom)
     media->lens = apcam_uses_zoom_lens(zoom) ? CA_MEDIA_LENS_ZOOM
                                                   : CA_MEDIA_LENS_WIDE;
     media->thermal_main = false;
-    media->optical_ratio = apcam_zoom_lens_optical(zoom);
+    media->optical_ratio = optical_zoom_factor(apcam_zoom_lens_optical(zoom));
     media->digital_ratio[media->lens] = media->lens == CA_MEDIA_LENS_WIDE ? zoom : 1.0f;
     update_hfov(media);
     return 0;
@@ -646,7 +659,7 @@ int ca_media_impl_set_lens_zoom(struct ca_media_impl *media, enum ca_media_lens 
     }
     if (lens == CA_MEDIA_LENS_ZOOM) {
         if (!media->optical_available) { errno = ENODEV; return -1; }
-        media->optical_ratio = zoom;
+        media->optical_ratio = optical_zoom_factor(zoom);
         media->digital_ratio[lens] = 1;
     } else media->digital_ratio[lens] = zoom;
     media->zoom = media->lens == CA_MEDIA_LENS_ZOOM ?
