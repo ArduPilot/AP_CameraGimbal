@@ -26,3 +26,6 @@ __pycache__/
 /camera_app/tests/camera-app-zr10-host
 
 /web/z1mini-web
+
+/camera_app/tests/test_system_stats
+/camera_app/tests/test_binlog_sys

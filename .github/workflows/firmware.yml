@@ -86,6 +86,8 @@ jobs:
           python3 sitl/test_network.py --sudo
           python3 camera_app/tests/test_network_status.py camera_app/tests/camera-app-host
           make -C web network-status-test
+      - name: Test system health BIN logging
+        run: make -C camera_app system-stats-test
       - name: Test thermal conversion and MAVLink telemetry
         run: |
           make -C camera_app tests/test_thermal thermal-mavlink-test

@@ -30,6 +30,9 @@
 #define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 0
 #define APCAM_HAVE_SOC_TEMPERATURE 1
+#ifndef SOC_TEMPERATURE_PATH
+#define SOC_TEMPERATURE_PATH "/sys/class/thermal/thermal_zone0/temp"
+#endif
 #define APCAM_VENDOR_PORT 2337
 #define APCAM_VENDOR_TCP_PORT 2332
 #define APCAM_VENDOR_REPLY_PORT 2338
@@ -97,9 +100,6 @@
 #define FIRMWARE_SUFFIX ".gcu"
 #ifndef GCU_ROOT
 #define GCU_ROOT "/opt/bin/gcu"
-#endif
-#ifndef SOC_TEMPERATURE_PATH
-#define SOC_TEMPERATURE_PATH "/sys/class/thermal/thermal_zone0/temp"
 #endif
 #ifndef APP_SELECTION_DIR
 #define APP_SELECTION_DIR "/opt/ap_cameragimbal"
