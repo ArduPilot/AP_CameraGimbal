@@ -97,6 +97,10 @@ enum ca_tracking_method {
     CA_TRACK_RATE = 1,
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ca_support_config {
     bool enabled;
     char host[128];
@@ -190,5 +194,9 @@ void ca_video_resolution_size(enum ca_video_resolution resolution,
                               unsigned *width, unsigned *height);
 const char *ca_video_codec_name(enum ca_video_codec codec);
 const char *ca_thermal_palette_name(enum ca_thermal_palette palette);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -66,12 +66,12 @@ class DefinitionVersion(unittest.TestCase):
     def setUpClass(cls):
         cls.work = tempfile.TemporaryDirectory(prefix='apcam-definition-version-')
         library = Path(cls.work.name) / 'definition.so'
-        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-I' + str(ROOT / 'include'),
                         '-I' + str(ROOT / 'camera_app/include'),
                         '-DAPCAM_TARGET=APCAM_TARGET_MT11',
-                        str(ROOT / 'camera_app/src/protocol/camera_definition.c'),
-                        str(ROOT / 'camera_app/src/config.c'), '-lm', '-o', str(library)], check=True)
+                        str(ROOT / 'camera_app/src/protocol/camera_definition.cpp'),
+                        str(ROOT / 'camera_app/src/config.cpp'), '-lm', '-o', str(library)], check=True)
         cls.library = ctypes.CDLL(str(library))
         cls.version = cls.library.ca_camera_definition_version
         cls.version.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
@@ -119,9 +119,9 @@ class FTPTest(unittest.TestCase):
     def setUpClass(cls):
         cls.work = tempfile.TemporaryDirectory(prefix='apcam-ftp-test-')
         library = Path(cls.work.name) / 'ftp.so'
-        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
                         '-I' + str(ROOT / 'camera_app/include'),
-                        str(ROOT / 'camera_app/src/protocol/camera_ftp.c'), '-o', str(library)], check=True)
+                        str(ROOT / 'camera_app/src/protocol/camera_ftp.cpp'), '-o', str(library)], check=True)
         cls.library = ctypes.CDLL(str(library))
         cls.reply = cls.library.ca_camera_ftp_reply
         cls.reply.argtypes = [ctypes.POINTER(FTP), ctypes.c_char_p, ctypes.c_size_t,

@@ -28,10 +28,10 @@ with tempfile.TemporaryDirectory(prefix='a8-upgrade-test-') as directory:
                  REPLACEMENT_CONFIG_PATH=app / 'camera.ini', SESSION_PATH=root / 'sessions',
                  UPGRADE_LOCK_PATH=root / 'upgrade.lock', USER_LOCK_PATH=root / 'users.lock',
                  RUNTIME_DIR=root, CAMERA_READY_PATH=root / 'ready')
-    subprocess.run(['cc', '-O2', '-Wall', '-Wextra', '-Werror', '-std=c11',
+    subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                     '-DAPCAM_TARGET=APCAM_TARGET_A8', '-DMT11_WEB_TEST', '-DMT11_WEB_SITL',
                     *[f'-D{name}="{path}"' for name, path in paths.items()],
-                    str(WEB / 'mt11-web.c'), '-o', str(binary), '-lm'], check=True)
+                    str(WEB / 'mt11-web.cpp'), '-o', str(binary), '-lm'], check=True)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]

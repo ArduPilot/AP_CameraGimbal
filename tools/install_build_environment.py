@@ -72,6 +72,7 @@ def toolchain(name):
         stamp.write_text(digest + '\n')
     compiler = str(target / 'bin' / prefix)
     run(compiler + 'gcc', '-dumpmachine')
+    run(compiler + 'g++', '-dumpmachine')
     return compiler
 
 

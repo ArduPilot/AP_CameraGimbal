@@ -1,9 +1,7 @@
 #include "camera_app/rtsp.h"
 #include "camera_app/video_metadata.h"
 #include "camera_app/support_video.h"
-extern "C" {
 #include "camera_app/log.h"
-}
 #include <cstdlib>
 #include <limits>
 

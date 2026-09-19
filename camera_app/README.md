@@ -225,7 +225,7 @@ Known values are validated and duplicate known keys are rejected. Missing
 known values retain compiled defaults, while unknown sections and keys are
 preserved and ignored so a configuration can grow without breaking an older
 binary. Add new runtime settings to the typed descriptor/parser in
-`src/config.c`, then add their UI descriptors to `web/mt11-web.c`.
+`src/config.cpp`, then add their UI descriptors to `web/mt11-web.cpp`.
 
 `mavlink.tcp_port` and `mavlink.udp_port` independently enable the native
 MAVLink 2 listeners. TCP and UDP can use the same numeric port; set either
@@ -989,7 +989,7 @@ link (`MAVn_OPTIONS` must not have the `NO_FORWARD` bit set).
 `make camera-definitions` generates `build/camera-definitions/{mt11,a8,zr10,z1mini}.xml`
 for inspection or loading into a GCS. `make release` also generates these files.
 The exporter and firmware use the same C metadata in
-`src/protocol/camera_definition.c`, with resolution/codec options from the
+`src/protocol/camera_definition.cpp`, with resolution/codec options from the
 configuration validator and capability flags from `include/apcam/target_*.h`.
 There are no independently maintained XML copies to become inconsistent with a
 camera or its simulator. `CAMERA_INFORMATION.cam_definition_version` is computed

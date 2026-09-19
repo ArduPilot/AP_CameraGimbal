@@ -83,7 +83,7 @@ both the MT11 and A8 builds is translated, including parameter labels and
 help, notices, error replies and the text in the page scripts. Technical
 identifiers such as parameter keys, paths, ports and codec names, and the
 captured application output on the Debug page, stay as they are. The strings
-live in one table in `mt11-web.c`, indexed by a string id with one column per
+live in one table in `mt11-web.cpp`, indexed by a string id with one column per
 language.
 
 The service deliberately implements HTTP rather than TLS. It is intended only

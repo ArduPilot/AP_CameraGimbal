@@ -1,6 +1,7 @@
+#include "apcam/compiler.h"
 #ifndef CA_Z1_NATIVE_H
 #define CA_Z1_NATIVE_H
-#include <stdatomic.h>
+#include "apcam/atomic.h"
 #include "camera_app/exposure.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,7 +20,7 @@ struct ca_z1_overlay_request {
     uint8_t desired;
     uint8_t reserved[3];
 };
-_Static_assert(sizeof(struct ca_z1_overlay_request) == 8, "overlay request ABI");
+APC_STATIC_ASSERT(sizeof(struct ca_z1_overlay_request) == 8, "overlay request ABI");
 #define CA_Z1_NATIVE_OVERLAY_MAGIC UINT32_C(0x3144534f)
 /* Capability announcement in an overlay header's PTS, before any frames.
  * Outside the uint32 request sequence range. The existing header format lets
@@ -36,7 +37,7 @@ struct ca_z1_native_header {
     uint64_t pts;
     uint32_t key, stream;
 };
-_Static_assert(sizeof(struct ca_z1_native_header) == 24, "native frame ABI");
+APC_STATIC_ASSERT(sizeof(struct ca_z1_native_header) == 24, "native frame ABI");
 typedef void (*ca_z1_native_frame_fn)(void *, const uint8_t *, size_t, uint64_t, bool, unsigned);
 typedef void (*ca_z1_native_exposure_fn)(void *, const struct ca_exposure *);
 typedef int (*ca_z1_native_run_fn)(const atomic_bool *, ca_z1_native_frame_fn, void *);

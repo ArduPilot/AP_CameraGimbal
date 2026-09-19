@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 SHIM = r'''
 #include "camera_app/support_video.h"
 #include <string.h>
-struct ca_support_video *test_open(unsigned port) {
+extern "C" struct ca_support_video *test_open(unsigned port) {
     struct ca_support_config config = {.enabled = true, .video1_port = port};
     strcpy(config.host, "127.0.0.1");
     strcpy(config.video1_name, "queue-test");
@@ -111,9 +111,9 @@ def main():
         shim = root / 'shim.c'
         shim.write_text(SHIM)
         target = root / 'publisher.so'
-        sources = ['streaming/support_video.c', 'recording/video_metadata.c', 'recording/metadata.c', 'log.c']
-        subprocess.run(['cc', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
-                        '-I' + str(REPO / 'camera_app/include'), str(shim),
+        sources = ['streaming/support_video.cpp', 'recording/video_metadata.cpp', 'recording/metadata.cpp', 'log.cpp']
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
+                        '-I' + str(REPO / 'include'), '-I' + str(REPO / 'camera_app/include'), str(shim),
                         *(str(REPO / 'camera_app/src' / source) for source in sources),
                         '-lpthread', '-lm', '-o', str(target)], check=True)
         library = ctypes.CDLL(str(target))

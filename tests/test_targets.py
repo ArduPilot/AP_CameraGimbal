@@ -22,10 +22,10 @@ resolutions = ('1280x720', '1920x1080', '3840x2160', '2560x1440')
 with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
     for name, target in TARGETS.items():
         binary = str(Path(temp) / name)
-        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-std=c11',
+        subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-DAPCAM_TARGET=' + target['target_id'],
                         '-I' + str(ROOT/'include'), '-I' + str(ROOT/'camera_app/include'),
-                        str(ROOT/'tests/test_targets.c'), '-lm', '-o', binary], check=True)
+                        str(ROOT/'tests/test_targets.cpp'), '-lm', '-o', binary], check=True)
         subprocess.run([binary], check=True)
         for role in ('main', 'sub', 'recording'):
             assert target[role + '_resolutions'] & (1 << target['default_' + role + '_resolution'])

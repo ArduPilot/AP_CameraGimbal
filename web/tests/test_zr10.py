@@ -79,10 +79,10 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
     }
     binary = root / "zr10-web"
     subprocess.run([
-        "cc", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-        "-std=c11", "-DAPCAM_TARGET=APCAM_TARGET_ZR10", "-DMT11_WEB_TEST", "-DMT11_WEB_SITL",
+        "c++", "-std=gnu++17", "-Wno-missing-field-initializers", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
+        "-std=gnu++17", "-DAPCAM_TARGET=APCAM_TARGET_ZR10", "-DMT11_WEB_TEST", "-DMT11_WEB_SITL",
         *[f'-D{name}="{value}"' for name, value in paths.items()],
-        str(web / "mt11-web.c"), "-o", str(binary),
+        str(web / "mt11-web.cpp"), "-o", str(binary),
     ], check=True)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -180,7 +180,8 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
         assert ParameterForm(page).values == fields
         saved_config = (app / "camera.ini").read_text()
         def image_section(text):
-            parsed = configparser.ConfigParser()
+            # The camera INI reader permits sections extended later in the file.
+            parsed = configparser.ConfigParser(strict=False)
             parsed.read_string(text)
             return dict(parsed["image"])
         assert image_section(saved_config) == image_section(config)
@@ -192,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
             "proxy_host": "157.245.83.174", "proxy_mavlink_port": "10009",
             "proxy_signing": "true", "proxy_signing_passphrase": "test<&'secret",
             "proxy_publish_password": "publish<&'secret",
-            "proxy_network_address": "", "proxy_network_gateway": "192.168.144.20",
+            "network_secondary_address": "", "network_gateway": "192.168.144.20",
         }
         status, page = save_parameters(edited)
         assert status == 400 and b"Invalid value for Timezone" in page

@@ -173,7 +173,7 @@ class RTSP:
 
 
 def main():
-    web_source = (ROOT/'web/mt11-web.c').read_text()
+    web_source = (ROOT/'web/mt11-web.cpp').read_text()
     allowlist = re.search(r'static const char \*const allowed\[\] = \{(.*?)\};',
                           web_source, re.S)
     assert allowlist
@@ -197,13 +197,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix='z1mini-test-') as temp:
         root = Path(temp)
         log = (root / 'build.log').open('w')
-        run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-            '-o', str(root/'unit'), str(ROOT/'camera_app/tests/test_z1mini.c'),
-            str(ROOT/'camera_app/src/backends/z1mini/pipeline.c'), str(ROOT/'camera_app/src/log.c'), '-lm', '-lutil')
+        run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
+            '-o', str(root/'unit'), str(ROOT/'camera_app/tests/test_z1mini.cpp'),
+            str(ROOT/'camera_app/src/backends/z1mini/pipeline.cpp'), str(ROOT/'camera_app/src/log.cpp'), '-lm', '-lutil')
         run(str(root/'unit'))
-        run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-            '-o', str(root/'native-unit'), str(ROOT/'camera_app/tests/test_z1mini_native.c'),
-            str(ROOT/'camera_app/src/backends/z1mini/native.c'), str(ROOT/'camera_app/src/log.c'), '-pthread')
+        run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
+            '-o', str(root/'native-unit'), str(ROOT/'camera_app/tests/test_z1mini_native.cpp'),
+            str(ROOT/'camera_app/src/backends/z1mini/native.cpp'), str(ROOT/'camera_app/src/log.cpp'), '-pthread')
         run(str(root/'native-unit'))
         run('make', '-C', str(ROOT/'camera_app'), 'CAMERA_BACKEND=z1mini', 'z1mini-host', '-j8', stdout=log, stderr=log)
         source = root/'source.h264'
@@ -328,9 +328,9 @@ def main():
                 'VENDOR_CAMERA_PATH':root/'vendor', 'REPLACEMENT_CAMERA_PATH':binary,
                 'SOC_TEMPERATURE_PATH':temp_file,
             }
-            run('cc', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-address-of-packed-member',
+            run('c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-address-of-packed-member',
                 '-DAPCAM_TARGET=APCAM_TARGET_Z1_MINI', '-DMT11_WEB_TEST', '-I'+str(ROOT/'camera_app/build/mavlink/all/include'),
-                *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.c'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
+                *[f'-D{k}="{v}"' for k,v in paths.items()], str(ROOT/'web/mt11-web.cpp'), '-o', str(webbin), '-lm', stdout=log, stderr=log)
             webport = port()
             web = subprocess.Popen([str(webbin), '-p', str(webport)], stdout=log, stderr=log,
                                    env=dict(os.environ, MT11_WEB_LIVE_PORT=str(outputport + 1)))
