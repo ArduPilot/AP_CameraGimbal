@@ -55,9 +55,23 @@ void ca_camera_ftp_close(struct ca_camera_ftp *ftp)
     for (unsigned i = 0; i < 4; i++) close_session(&ftp->sessions[i]);
 }
 
-/* Confine a request path to one export root. Returns the root index, -1 for
- * the virtual root, -2 for the camera definition or -3 when invalid. */
-static int resolve(const struct ca_camera_ftp *ftp, const char *path, char real[PATH_MAX])
+/* Cygwin also interprets Windows separators and drive prefixes. Use the
+ * same plain component names on all platforms, including directory replies. */
+static bool valid_component(const char *name, size_t length)
+{
+    if (!length || (length == 1 && name[0] == '.') ||
+        (length == 2 && !memcmp(name, "..", 2))) return false;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 32 || c == 127 || c == '\\' || c == ':') return false;
+    }
+    return true;
+}
+
+/* Validate a request path and return its path relative to an export root.
+ * Returns the root index, -1 for the virtual root, -2 for the camera
+ * definition or -3 when invalid. */
+static int resolve(const struct ca_camera_ftp *ftp, const char *path, char relative[PATH_MAX])
 {
     while (*path == '/') path++;
     if (!strncmp(path, "./", 2)) path += 2;
@@ -78,19 +92,83 @@ static int resolve(const struct ca_camera_ftp *ftp, const char *path, char real[
         p++;
         if (!*p) break; /* trailing slash */
         size_t length = strcspn(p, "/");
-        if (!length || (length == 1 && p[0] == '.') || (length == 2 && !memcmp(p, "..", 2)))
-            return -3;
-        for (size_t i = 0; i < length; i++)
-            if ((unsigned char)p[i] < 32 || p[i] == 127) return -3;
+        if (!valid_component(p, length)) return -3;
         p += length;
     }
-    if (snprintf(real, PATH_MAX, "%s%s", ftp->roots[root], rest) >= PATH_MAX) return -3;
+    if (*rest == '/') rest++;
+    if (snprintf(relative, PATH_MAX, "%s", rest) >= PATH_MAX) return -3;
     return root;
 }
 
-static int entry_filter(const struct dirent *entry)
+/* The configured root is trusted. Resolve every requested component relative
+ * to an open directory, so replacing a name with a symlink cannot escape it.
+ * Nonblocking opens let the caller reject FIFOs before waiting for a writer. */
+static int open_export(const struct ca_camera_ftp *ftp, int root, const char *relative,
+                       bool directory)
 {
-    return strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..");
+    int fd = open(ftp->roots[root], O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (fd < 0) return -1;
+    while (*relative) {
+        size_t length = strcspn(relative, "/");
+        char component[PATH_MAX];
+        memcpy(component, relative, length);
+        component[length] = '\0';
+        relative += length;
+        bool more = *relative == '/';
+        if (more) relative++;
+        int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+        if (more || directory) flags |= O_DIRECTORY;
+        int next = openat(fd, component, flags);
+        int saved_errno = errno;
+        close(fd);
+        if (next < 0) {
+            errno = saved_errno;
+            return -1;
+        }
+        fd = next;
+    }
+    return fd;
+}
+
+static int compare_names(const void *a, const void *b)
+{
+    return strcoll(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* Like scandir, but keep the directory descriptor for subsequent metadata
+ * lookups instead of resolving a pathname again. */
+static bool directory_names(DIR *dir, char ***result, size_t *count)
+{
+    char **names = NULL;
+    size_t used = 0, capacity = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (!entry) {
+            if (errno) goto fail;
+            break;
+        }
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (used == capacity) {
+            size_t next = capacity ? capacity * 2 : 32;
+            if (next < capacity || next > SIZE_MAX / sizeof(*names)) goto fail;
+            char **grown = realloc(names, next * sizeof(*names));
+            if (!grown) goto fail;
+            names = grown;
+            capacity = next;
+        }
+        names[used] = strdup(entry->d_name);
+        if (!names[used]) goto fail;
+        used++;
+    }
+    if (used > 1) qsort(names, used, sizeof(*names), compare_names);
+    *result = names;
+    *count = used;
+    return true;
+fail:
+    for (size_t i = 0; i < used; i++) free(names[i]);
+    free(names);
+    return false;
 }
 
 /* One "F<name>\t<size>[\t<mtime>]" or "D<name>[\t<size>\t<mtime>]" entry;
@@ -98,6 +176,7 @@ static int entry_filter(const struct dirent *entry)
 static int format_entry(char *out, size_t space, bool with_time, const char *name,
                         const struct stat *st)
 {
+    if (!valid_component(name, strlen(name))) return -1;
     if (S_ISREG(st->st_mode)) {
         return with_time ?
             snprintf(out, space, "F%s\t%llu\t%lld", name, (unsigned long long)st->st_size,
@@ -111,9 +190,9 @@ static int format_entry(char *out, size_t space, bool with_time, const char *nam
     return -1;
 }
 
-/* Directory offsets count entries. Entries that cannot fit a packet are
- * skipped so a listing always progresses. */
-static uint8_t list_directory(const struct ca_camera_ftp *ftp, int root, const char *real,
+/* Directory offsets count exported entries, matching the client's count.
+ * Entries that cannot fit a packet do not consume an offset. */
+static uint8_t list_directory(const struct ca_camera_ftp *ftp, int root, const char *relative,
                               bool with_time, uint32_t offset, uint8_t *out, uint8_t *count)
 {
     char entry[PAYLOAD_MAX + 1];
@@ -141,25 +220,31 @@ static uint8_t list_directory(const struct ca_camera_ftp *ftp, int root, const c
         *count = (uint8_t)used;
         return used ? 0 : ERR_EOF;
     }
-    struct dirent **names;
-    int total = scandir(real, &names, entry_filter, alphasort);
-    if (total < 0) return errno == ENOENT || errno == ENOTDIR ? ERR_NOT_FOUND : ERR_FAIL;
-    for (int i = 0; i < total; i++) {
-        if ((uint32_t)i < offset) continue;
-        char child[PATH_MAX];
-        if (snprintf(child, sizeof(child), "%s/%s", real, names[i]->d_name) >= (int)sizeof(child) ||
-            lstat(child, &st) != 0) continue;
-        int length = format_entry(entry, sizeof(entry), with_time, names[i]->d_name, &st);
-        if (length < 0 || length >= (int)sizeof(entry)) continue;
-        if (used + (size_t)length + 1 > PAYLOAD_MAX) {
-            if (used) break;
-            continue; /* too long for one packet; skip it */
-        }
+    int fd = open_export(ftp, root, relative, true);
+    if (fd < 0) return errno == ENOENT || errno == ENOTDIR || errno == ELOOP ? ERR_NOT_FOUND : ERR_FAIL;
+    DIR *dir = fdopendir(fd);
+    if (!dir) {
+        close(fd);
+        return ERR_FAIL;
+    }
+    char **names;
+    size_t total;
+    if (!directory_names(dir, &names, &total)) {
+        closedir(dir);
+        return ERR_FAIL;
+    }
+    for (size_t i = 0; i < total; i++) {
+        if (fstatat(fd, names[i], &st, AT_SYMLINK_NOFOLLOW) != 0) continue;
+        int length = format_entry(entry, sizeof(entry), with_time, names[i], &st);
+        if (length < 0 || (size_t)length + 1 > PAYLOAD_MAX) continue;
+        if (index++ < offset) continue;
+        if (used + (size_t)length + 1 > PAYLOAD_MAX) break;
         memcpy(out + used, entry, (size_t)length + 1);
         used += (size_t)length + 1;
     }
-    for (int i = 0; i < total; i++) free(names[i]);
+    for (size_t i = 0; i < total; i++) free(names[i]);
     free(names);
+    closedir(dir);
     *count = (uint8_t)used;
     return used ? 0 : ERR_EOF; /* an empty packet would never advance the client */
 }
@@ -226,7 +311,7 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
             ftp->sessions[i].component == component) ftp->sessions[i].burst_remaining = 0;
     }
     char path[240] = {0};
-    char real[PATH_MAX];
+    char relative[PATH_MAX];
     if (size > PAYLOAD_MAX) {
         error = ERR_SIZE;
     } else if (opcode == OP_RESET) { /* only for the requesting client */
@@ -236,20 +321,20 @@ void ca_camera_ftp_reply(struct ca_camera_ftp *ftp, const char *xml, size_t leng
         }
     } else if (opcode == OP_LIST || opcode == OP_LIST_TIME) {
         memcpy(path, request + 12, size);
-        int root = resolve(ftp, path, real);
+        int root = resolve(ftp, path, relative);
         if (root == -2 || root == -3) error = ERR_NOT_FOUND;
-        else error = list_directory(ftp, root, real, opcode == OP_LIST_TIME,
+        else error = list_directory(ftp, root, relative, opcode == OP_LIST_TIME,
                                     get32(request + 8), response + 12, &response[4]);
     } else if (opcode == OP_OPEN_RO) {
         memcpy(path, request + 12, size);
-        int root = resolve(ftp, path, real);
+        int root = resolve(ftp, path, relative);
         int fd = -1;
         uint64_t file_size = length;
         if (root == -1 || root == -3) {
             error = ERR_NOT_FOUND;
         } else if (root >= 0) {
             struct stat st;
-            fd = open(real, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+            fd = open_export(ftp, root, relative, false);
             if (fd < 0) {
                 error = errno == ENOENT || errno == ENOTDIR || errno == ELOOP ? ERR_NOT_FOUND : ERR_FAIL;
             } else if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
