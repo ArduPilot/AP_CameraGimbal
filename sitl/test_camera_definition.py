@@ -126,6 +126,8 @@ def protocol_checks(link, definition, target):
         assert read(link, 'IMG_EXPOSURE') == -4
         write(link, definition, 'IMG_BRIGHTNESS', 101, M.PARAM_ACK_VALUE_UNSUPPORTED)
     if 'CAM_ZOOM' in definition.parameters:
+        zoom = definition.parameters['CAM_ZOOM']
+        assert (zoom.minimum, zoom.maximum, zoom.step) == (0, 100, 1)
         write(link, definition, 'CAM_ZOOM', 25)
         assert abs(read(link, 'CAM_ZOOM') - 25) < 0.001
         write(link, definition, 'CAM_ZOOM', float('nan'), M.PARAM_ACK_VALUE_UNSUPPORTED)
@@ -169,20 +171,45 @@ def live_config_checks(link, definition, target, directory, camera, rtsp_port):
     heartbeat(True)  # cache armed state while automatic recording is disabled
     write(link, definition, 'REC_AUTOSTART', 2)
     recording(True)
+    original_videos = set((directory / 'record').glob('*.mp4'))
     old_profile = read(link, 'REC_RESOLUTION')
     new_profile = 1 if old_profile != 1 else (2 if target == 'z1mini' else 0)
-    before = (directory / 'camera.ini').read_bytes()
-    write(link, definition, 'REC_RESOLUTION', new_profile, M.PARAM_ACK_FAILED)
-    assert read(link, 'REC_RESOLUTION') == old_profile
-    assert (directory / 'camera.ini').read_bytes() == before
+    config = directory / 'camera.ini'
+    before = config.read_bytes()
+    # Failed persistence must not accept a deferred format change either.
+    backup = directory / 'camera.saved'
+    config.rename(backup)
+    config.mkdir()
+    try:
+        write(link, definition, 'REC_RESOLUTION', new_profile, M.PARAM_ACK_FAILED)
+        assert read(link, 'REC_RESOLUTION') == old_profile
+    finally:
+        config.rmdir()
+        backup.rename(config)
+    assert config.read_bytes() == before
+    write(link, definition, 'REC_RESOLUTION', new_profile)
+    assert read(link, 'REC_RESOLUTION') == new_profile
+    assert config.read_bytes() != before
+    # Periodic config reload and other parameter changes must retain the choice.
+    time.sleep(1)
+    assert read(link, 'REC_RESOLUTION') == new_profile
+    link.mav.param_request_read_send(42, CAMERA, b'REC_RESOLUTION', -1)
+    assert receive(link, 'PARAM_VALUE', lambda m: m.param_id == 'REC_RESOLUTION').param_value == new_profile
     recording(True)
     heartbeat(False, component=190)
     heartbeat(False, system=43)
     recording(True)
     heartbeat(False)
     recording(False)
+    assert set((directory / 'record').glob('*.mp4')) == original_videos
+    original_rgb = next(p for p in original_videos if p.name.startswith('SITL_0_'))
+    probe = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                                    '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+                                    str(original_rgb)], text=True).strip()
+    assert probe == {0: '1280,720', 1: '1920,1080', 2: '3840,2160', 3: '2560,1440'}[old_profile], (original_rgb, probe)
     write(link, definition, 'REC_AUTOSTART', 0)
-    write(link, definition, 'REC_RESOLUTION', new_profile)
+    # No second format write: the saved change must apply after stopping.
+    time.sleep(2)
     assert read(link, 'REC_RESOLUTION') == new_profile
     write(link, definition, 'REC_AUTOSTART', 1)
     recording(True)
@@ -190,7 +217,7 @@ def live_config_checks(link, definition, target, directory, camera, rtsp_port):
     write(link, definition, 'REC_AUTOSTART', 0)
     recording(False)
     videos = sorted((directory / 'record').glob('*.mp4'), key=lambda p: p.stat().st_mtime)
-    rgb = [p for p in videos if '_T' not in p.name][-1]
+    rgb = [p for p in videos if p.name.startswith('SITL_0_')][-1]
     probe = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
                                     '-show_entries', 'stream=width,height', '-of', 'csv=p=0', str(rgb)], text=True).strip()
     assert probe == {0: '1280,720', 1: '1920,1080', 2: '3840,2160'}[new_profile], (rgb, probe)

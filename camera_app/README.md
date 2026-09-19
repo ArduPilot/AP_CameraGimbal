@@ -1021,9 +1021,11 @@ setting changed. Selecting Enabled starts recording; selecting Disabled stops it
 
 Stream/recording resolution and codec changes reopen the media pipeline without
 restarting camera-app or disconnecting MAVLink. Video clients may need to
-reconnect. Stop recording before changing these settings: changes during a
-recording are rejected. Failed application or persistence returns a failed ACK
-and attempts to restore the previous configuration. Image controls are available
+reconnect. Changes during a recording are saved and applied after recording
+stops, as with web UI saves. Parameter reads report the saved format selection;
+a status message explains when application is deferred. Failed immediate
+application or persistence returns a failed ACK and attempts to restore the
+previous configuration. Image controls are available
 on MT11/A8; thermal controls and photo scope are available only on MT11. SITL
 simple streams support codec changes; the 3D terrain renderer supports H.264
 only and rejects H.265 rather than reporting an unapplied setting.

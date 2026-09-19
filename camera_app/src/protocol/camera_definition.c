@@ -147,7 +147,7 @@ char *ca_camera_definition(size_t *length)
                 p.name, p.type == 9 ? "float" : p.type == 1 ? "bool" : "int32", (double)p.initial);
         if (!p.option_count) {
             fprintf(out, " min=\"%.9g\" max=\"%.9g\"", (double)p.minimum, (double)p.maximum);
-            if (p.type != 9) fputs(" step=\"1\"", out);
+            if (p.type != 9 || p.operation == CA_CAMERA_ZOOM) fputs(" step=\"1\"", out);
         }
         fputs(">\n      <description>", out);
         xml_text(out, p.description);
