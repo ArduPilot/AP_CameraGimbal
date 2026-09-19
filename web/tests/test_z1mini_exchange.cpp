@@ -39,6 +39,13 @@ static char marker(const char *directory)
 
 int main(int argc, char **argv)
 {
+    static const char asset[] = "gcu/ap/webroot/head.html";
+    static const char nul_asset[] = "gcu/ap/webroot/head.html\0suffix";
+    assert(gcu_entry_name_ok(asset, sizeof(asset) - 1));
+    assert(!gcu_entry_name_ok(nul_asset, sizeof(nul_asset) - 1));
+    static const char traversal[] = "gcu/ap/webroot/../head.html";
+    assert(!gcu_entry_name_ok(traversal, sizeof(traversal) - 1));
+
     assert(argc==2 && chdir(argv[1])==0);
     unsetenv("MT11_WEB_LIVE_PORT");
     unsetenv("CAMERA_APP_RTSP_PORT");

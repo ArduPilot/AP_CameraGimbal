@@ -55,6 +55,7 @@
 #define APCAM_WEB_BUILD 1
 #include "../include/apcam/target.h"
 #include "../include/apcam/APC_Camera.h"
+#include "../include/apcam/APC_Config.h"
 #include "../include/apcam/gimbal_transform.h"
 #include "../include/apcam/manual_control.h"
 #define SERVER_NAME APCAM_NAME "-web/2.0"
@@ -101,8 +102,6 @@
 #define LIVE_VIDEO_PORT 8555U
 #define ARDUPILOT_LOGO_URL \
     "https://firmware.ardupilot.org/Tools/Logos/ArduPilot-Cleaned-Transparent.png"
-#define MAX_HEADER (16U * 1024U)
-#define MAX_BODY (256U * 1024U)
 #define MAX_CONFIG (64U * 1024U)
 #define MAX_AUTHORIZED_KEYS (64U * 1024U)
 #define MAX_FIRMWARE_SIZE (128U * 1024U * 1024U)
@@ -175,7 +174,6 @@
 #endif
 #define APP_LOG_ROTATE_SIZE (512U * 1024U)
 #define APP_LOG_DISPLAY_SIZE (256U * 1024U)
-#define RECEIVE_INCOMPLETE (-1)
 #define SESSION_LIFETIME_SECONDS (24U * 60U * 60U)
 #define MAX_SESSIONS 16U
 #define MAX_SESSION_FILE (MAX_SESSIONS * 128U)
@@ -190,6 +188,8 @@ static char session_epoch[65];
 #endif
 
 #include "APC_StringBuffer.h"
+#include "APC_WebRoot.h"
+static APC_WebRoot webroot;
 
 #ifdef WEB_PORTABLE_SITL
 #undef APP_DIR
@@ -446,17 +446,7 @@ static bool language_from_accept(const char *header, size_t header_len,
     return found;
 }
 
-struct request {
-    char method[12];
-    char path[4096];
-    char query[4096];
-    char *storage;
-    size_t header_len;
-    char *body;
-    size_t body_len;
-    size_t content_length;
-    bool streaming_body;
-};
+#include "APC_HTTPRequest.h"
 
 struct option {
     const char *value;
@@ -807,32 +797,12 @@ static void send_text_error(int fd, int status, const char *reason,
 static void send_text_errorf(int fd, int status, const char *reason,
                              int id, ...);
 
+#include "APC_HTTPResponse.h"
 static void send_response(int fd, int status, const char *reason,
                           const char *content_type, const char *body,
                           size_t body_len, const char *extra_headers)
 {
-    APC_StringBuffer header;
-
-    header.reset();
-    if (header.appendf("HTTP/1.1 %d %s\r\n"
-        "Server: %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "Cache-Control: no-store\r\n"
-        "X-Content-Type-Options: nosniff\r\n"
-        "X-Frame-Options: DENY\r\n"
-        "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
-        "img-src 'self' https://firmware.ardupilot.org; media-src 'self'; "
-        "script-src 'self'; connect-src 'self'; form-action 'self'; "
-        "frame-ancestors 'none'\r\n"
-        "%s\r\n",
-        status, reason, SERVER_NAME, content_type, body_len,
-        extra_headers ? extra_headers : "") &&
-        send_all(fd, header.data(), header.size()) && body_len > 0) {
-        (void)send_all(fd, body, body_len);
-    }
-    header.reset();
+    APC_HTTPResponse(fd, SERVER_NAME).send(status, reason, content_type, body, body_len, extra_headers);
 }
 
 #if APCAM_TARGET == APCAM_TARGET_ZR10
@@ -1141,182 +1111,13 @@ static bool random_token(char output[65])
     return true;
 }
 
-/* trimmed value of the first header called name, or NULL when absent */
-static const char *find_header_span(const struct request *request,
-                                    const char *name, size_t *length)
+static const char *find_header_span(const APC_HTTPRequest *request, const char *name, size_t *length)
 {
-    const char *p = request->storage;
-    const char *end = request->storage + request->header_len;
-    size_t name_len = strlen(name);
-
-    while (p < end) {
-        const char *line_end = (const char*)(memchr(p, '\n', (size_t)(end - p)));
-        if (line_end == NULL) line_end = end;
-        if ((size_t)(line_end - p) > name_len + 1 &&
-            strncasecmp(p, name, name_len) == 0 && p[name_len] == ':') {
-            const char *value_start = p + name_len + 1;
-            const char *value_end;
-            while (value_start < line_end && isspace((unsigned char)*value_start)) {
-                value_start++;
-            }
-            value_end = line_end;
-            while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
-                value_end--;
-            }
-            *length = (size_t)(value_end - value_start);
-            return value_start;
-        }
-        p = line_end + (line_end < end ? 1 : 0);
-    }
-    return NULL;
+    return request->header_span(name, length);
 }
-
-static const char *find_header(const struct request *request, const char *name,
-                               char *value, size_t value_size)
+static const char *find_header(const APC_HTTPRequest *request, const char *name, char *value, size_t size)
 {
-    size_t length;
-    const char *start = find_header_span(request, name, &length);
-
-    if (start == NULL || length >= value_size) return NULL;
-    memcpy(value, start, length);
-    value[length] = '\0';
-    return value;
-}
-
-static bool parse_content_length(const char *headers, size_t header_len,
-                                 size_t *content_length, bool *present)
-{
-    struct request temporary {};
-    temporary.storage = (char *)headers;
-    temporary.header_len = header_len;
-    char value[64];
-    char *end;
-    unsigned long long parsed;
-
-    *content_length = 0;
-    *present = false;
-    if (find_header(&temporary, "Content-Length", value, sizeof(value)) == NULL) {
-        return true;
-    }
-    *present = true;
-    errno = 0;
-    parsed = strtoull(value, &end, 10);
-    if (errno != 0 || *value == '\0' || *end != '\0' || parsed > SIZE_MAX) {
-        return false;
-    }
-    *content_length = (size_t)parsed;
-    return true;
-}
-
-static int receive_request(int fd, struct request *request)
-{
-    size_t capacity = MAX_HEADER + 1;
-    size_t used = 0;
-    size_t header_len = 0;
-    size_t content_length = 0;
-    bool content_length_present = false;
-    char *storage = (char*)(calloc(1, capacity));
-
-    if (storage == NULL) return 500;
-    while (used < MAX_HEADER) {
-        ssize_t got = recv(fd, storage + used, capacity - used - 1, 0);
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            free(storage);
-            return RECEIVE_INCOMPLETE;
-        }
-        if (got == 0) break;
-        used += (size_t)got;
-        storage[used] = '\0';
-        char *boundary = strstr(storage, "\r\n\r\n");
-        if (boundary != NULL) {
-            header_len = (size_t)(boundary + 4 - storage);
-            if (header_len > MAX_HEADER) {
-                free(storage);
-                return 431;
-            }
-            break;
-        }
-    }
-    if (header_len == 0) {
-        free(storage);
-        return used >= MAX_HEADER ? 431 : RECEIVE_INCOMPLETE;
-    }
-    if (sscanf(storage, "%11s %4095s", request->method, request->path) != 2) {
-        free(storage);
-        return 400;
-    }
-    char *query = strchr(request->path, '?');
-    if (query != NULL) {
-        snprintf(request->query, sizeof(request->query), "%s", query + 1);
-        *query = '\0';
-    }
-    if (!parse_content_length(storage, header_len, &content_length,
-                              &content_length_present)) {
-        free(storage);
-        return 400;
-    }
-    char transfer_encoding[64];
-    struct request headers {};
-    headers.storage = storage;
-    headers.header_len = header_len;
-    if (find_header(&headers,
-                    "Transfer-Encoding", transfer_encoding,
-                    sizeof(transfer_encoding)) != NULL) {
-        free(storage);
-        return 400;
-    }
-    request->streaming_body = strcmp(request->method, "POST") == 0 &&
-                              strcmp(request->path, "/upgrade") == 0;
-    request->content_length = content_length;
-    request->storage = storage;
-    request->header_len = header_len;
-    request->body = storage + header_len;
-    request->body_len = used - header_len;
-
-    if (request->body_len > content_length ||
-        ((strcmp(request->method, "POST") == 0 ||
-          strcmp(request->method, "PUT") == 0) && !content_length_present)) {
-        free(storage);
-        memset(request, 0, sizeof(*request));
-        return 400;
-    }
-    if (request->streaming_body) return 0;
-    if (content_length > MAX_BODY) {
-        free(storage);
-        memset(request, 0, sizeof(*request));
-        return 413;
-    }
-    if (header_len + content_length + 1 > capacity) {
-        char *expanded = (char*)(realloc(storage, header_len + content_length + 1));
-        if (expanded == NULL) {
-            free(storage);
-            memset(request, 0, sizeof(*request));
-            return 500;
-        }
-        storage = expanded;
-        capacity = header_len + content_length + 1;
-        request->storage = storage;
-        request->body = storage + header_len;
-    }
-    while (used < header_len + content_length) {
-        ssize_t got = recv(fd, storage + used, capacity - used - 1, 0);
-        if (got < 0) {
-            if (errno == EINTR) continue;
-            free(storage);
-            memset(request, 0, sizeof(*request));
-            return RECEIVE_INCOMPLETE;
-        }
-        if (got == 0) {
-            free(storage);
-            memset(request, 0, sizeof(*request));
-            return RECEIVE_INCOMPLETE;
-        }
-        used += (size_t)got;
-    }
-    request->body_len = content_length;
-    request->body[content_length] = '\0';
-    return 0;
+    return request->header(name, value, size);
 }
 
 static int b64_value(unsigned char c)
@@ -1402,7 +1203,7 @@ static int check_password(const char *user, size_t user_len,
     return valid ? 1 : 0;
 }
 
-static int authenticate_basic(const struct request *request)
+static int authenticate_basic(const APC_HTTPRequest *request)
 {
     char authorization[1024];
     unsigned char decoded[768];
@@ -1422,7 +1223,7 @@ static int authenticate_basic(const struct request *request)
                           decoded_len - (size_t)(colon + 1 - (char *)decoded));
 }
 
-static bool cookie_value(const struct request *request, const char *name,
+static bool cookie_value(const APC_HTTPRequest *request, const char *name,
                          char *value, size_t value_size)
 {
     char cookies[4096];
@@ -1696,7 +1497,7 @@ static bool destroy_session(const char *token)
  * 2: session cookie, copied to session_token. An Authorization header is
  * always judged on its own so scripted clients never fall back to a
  * cookie. */
-static int authenticate(const struct request *request, char session_token[65])
+static int authenticate(const APC_HTTPRequest *request, char session_token[65])
 {
     size_t length;
     size_t password_len;
@@ -1775,19 +1576,19 @@ static char *encoded_value(const char *source, size_t source_length,
     return NULL;
 }
 
-static char *form_value(const struct request *request, const char *key,
+static char *form_value(const APC_HTTPRequest *request, const char *key,
                         size_t *value_len)
 {
     return encoded_value(request->body, request->body_len, key, value_len);
 }
 
-static char *query_value(const struct request *request, const char *key,
+static char *query_value(const APC_HTTPRequest *request, const char *key,
                          size_t *value_len)
 {
     return encoded_value(request->query, strlen(request->query), key, value_len);
 }
 
-static bool valid_csrf(const struct request *request)
+static bool valid_csrf(const APC_HTTPRequest *request)
 {
     size_t length;
     char *token = form_value(request, "csrf", &length);
@@ -1797,7 +1598,7 @@ static bool valid_csrf(const struct request *request)
     return valid;
 }
 
-static bool valid_csrf_header(const struct request *request)
+static bool valid_csrf_header(const APC_HTTPRequest *request)
 {
     char token[128];
 
@@ -2216,7 +2017,23 @@ static bool parameter_shown(const struct parameter *parameter)
     return true;
 }
 
-static bool collect_described_parameters(const struct request *request,
+// Numeric domains and storage limits come from the same schema as MAVLink
+// and the app; translated labels and presentation-specific steps remain here.
+static void parameter_limits(const struct parameter *parameter, double &minimum, double &maximum)
+{
+    minimum = parameter->minimum;
+    maximum = parameter->maximum;
+    const APC_Config::Field *field = APC_Config::find(parameter->section, parameter->key);
+    if (!field) return;
+    if (field->kind == APC_Config::Kind::Int || field->kind == APC_Config::Kind::Uint) {
+        minimum = field->minimum;
+        maximum = field->maximum;
+    } else if (field->kind == APC_Config::Kind::String || field->kind == APC_Config::Kind::Timezone) {
+        if (maximum >= field->size) maximum = field->size - 1U;
+    }
+}
+
+static bool collect_described_parameters(const APC_HTTPRequest *request,
                                          const struct parameter *parameters,
                                          size_t parameter_count,
                                          struct ini_update *updates,
@@ -2225,6 +2042,8 @@ static bool collect_described_parameters(const struct request *request,
 {
     for (size_t i = 0; i < parameter_count; i++) {
         const struct parameter *parameter = &parameters[i];
+        double minimum, maximum;
+        parameter_limits(parameter, minimum, maximum);
         size_t value_length = 0;
         char *value;
 
@@ -2244,13 +2063,12 @@ static bool collect_described_parameters(const struct request *request,
                 if (valid) snprintf(normalized, sizeof(normalized), "%s", value);
                 break;
             case PARAM_INTEGER:
-                valid = parse_long_strict(value, (long)parameter->minimum,
-                                          (long)parameter->maximum, &integer_value);
+                valid = parse_long_strict(value, (long)minimum,
+                                          (long)maximum, &integer_value);
                 if (valid) snprintf(normalized, sizeof(normalized), "%ld", integer_value);
                 break;
             case PARAM_FLOAT:
-                valid = parse_double_strict(value, parameter->minimum,
-                                            parameter->maximum, &float_value);
+                valid = parse_double_strict(value, minimum, maximum, &float_value);
                 if (valid) snprintf(normalized, sizeof(normalized), "%s", value);
                 break;
             case PARAM_IPV4:
@@ -2269,6 +2087,8 @@ static bool collect_described_parameters(const struct request *request,
                 break;
             }
         }
+        const APC_Config::Field *field = APC_Config::find(parameter->section, parameter->key);
+        if (valid && field) valid = APC_Config::validate(*field, normalized);
         if (!valid) {
             snprintf(error, error_size, T(S_E_INVALID_VALUE), T(parameter->label));
             if (!strcmp(parameter->form_name, "network_primary_address") || !strcmp(parameter->form_name, "network_secondary_address"))
@@ -2290,7 +2110,7 @@ static bool collect_described_parameters(const struct request *request,
 
 
 static bool collect_replacement_parameter_updates(
-    const struct request *request, struct ini_update *updates, size_t capacity,
+    const APC_HTTPRequest *request, struct ini_update *updates, size_t capacity,
     size_t *update_count, char *error, size_t error_size)
 {
     size_t count = 0;
@@ -2559,7 +2379,7 @@ static bool install_authorized_keys(const char *contents, size_t length,
 }
 #endif
 
-static bool change_admin_password(const struct request *request,
+static bool change_admin_password(const APC_HTTPRequest *request,
                                   char *error, size_t error_size)
 {
     size_t password_len = 0;
@@ -2603,7 +2423,7 @@ done:
     return ok;
 }
 
-static bool sync_time_from_browser(const struct request *request,
+static bool sync_time_from_browser(const APC_HTTPRequest *request,
                                    char *error, size_t error_size)
 {
     const uint64_t earliest_ms = UINT64_C(1577836800000); /* 2020-01-01 */
@@ -2664,7 +2484,7 @@ static char *read_authorized_keys(size_t *length)
     return keys;
 }
 
-static bool add_authorized_keys(const struct request *request,
+static bool add_authorized_keys(const APC_HTTPRequest *request,
                                 size_t *added_count,
                                 char *error, size_t error_size)
 {
@@ -2791,7 +2611,7 @@ done:
     return ok;
 }
 
-static bool remove_authorized_key(const struct request *request,
+static bool remove_authorized_key(const APC_HTTPRequest *request,
                                   char *error, size_t error_size)
 {
     size_t requested_len = 0;
@@ -3348,7 +3168,7 @@ static int open_camera_api_socket(const struct timeval *timeout)
     return fd;
 }
 
-static bool send_live_control(const struct request *request, char *error,
+static bool send_live_control(const APC_HTTPRequest *request, char *error,
                               size_t error_size, char acquired[33])
 {
     size_t n=0;
@@ -4311,83 +4131,16 @@ static char file_type_char(mode_t mode)
     return '?';
 }
 
-static const char *page_style =
-    ".parameter-tabs:not([hidden]){display:flex;flex-wrap:wrap;gap:6px;margin:18px 0 12px}"
-    ".parameter-tabs button{margin:0;border:2px solid var(--line);background:var(--card);color:var(--accent)}"
-    ".parameter-tabs button[aria-selected=true]{border-color:var(--accent);background:var(--accent);color:var(--bg)}"
-    ".parameter-tabs button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}"
-    ".parameter-tabs button.has-error{border-color:var(--danger)}"
-    ".parameter-panel{margin-bottom:12px}.parameter-panel[hidden]{display:none}.parameter-panel h2{margin-top:0}.parameter-panel .help code{overflow-wrap:anywhere}"
-        ":root{color-scheme:light dark;--bg:#f4f7fa;--card:#fff;--text:#17212b;"
-        "--muted:#607080;--line:#d7e0e8;--accent:#1769aa;--danger:#b42318}"
-        "@media(prefers-color-scheme:dark){:root{--bg:#10161d;--card:#18222d;"
-        "--text:#e8edf2;--muted:#a7b3bf;--line:#344352;--accent:#77bdf2;--danger:#ff8a80}}"
-        "*{box-sizing:border-box}body{display:flex;flex-direction:column;max-width:1050px;margin:auto;padding:24px;"
-        "font:15px/1.5 system-ui,sans-serif;color:var(--text);background:var(--bg)}"
-        "h1{margin-bottom:4px}h2{margin-top:28px}.muted{color:var(--muted)}"
-        ".brand-logo{order:-1;align-self:flex-start;display:inline-flex;align-items:center;width:min(280px,70vw);padding:7px 10px;"
-        "border-radius:8px;background:#263746}.brand-logo img{display:block;width:100%;height:auto}"
-        "nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0}nav a,.nav-link{padding:8px 12px;border:1px solid var(--line);"
-        "border-radius:6px;color:var(--accent);text-decoration:none;background:var(--card)}"
-        ".nav-form{display:inline}.lang-form{margin-left:auto}.nav-link{margin:0;font:inherit;font-weight:normal;cursor:pointer}"
-        "nav select{width:auto;padding:7px 8px;margin:0 4px 0 0}.login-card{max-width:460px}"
-        ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}"
-        ".card{padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}"
-        "table{width:100%;border-collapse:collapse}th,td{padding:7px;border-bottom:1px solid var(--line);text-align:left}"
-        "textarea{width:100%;min-height:520px;padding:12px;border:1px solid var(--line);border-radius:7px;"
-        "background:var(--card);color:var(--text);font:13px/1.45 ui-monospace,monospace;tab-size:4}"
-        "input[type=text],input[type=password],input[type=number],select{width:100%;padding:8px;border:1px solid var(--line);"
-        "border-radius:6px;background:var(--card);color:var(--text)}"
-        ".field [aria-invalid=true]{border:2px solid var(--danger)}"
-        ".field-error{color:var(--danger);font-size:13px;margin-top:5px}"
-        ".key-input{min-height:110px}.upload-status{display:block;margin-top:8px;white-space:pre-wrap}"
-        ".fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}"
-        ".field label{display:block;font-weight:650;margin-bottom:5px}.help{color:var(--muted);font-size:13px;margin-top:5px}"
-        ".checks{display:flex;flex-wrap:wrap;gap:16px}.checks label{white-space:nowrap}"
-        "details.card{margin-top:16px}summary{font-size:1.25em;font-weight:650;cursor:pointer}"
-        ".actions{position:sticky;bottom:0;padding:10px 0;background:var(--bg)}"
-        ".preview{display:block;max-width:100%;max-height:75vh;margin:16px auto;background:#000}"
-        ".pathbox{display:flex;gap:8px}.pathbox input{flex:1}.file-actions{white-space:nowrap}"
-        ".delete-link{color:var(--danger)}"
-        ".sensor-value{font-size:1.35em;font-weight:700}.sensor-control{display:flex;align-items:center;gap:10px}"
-        ".sensor-control .compact{flex:none}.gallery{display:grid;"
-        "grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.photo{margin:0}"
-        ".photo img{display:block;width:100%;height:180px;object-fit:contain;background:#000;border-radius:6px}"
-        ".photo figcaption{margin-top:6px;overflow-wrap:anywhere}"
-        ".inline-form{display:inline}.compact{margin:0 0 0 8px;padding:5px 10px}"
-        ".live-video{display:block;width:100%;max-height:70vh;background:#000;border-radius:8px}"
-        ".ptz-layout{display:grid;grid-template-columns:minmax(260px,1fr) minmax(220px,300px);gap:24px;align-items:center}"
-        ".ptz-pad{display:grid;grid-template-columns:repeat(3,74px);justify-content:center;gap:6px}"
-        ".ptz-pad button{margin:0;touch-action:none;user-select:none}.zoom-row{display:flex;align-items:center;gap:12px}"
-        ".zoom-row input{flex:1}"
-        ".attitude-panel{text-align:center}.attitude-panel h3{margin:0 0 10px}.attitude-dial{position:relative;"
-        "width:184px;height:184px;margin:auto;overflow:hidden;border:5px solid #607080;border-radius:50%;background:#151b20;box-shadow:inset 0 0 0 2px #111}"
-        ".attitude-world{position:absolute;left:-50%;top:-50%;width:200%;height:200%;"
-        "background:linear-gradient(to bottom,#4195ce 0 49.5%,#f4f4f4 49.5% 50.5%,#8b613d 50.5% 100%);"
-        "transform:translateY(0) rotate(0);transition:transform .16s linear;will-change:transform}"
-        ".attitude-reticle{position:absolute;left:50%;top:50%;width:74%;height:2px;transform:translate(-50%,-50%);background:#ffd34d;box-shadow:0 0 2px #222}"
-        ".attitude-reticle:before{content:'';position:absolute;left:50%;top:50%;width:11px;height:11px;transform:translate(-50%,-50%);border:2px solid #ffd34d;border-radius:50%;background:transparent}"
-        ".attitude-yaw{display:flex;justify-content:center;align-items:center;gap:9px;margin:10px 0 6px}.attitude-heading{display:inline-block;font-size:22px;line-height:1;color:var(--accent);transition:transform .16s linear}"
-        ".attitude-values{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.attitude-values span{font-size:12px;color:var(--muted)}.attitude-values output{display:block;font-size:16px;font-weight:700;color:var(--text)}"
-        ".attitude-rates{margin-top:7px;padding-top:7px;border-top:1px solid var(--line)}.attitude-rates output{font-size:14px}"
-        "button{margin:8px 8px 0 0;padding:9px 14px;border:0;border-radius:6px;color:white;"
-        "background:var(--accent);font-weight:650;cursor:pointer}.danger{background:var(--danger)}"
-        ".notice{padding:12px;border-left:5px solid var(--accent);background:var(--card)}"
-        ".error{border-color:var(--danger)}code{background:var(--bg);padding:2px 4px;border-radius:3px}"
-        "@media(max-width:650px){body{padding:12px}textarea{min-height:420px}.ptz-layout{grid-template-columns:1fr}.attitude-panel{margin-top:8px}}";
+static const char *page_style = "style.css";
 
 static void append_head(APC_StringBuffer *page, const char *title,
                         const char *style, const char *extra_head)
 {
-    page->appendf("<!doctype html><html lang=%s><head><meta charset=utf-8>"
-                     "<meta name=viewport content=\"width=device-width,initial-scale=1\">%s<title>",
-               languages[current_language].html_lang,
-               extra_head != NULL ? extra_head : "");
-    page->append_html(title);
-    page->append("</title><link rel=icon href=/favicon.ico sizes=\"16x16 32x32 48x48\">"
-                    "<link rel=icon href=/favicon.svg type=\"image/svg+xml\" sizes=any><style>");
-    page->append(style);
-    page->append("</style></head><body>");
+    APC_StringBuffer escaped;
+    escaped.append_html(title);
+    webroot.render(*page, "head.html", {
+        languages[current_language].html_lang, extra_head ? extra_head : "",
+        escaped.data(), style});
 }
 
 static void append_language_select(APC_StringBuffer *page, const char *id)
@@ -4438,12 +4191,7 @@ static void append_nav(APC_StringBuffer *page, const char *route,
     }
     page->append("\">");
     append_language_select(page, "lang-nav");
-    page->appendf("<button class=\"nav-link lang-apply\" type=submit>%s</button></form>"
-                     "<form class=nav-form method=post action=/logout>"
-                     "<input type=hidden name=csrf value=\"%s\">"
-                     "<button class=nav-link type=submit>%s</button></form></nav>"
-                     "<script src=/language.js defer></script>",
-               T(S_APPLY), csrf_token, T(S_NAV_LOGOUT));
+    webroot.render(*page, "nav-actions.html", {T(S_APPLY), csrf_token, T(S_NAV_LOGOUT)});
 }
 
 /* Match the app acknowledgement to both the saved bytes and running PID. */
@@ -4520,8 +4268,10 @@ static void append_notice(APC_StringBuffer *page, const char *message, bool is_e
 
 static void append_parameter_field(APC_StringBuffer *page, const char *config,
                                    const struct parameter *parameter,
-                                   const struct request *submitted)
+                                   const APC_HTTPRequest *submitted)
 {
+    double minimum, maximum;
+    parameter_limits(parameter, minimum, maximum);
     char value[160] = "";
     bool present = ini_get_value(config, parameter->section, parameter->key,
                                  value, sizeof(value));
@@ -4588,7 +4338,7 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
         page->append("</select>");
     } else {
         bool optional = (parameter->kind == PARAM_TEXT || parameter->kind == PARAM_PASSWORD) &&
-                        parameter->minimum == 0;
+                        minimum == 0;
         page->append(optional ? "<input name=\"" : "<input required name=\"");
         page->append_html(parameter->form_name);
         page->append("\" id=\"");
@@ -4598,7 +4348,7 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
         } else if (parameter->kind == PARAM_TEXT || parameter->kind == PARAM_PASSWORD) {
             page->appendf("\" type=%s autocomplete=off minlength=\"%.0f\" maxlength=\"%.0f\"",
                        parameter->kind == PARAM_PASSWORD ? "password" : "text",
-                       parameter->minimum, parameter->maximum);
+                       minimum, maximum);
             if (!strcmp(parameter->form_name, "network_primary_address") || !strcmp(parameter->form_name, "network_secondary_address")) {
                 page->append(" pattern=\"[0-9]{1,3}(\\.[0-9]{1,3}){3}/([1-9]|[12][0-9]|3[0-2])\" title=\"");
                 page->append_html(T(parameter->help));
@@ -4611,7 +4361,7 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
             page->append(" value=\"");
         } else {
             page->appendf("\" type=number min=\"%.8g\" max=\"%.8g\" step=\"%.8g\" value=\"",
-                       parameter->minimum, parameter->maximum, parameter->step);
+                       minimum, maximum, parameter->step);
         }
         if (present) page->append_html(display_value);
         page->append("\">");
@@ -4785,13 +4535,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.append("</td></tr>");
     page.appendf("<tr><th>%s</th><td>", T(S_STATUS_WEB_SERVICE));
     page.appendf(T(S_STATUS_WEB_PID_RSS), (long)getpid(), web_rss);
-    page.appendf("</td></tr><tr><th>%s</th><td>%s"
-                      "<form id=time-sync class=inline-form method=post action=/time/sync>"
-                      "<input type=hidden name=csrf value=\"%s\">"
-                      "<input id=browser-time-ms type=hidden name=time_ms>"
-                      "<button id=sync-time class=compact type=submit>%s</button></form>"
-                      "</td></tr>", T(S_STATUS_TIME), now_text, csrf_token,
-               T(S_STATUS_SYNC));
+    webroot.render(page, "status-time.html", {T(S_STATUS_TIME), now_text, csrf_token, T(S_STATUS_SYNC)});
     page.appendf("<tr><th>%s</th><td>%s</td></tr>", T(S_STATUS_UPTIME), uptime_text);
 #if APCAM_TARGET == APCAM_TARGET_A8
     {
@@ -4836,12 +4580,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     append_filesystem_status(&page, T(S_STORAGE_SETTINGS), SETTINGS_STORAGE_PATH);
 #endif
     append_filesystem_status(&page, T(S_STORAGE_MICROSD), MEDIA_ROOT);
-    page.appendf("</table><script src=/status.js defer></script>"
-                      "<p><a href=\"/\">%s</a></p></section>"
-                      "<section class=card><h2>%s</h2>"
-                      "<form method=post action=/restart><input type=hidden name=csrf value=\"%s\">"
-                      "<button type=submit>", T(S_STATUS_REFRESH), T(S_STATUS_ACTIONS),
-               csrf_token);
+    webroot.render(page, "status-actions.html", {T(S_STATUS_REFRESH), T(S_STATUS_ACTIONS), csrf_token});
     page.append(T(S_STATUS_RESTART));
     page.append("</button></form>");
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
@@ -4860,10 +4599,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.appendf(T(S_STATUS_UPGRADE_SYNC_A8), FIRMWARE_INSTALL_NAME);
 #endif
     page.append("</p>");
-    page.appendf("<form method=post action=/reboot><input type=hidden name=csrf value=\"%s\">"
-                      "<label><input type=checkbox name=confirm value=yes required> %s</label><br>"
-                      "<button class=danger type=submit>%s</button></form><p class=muted>",
-               csrf_token, T(S_STATUS_REBOOT_CONFIRM), T(S_STATUS_REBOOT_BUTTON));
+    webroot.render(page, "status-reboot.html", {csrf_token, T(S_STATUS_REBOOT_CONFIRM), T(S_STATUS_REBOOT_BUTTON)});
     page.appendf(T(S_STATUS_AUTH_NOTE), PASSWORD_PATH);
     page.append("</p></section></div></body></html>");
     *page_len = page.size();
@@ -4950,26 +4686,9 @@ static char *render_sensors_page(const char *message, bool message_is_error,
     append_notice(&page, message, message_is_error);
     page.append("<div class=grid>");
 #if WEB_HAVE_THERMAL
-    page.appendf("<section class=card><h2>%s</h2><table>"
-                      "<tr><th>%s</th><td><div class=sensor-control>"
-                      "<span id=lidar class=sensor-value>%s</span>"
-                      "<button id=lidar-toggle class=compact type=button disabled>%s</button>"
-                      "</div></td></tr>"
-                      "<tr><th>%s</th><td id=thermal-min class=sensor-value>%s</td></tr>"
-                      "<tr><th>%s</th><td id=thermal-max class=sensor-value>%s</td></tr>"
-                      "<tr><th>%s</th><td id=cpu-temperature class=sensor-value>%s</td></tr>"
-                      "</table><p id=sensor-status class=muted>%s</p>"
-                      "<p class=notice>%s</p></section>",
-               T(S_SENSORS_LIVE), T(S_SENSORS_LIDAR), T(S_LOADING), T(S_ENABLE),
-               T(S_SENSORS_MIN), T(S_LOADING), T(S_SENSORS_MAX), T(S_LOADING),
-               T(S_SENSORS_CPU), T(S_LOADING), T(S_SENSORS_UPDATING),
-               T(S_SENSORS_LASER_NOTICE));
+    webroot.render(page, "sensors-values.html", {T(S_SENSORS_LIVE), T(S_SENSORS_LIDAR), T(S_LOADING), T(S_ENABLE), T(S_SENSORS_MIN), T(S_LOADING), T(S_SENSORS_MAX), T(S_LOADING), T(S_SENSORS_CPU), T(S_LOADING), T(S_SENSORS_UPDATING), T(S_SENSORS_LASER_NOTICE)});
 #endif
-    page.appendf("<section class=card><h2>%s</h2><p>%s</p>"
-                      "<form method=post action=/sensors/capture><input type=hidden name=csrf value=\"%s\">"
-                      "<button type=submit>%s</button></form>",
-               T(S_SENSORS_SHUTTER), T(S_SENSORS_SHUTTER_TEXT), csrf_token,
-               T(S_SENSORS_CAPTURE));
+    webroot.render(page, "sensors-capture.html", {T(S_SENSORS_SHUTTER), T(S_SENSORS_SHUTTER_TEXT), csrf_token, T(S_SENSORS_CAPTURE)});
 #if WEB_HAVE_THERMAL
     page.appendf("<p class=muted>%s</p>", T(S_SENSORS_SCOPE_NOTE));
 #endif
@@ -5027,46 +4746,8 @@ static char *render_live_page(size_t *page_len)
     page.appendf("<header id=top><h1>%s</h1><div class=muted>%s</div></header>",
                T(S_LIVE_HEADING), T(S_LIVE_SUBTITLE));
     append_nav(&page, "/live", NULL);
-    page.appendf("<section class=card><div class=field><label for=live-stream>%s</label>"
-                      "<select id=live-stream><option value=0>%s</option>"
-                      "<option value=1>%s</option></select></div>"
-                      "<p id=live-status class=muted>%s</p>"
-                      "<video id=live-video class=live-video muted autoplay playsinline controls></video>"
-                      "<p class=help>%s</p>"
-                      "</section><section class=card><h2>%s</h2>"
-                      "<label><input id=manual-enable type=checkbox> %s</label>"
-                      "<p class=notice>%s</p>",
-               T(S_LIVE_STREAM), T(S_LIVE_MAIN), T(S_LIVE_SECONDARY), T(S_LIVE_STARTING),
-               T(S_LIVE_HELP), T(S_LIVE_PTZ), T(S_LIVE_ENABLE_MANUAL), T(S_LIVE_MANUAL_NOTICE));
-    page.appendf("<div class=ptz-layout><div><div class=ptz-pad><span></span><button type=button data-direction=up>&uarr;</button><span></span>"
-                      "<button type=button data-direction=left>&larr;</button>"
-                      "<button type=button id=live-center>%s</button>"
-                      "<button type=button data-direction=right>&rarr;</button>"
-                      "<span></span><button type=button data-direction=down>&darr;</button><span></span></div>"
-                      "<div class=zoom-row><label for=live-rate>%s</label>"
-                      "<input id=live-rate type=range min=5 max=60 step=1 value=30 disabled>"
-                      "<output id=live-rate-value>30&deg;/s</output></div>"
-                      "<div class=zoom-row><label for=live-zoom>%s</label>"
-                      "<input id=live-zoom type=range min=1 max=%g step=.1 value=1 disabled>"
-                      "<output id=live-zoom-value>1.0x</output></div>"
-                      "<p id=control-status class=muted>%s</p></div>"
-                      "<aside class=attitude-panel aria-labelledby=attitude-title><h3 id=attitude-title>%s</h3>"
-                      "<div id=attitude-dial class=attitude-dial role=img aria-label=\"%s\">"
-                      "<div id=attitude-world class=attitude-world></div><div class=attitude-reticle></div></div>"
-                      "<div class=attitude-yaw><span>%s</span><span id=attitude-heading class=attitude-heading aria-hidden=true>&uarr;</span></div>"
-                      "<div class=attitude-values><span>%s<output id=attitude-roll>&mdash;</output></span>"
-                      "<span>%s<output id=attitude-pitch>&mdash;</output></span>"
-                      "<span>%s<output id=attitude-yaw>&mdash;</output></span></div>"
-                      "<div class=\"attitude-values attitude-rates\"><span>%s<output id=attitude-roll-rate>&mdash;</output></span>"
-                      "<span>%s<output id=attitude-pitch-rate>&mdash;</output></span>"
-                      "<span>%s<output id=attitude-yaw-rate>&mdash;</output></span></div>"
-                      "<p id=attitude-status class=muted>%s</p></aside></div></section>"
-                      "<script src=/live.js data-csrf=\"%s\" defer></script></body></html>",
-               T(S_LIVE_CENTRE), T(S_LIVE_RATE), T(S_LIVE_ZOOM), (double)APC_Camera::get_singleton().zoom_control_max(),
-               T(S_LIVE_NO_COMMANDS), T(S_LIVE_ATTITUDE),
-               T(S_LIVE_ATTITUDE_UNAVAILABLE), T(S_LIVE_YAW), T(S_LIVE_ROLL), T(S_LIVE_PITCH),
-               T(S_LIVE_YAW), T(S_LIVE_ROLL_RATE), T(S_LIVE_PITCH_RATE),
-               T(S_LIVE_YAW_RATE), T(S_LIVE_WAITING_GIMBAL), csrf_token);
+    webroot.render(page, "live-video.html", {T(S_LIVE_STREAM), T(S_LIVE_MAIN), T(S_LIVE_SECONDARY), T(S_LIVE_STARTING), T(S_LIVE_HELP), T(S_LIVE_PTZ), T(S_LIVE_ENABLE_MANUAL), T(S_LIVE_MANUAL_NOTICE)});
+    webroot.render(page, "live-controls.html", {T(S_LIVE_CENTRE), T(S_LIVE_RATE), T(S_LIVE_ZOOM), APC_TemplateValue("%g", (double)APC_Camera::get_singleton().zoom_control_max()), T(S_LIVE_NO_COMMANDS), T(S_LIVE_ATTITUDE), T(S_LIVE_ATTITUDE_UNAVAILABLE), T(S_LIVE_YAW), T(S_LIVE_ROLL), T(S_LIVE_PITCH), T(S_LIVE_YAW), T(S_LIVE_ROLL_RATE), T(S_LIVE_PITCH_RATE), T(S_LIVE_YAW_RATE), T(S_LIVE_WAITING_GIMBAL), csrf_token});
 #if !APCAM_HAVE_ZOOM
     page.append("<style>.zoom-row:has(#live-zoom){display:none}</style>");
 #endif
@@ -5097,32 +4778,9 @@ static char *render_users_page(const char *message, bool message_is_error,
                T(TARGET_TEXT(S_USERS_SUBTITLE_MT11, S_USERS_SUBTITLE_A8)));
     append_nav(&page, "/users", NULL);
     append_notice(&page, message, message_is_error);
-    page.appendf("<div class=grid><section class=card><h2>%s</h2><p>%s</p>"
-                      "<form method=post action=/users/password><input type=hidden name=csrf value=\"%s\">"
-                      "<div class=field><label for=password>%s</label>"
-                      "<input id=password name=password type=password "
-                      "autocomplete=new-password required></div>"
-                      "<div class=field><label for=confirmation>%s</label>"
-                      "<input id=confirmation name=confirmation type=password "
-                      "autocomplete=new-password required></div>"
-                      "<button type=submit>%s</button></form>"
-                      "<p class=notice>%s</p></section>",
-               T(S_USERS_PASSWORD_HEADING), T(S_USERS_PASSWORD_TEXT), csrf_token,
-               T(S_USERS_NEW_PASSWORD), T(S_USERS_CONFIRM_PASSWORD),
-               T(S_USERS_CHANGE_BUTTON), T(S_USERS_HTTP_NOTICE));
+    webroot.render(page, "users-password.html", {T(S_USERS_PASSWORD_HEADING), T(S_USERS_PASSWORD_TEXT), csrf_token, T(S_USERS_NEW_PASSWORD), T(S_USERS_CONFIRM_PASSWORD), T(S_USERS_CHANGE_BUTTON), T(S_USERS_HTTP_NOTICE)});
 #if WEB_HAVE_SSH_KEYS
-    page.appendf("<section class=card><h2>%s</h2>"
-                      "<form id=ssh-key-upload method=post action=/users/keys/add>"
-                      "<input type=hidden name=csrf value=\"%s\">"
-                      "<input id=public-key-files type=file accept=.pub multiple hidden>"
-                      "<input id=public-key-data type=hidden name=public_key>"
-                      "<button id=select-public-key-files type=button>%s</button>"
-                      "<output id=public-key-status class=upload-status></output></form>"
-                      "<script src=/users.js defer></script>"
-                      "<p class=muted>%s</p>"
-                      "</section></div><section class=card><h2>%s</h2>",
-               T(S_USERS_ADD_KEYS), csrf_token, T(S_USERS_ADD_KEYS_BUTTON),
-               T(S_USERS_ADD_KEYS_HELP), T(S_USERS_AUTHORIZED));
+    webroot.render(page, "users-ssh.html", {T(S_USERS_ADD_KEYS), csrf_token, T(S_USERS_ADD_KEYS_BUTTON), T(S_USERS_ADD_KEYS_HELP), T(S_USERS_AUTHORIZED)});
     if (keys == NULL) {
         page.appendf("<p class=\"notice error\">%s</p>", T(S_USERS_KEYS_UNREADABLE));
     } else {
@@ -5181,7 +4839,7 @@ static char *render_users_page(const char *message, bool message_is_error,
 }
 
 static char *render_parameter_page(const char *message, bool message_is_error,
-                                   const struct request *submitted, size_t *page_len)
+                                   const APC_HTTPRequest *submitted, size_t *page_len)
 {
     APC_StringBuffer page;
     enum camera_kind kind = configuration_camera_kind();
@@ -5205,10 +4863,7 @@ static char *render_parameter_page(const char *message, bool message_is_error,
         if (message == NULL && live_config_notice(config, config_len, applied, sizeof(applied), &message_is_error))
             message = applied;
         append_notice(&page, message, message_is_error);
-        page.appendf("<p class=notice>%s</p>"
-                          "<form method=post action=/parameters><input type=hidden name=csrf value=\"%s\">"
-                          "<div id=parameter-tabs class=parameter-tabs role=tablist aria-label=\"%s\" hidden>",
-                   T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES));
+        webroot.render(page, "parameters-form.html", {T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES)});
         for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
             page.appendf("<button type=button role=tab id=tab-%s aria-controls=parameters-%s "
                              "aria-selected=false tabindex=-1>%s</button>",
@@ -5235,11 +4890,7 @@ static char *render_parameter_page(const char *message, bool message_is_error,
             }
             page.append("</section>");
         }
-        page.appendf("<div class=actions><div class=help>%s</div>"
-                          "<button type=submit name=action value=save>%s</button>"
-                          "<button type=submit name=action value=save_restart>%s</button>"
-                          "</div></form><script src=/parameters.js defer></script></body></html>",
-                   T(S_PARAMS_SAVE_ALL), T(S_PARAMS_SAVE), T(S_PARAMS_SAVE_RESTART));
+        webroot.render(page, "parameters-actions.html", {T(S_PARAMS_SAVE_ALL), T(S_PARAMS_SAVE), T(S_PARAMS_SAVE_RESTART)});
         free(config);
         *page_len = page.size();
         return page.release();
@@ -5279,9 +4930,7 @@ static char *render_raw_page(const char *message, bool message_is_error, size_t 
                       "<input type=hidden name=csrf value=\"%s\">"
                       "<textarea name=config spellcheck=false>", csrf_token);
     page.append_html(config);
-    page.appendf("</textarea><br><button type=submit name=action value=save>%s</button>"
-                      "<button type=submit name=action value=save_restart>%s</button>"
-                      "</form><p class=muted>", T(S_RAW_SAVE), T(S_PARAMS_SAVE_RESTART));
+    webroot.render(page, "raw-actions.html", {T(S_RAW_SAVE), T(S_PARAMS_SAVE_RESTART)});
     page.appendf(T(S_RAW_HELP), path, backup);
     page.append("</p></section></body></html>");
     free(config);
@@ -5289,29 +4938,7 @@ static char *render_raw_page(const char *message, bool message_is_error, size_t 
     return page.release();
 }
 
-static const char files_script[] =
-    "(()=>{"
-        "const table=document.getElementById('files-table'),body=table.tBodies[0],"
-        "buttons=[...table.querySelectorAll('.file-sort')],"
-        "rows=[...body.rows].filter(r=>!r.dataset.parent),"
-        "collator=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});"
-        "let column=0,direction=1;"
-        "try{const s=JSON.parse(sessionStorage.getItem('camera.files.sort'));"
-        "if(Array.isArray(s)&&Number.isInteger(s[0])&&s[0]>=0&&s[0]<5&&Math.abs(s[1])===1)"
-        "[column,direction]=s;}catch(e){}"
-        "function sort(){rows.sort((a,b)=>{"
-        "const folders=Number(b.dataset.directory)-Number(a.dataset.directory);"
-        "if(folders)return folders;"
-        "const x=a.cells[column],y=b.cells[column];"
-        "const order=column>=2?Number(x.dataset.sort)-Number(y.dataset.sort):"
-        "collator.compare(x.textContent,y.textContent);"
-        "return direction*order||collator.compare(a.cells[0].textContent,b.cells[0].textContent);});"
-        "const fragment=document.createDocumentFragment();rows.forEach(r=>fragment.append(r));body.append(fragment);"
-        "buttons.forEach((b,i)=>b.parentElement.setAttribute('aria-sort',i===column?"
-        "(direction===1?'ascending':'descending'):'none'));"
-        "try{sessionStorage.setItem('camera.files.sort',JSON.stringify([column,direction]));}catch(e){}}"
-        "buttons.forEach((b,i)=>b.addEventListener('click',()=>{direction=i===column?-direction:1;column=i;sort();}));"
-        "sort();})();";
+static const char *files_script = "files.js";
 
 static char *render_files_page(const char *requested_path, const char *message,
                                bool message_is_error, size_t *page_len,
@@ -5358,12 +4985,7 @@ static char *render_files_page(const char *requested_path, const char *message,
     page.append("</a></p></section>"
                     "<section class=card><h2>");
     page.append_html(resolved);
-    page.append("</h2><style>#files-table .file-sort{background:none;border:0;"
-                     "color:inherit;font:inherit;font-weight:bold;padding:0;cursor:pointer}"
-                     "#files-table .file-sort:focus-visible{outline:2px solid currentColor}"
-                     "#files-table th[aria-sort=ascending] button:after{content:' \u25b2'}"
-                     "#files-table th[aria-sort=descending] button:after{content:' \u25bc'}"
-                     "</style><table id=files-table><thead><tr>");
+    webroot.render(page, "files-controls.html", {});
     const unsigned labels[] = {S_FILES_NAME, S_FILES_TYPE, S_FILES_SIZE,
                                    S_FILES_MODIFIED, S_FILES_MODE};
     for (unsigned i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
@@ -5511,30 +5133,12 @@ static char *render_delete_page(const char *requested_path, size_t *page_len,
                       "<input type=hidden name=csrf value=\"%s\">"
                       "<input type=hidden name=path value=\"", T(S_DELETE_NO_UNDO), csrf_token);
     page.append_html(resolved);
-    page.appendf("\"><label><input required type=checkbox name=confirm value=yes> "
-                      "%s</label><br>"
-                      "<button class=danger type=submit>%s</button></form></section></body></html>",
-               T(S_DELETE_CONFIRM), T(S_DELETE_BUTTON));
+    webroot.render(page, "delete-confirmation.html", {T(S_DELETE_CONFIRM), T(S_DELETE_BUTTON)});
     *page_len = page.size();
     return page.release();
 }
 
-static const char *log_page_style =
-    ":root{color-scheme:light dark;--bg:#f4f7fa;--card:#fff;--text:#17212b;"
-    "--muted:#607080;--line:#d7e0e8;--accent:#1769aa}"
-    "@media(prefers-color-scheme:dark){:root{--bg:#10161d;--card:#18222d;"
-    "--text:#e8edf2;--muted:#a7b3bf;--line:#344352;--accent:#77bdf2}}"
-    "*{box-sizing:border-box}body{display:flex;flex-direction:column;margin:0;padding:20px;font:15px/1.5 system-ui,sans-serif;"
-    "color:var(--text);background:var(--bg)}h1{margin-bottom:4px}.muted{color:var(--muted)}"
-    ".brand-logo{order:-1;align-self:flex-start;display:inline-flex;align-items:center;width:min(280px,70vw);padding:7px 10px;"
-    "border-radius:8px;background:#263746}.brand-logo img{display:block;width:100%;height:auto}"
-    "nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0}nav a,.nav-link{padding:8px 12px;border:1px solid var(--line);"
-    "border-radius:6px;color:var(--accent);text-decoration:none;background:var(--card)}"
-    ".nav-form{display:inline}.lang-form{margin-left:auto}.nav-link{margin:0;font:inherit;font-weight:normal;cursor:pointer}"
-    "nav select{width:auto;padding:7px 8px;margin:0 4px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text)}"
-    "pre{margin:0;padding:14px;border:1px solid var(--line);border-radius:8px;"
-    "background:var(--card);white-space:pre-wrap;overflow-wrap:anywhere;"
-    "font:12px/1.4 ui-monospace,monospace;min-height:70vh}";
+static const char *log_page_style = "log.css";
 
 /* the captured application output itself is shown as-is in every language */
 static char *render_log_page(size_t *page_len)
@@ -5579,14 +5183,7 @@ static char *render_login_page(const char *message, bool message_is_error,
     page.appendf("</h1><div class=muted>%s</div></header>", T(S_LOGIN_SUBTITLE));
     append_logo(&page, "/");
     append_notice(&page, message, message_is_error);
-    page.appendf("<section class=\"card login-card\"><form method=post action=/login>"
-                      "<input type=hidden name=token value=\"%s\">"
-                      "<div class=field><label for=username>%s</label>"
-                      "<input id=username name=username type=text value=admin autocomplete=username required></div>"
-                      "<div class=field><label for=password>%s</label>"
-                      "<input id=password name=password type=password autocomplete=current-password required autofocus></div>"
-                      "<div class=field><label for=lang-login>%s</label>",
-               login_token, T(S_LOGIN_USERNAME), T(S_LOGIN_PASSWORD), T(S_LANGUAGE));
+    webroot.render(page, "login-form.html", {login_token, T(S_LOGIN_USERNAME), T(S_LOGIN_PASSWORD), T(S_LANGUAGE)});
     append_language_select(&page, "lang-login");
     page.appendf("</div><button type=submit>%s</button></form><p class=help>", T(S_LOGIN_BUTTON));
     page.appendf(T(S_LOGIN_FIRST_TIME), PASSWORD_PATH);
@@ -5618,7 +5215,7 @@ static void send_login_page(int fd, int status, const char *message, bool is_err
 /* Browsers send Origin on cross-site form posts; the login form carries no
  * cookie-bound token, so a foreign origin is refused here. Requests without
  * the header (scripts, older browsers) pass. */
-static bool same_origin(const struct request *request)
+static bool same_origin(const APC_HTTPRequest *request)
 {
     size_t origin_len;
     size_t host_len;
@@ -5638,7 +5235,7 @@ static void language_cookie(enum language lang, char *header, size_t header_size
              languages[lang].code);
 }
 
-static void handle_login(int fd, const struct request *request, const char *peer)
+static void handle_login(int fd, const APC_HTTPRequest *request, const char *peer)
 {
     size_t token_len = 0;
     size_t username_len = 0;
@@ -5734,7 +5331,7 @@ static bool safe_local_path(const char *path)
     return true;
 }
 
-static void select_language(const struct request *request)
+static void select_language(const APC_HTTPRequest *request)
 {
     char code[16];
     size_t length;
@@ -5755,7 +5352,7 @@ static void select_language(const struct request *request)
 
 /* an Accept header listing text/html with a non-zero q value, as a browser
  * navigation sends; fetch(), curl and video/img requests do not */
-static bool wants_html(const struct request *request)
+static bool wants_html(const APC_HTTPRequest *request)
 {
     size_t length;
     const char *accept = find_header_span(request, "Accept", &length);
@@ -5795,7 +5392,7 @@ static void send_page(int fd, const char *message, bool is_error)
 }
 
 static void send_parameter_page(int fd, const char *message, bool is_error,
-                                const struct request *submitted)
+                                const APC_HTTPRequest *submitted)
 {
     size_t length;
     char *page = render_parameter_page(message, is_error, submitted, &length);
@@ -5971,6 +5568,16 @@ struct js_string {
     const char *text;
 };
 
+static void send_asset(int fd, const char *name, const char *mime)
+{
+    APC_StringBuffer body;
+    if (!webroot.append(body, name)) {
+        send_text_error(fd, 503, "Service Unavailable", "Web asset unavailable\n", NULL);
+        return;
+    }
+    send_response(fd, 200, "OK", mime, body.data(), body.size(), NULL);
+}
+
 static void send_script(int fd, const struct js_string *items, size_t count,
                         const char *body)
 {
@@ -5984,182 +5591,16 @@ static void send_script(int fd, const struct js_string *items, size_t count,
         script.append("'");
     }
     script.append("};\n");
-    script.append(body);
+    if (!webroot.append(script, body)) {
+        send_text_error(fd, 503, "Service Unavailable", "Web asset unavailable\n", NULL);
+        return;
+    }
     send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
                   script.data(), script.size(), NULL);
     script.reset();
 }
 
-static const char parameters_script[] =
-    "(() => {\n"
-    "  const form = document.querySelector('form[action=\"/parameters\"]');\n"
-    "  if (!form) return;\n"
-    "  const tablist = document.getElementById('parameter-tabs');\n"
-    "  const tabs = [...tablist.querySelectorAll('[role=tab]')];\n"
-    "  const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));\n"
-    "  function selectTab(tab, focus = false) {\n"
-    "    if (!tabs.includes(tab)) tab = tabs[0];\n"
-    "    tabs.forEach((item, i) => {\n"
-    "      const selected = item === tab;\n"
-    "      item.setAttribute('aria-selected', String(selected));\n"
-    "      item.tabIndex = selected ? 0 : -1;\n"
-    "      panels[i].hidden = !selected;\n"
-    "    });\n"
-    "    const name = tab.id.slice(4);\n"
-    "    form.setAttribute('action', '/parameters#' + name);\n"
-    "    try { history.replaceState(null, '', '#' + name); } catch (_) {}\n"
-    "    if (focus) tab.focus();\n"
-    "  }\n"
-    "  function reveal(field) {\n"
-    "    const panel = field.closest('.parameter-panel');\n"
-    "    selectTab(tabs[panels.indexOf(panel)]);\n"
-    "  }\n"
-    "  tabs.forEach((tab, index) => {\n"
-    "    tab.addEventListener('click', () => selectTab(tab));\n"
-    "    tab.addEventListener('keydown', event => {\n"
-    "      let next;\n"
-    "      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;\n"
-    "      else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;\n"
-    "      else if (event.key === 'Home') next = 0;\n"
-    "      else if (event.key === 'End') next = tabs.length - 1;\n"
-    "      else return;\n"
-    "      event.preventDefault(); selectTab(tabs[next], true);\n"
-    "    });\n"
-    "  });\n"
-    "  panels.forEach(panel => panel.setAttribute('role', 'tabpanel'));\n"
-    "  tablist.hidden = false;\n"
-    "  const fromHash = () => selectTab(tabs.find(tab => tab.id === 'tab-' + location.hash.slice(1)));\n"
-    "  fromHash();\n"
-    "  window.addEventListener('hashchange', fromHash);\n"
-    "  const fields = [...form.querySelectorAll('.field input, .field select')];\n"
-    "  const touched = new Set();\n"
-    "  let attempted = Boolean(document.querySelector('.notice.error'));\n"
-    "  const get = name => form.elements.namedItem(name);\n"
-    "  const value = name => get(name)?.value || '';\n"
-    "  for (const field of fields) {\n"
-    "    const error = document.createElement('div');\n"
-    "    error.id = field.id + '-error';\n"
-    "    error.className = 'field-error';\n"
-    "    error.hidden = true;\n"
-    "    field.setAttribute('aria-describedby', error.id);\n"
-    "    field.closest('.field').append(error);\n"
-    "  }\n"
-    "  const ipv4 = text => {\n"
-    "    const parts = text.split('.');\n"
-    "    return parts.length === 4 && parts.every(p => /^(0|[1-9][0-9]{0,2})$/.test(p) && Number(p) <= 255);\n"
-    "  };\n"
-    "  const number = text => text.split('.').reduce((v, n) => ((v << 8) | Number(n)) >>> 0, 0);\n"
-    "  const host = text => ipv4(text) && Number(text.split('.')[0]) > 0 && Number(text.split('.')[0]) !== 127 && Number(text.split('.')[0]) < 224;\n"
-    "  function invalid(field, message) {\n"
-    "    if (field) field.setCustomValidity(message || L.invalid.replace('%s', field.closest('.field').querySelector('label').textContent));\n"
-    "  }\n"
-    "  function validate() {\n"
-    "    for (const field of fields) {\n"
-    "      field.setCustomValidity('');\n"
-    "      if (field.name.startsWith('proxy_') && ['text', 'password'].includes(field.type)) {\n"
-    "        if (/[^\\x20-\\x7e]|\"/.test(field.value) || field.value.length > field.maxLength) invalid(field);\n"
-    "      }\n"
-    "      if (field.name === 'timezone' && /[\\s\\x00-\\x1f\\x7f]/.test(field.value)) invalid(field);\n"
-    "    }\n"
-    "    for (const name of ['proxy_host', 'network_interface', 'main_alias', 'sub_alias']) {\n"
-    "      if (!/^[a-zA-Z0-9_.-]*$/.test(value(name))) invalid(get(name));\n"
-    "    }\n"
-    "    const parseAddress = text => {\n"
-    "      const parts = text.split('/');\n"
-    "      if (parts.length !== 2 || !host(parts[0]) || !/^([1-9]|[12][0-9]|3[0-2])$/.test(parts[1])) return null;\n"
-    "      const ip = number(parts[0]), prefix = Number(parts[1]), mask = (0xffffffff << (32 - prefix)) >>> 0;\n"
-    "      if (prefix < 31 && ((ip & ~mask) === 0 || (ip & ~mask) === (~mask >>> 0))) return null;\n"
-    "      return {ip, mask, prefix};\n"
-    "    };\n"
-    "    for (const name of ['network_primary_address', 'network_secondary_address']) {\n"
-    "      if (value(name) && !parseAddress(value(name))) invalid(get(name), L.address);\n"
-    "    }\n"
-    "    const primary = parseAddress(value('network_primary_address'));\n"
-    "    const secondary = parseAddress(value('network_secondary_address'));\n"
-    "    const gateway = value('network_gateway');\n"
-    "    if (primary && secondary && primary.ip === secondary.ip) invalid(get('network_secondary_address'), L.network);\n"
-    "    if (gateway) {\n"
-    "      if (!host(gateway)) invalid(get('network_gateway'));\n"
-    "      else {\n"
-    "        const g = number(gateway);\n"
-    "        const reachable = address => address && !((g ^ address.ip) & address.mask) &&\n"
-    "          (address.prefix >= 31 || ((g & ~address.mask) !== 0 && (g & ~address.mask) !== (~address.mask >>> 0)));\n"
-    "        if ((primary && g === primary.ip) || (secondary && g === secondary.ip) ||\n"
-    "            (primary && !reachable(primary) && !reachable(secondary)))\n"
-    "          invalid(get('network_gateway'), L.network);\n"
-    "      }\n"
-    "    }\n"
-    "    const reconnect = document.getElementById('network-reconnect');\n"
-    "    reconnect.hidden = !primary || reconnect.dataset.sitl === 'true';\n"
-    "    if (primary) {\n"
-    "      const link = document.getElementById('network-link');\n"
-    "      const url = new URL(location.href);\n"
-    "      url.hostname = value('network_primary_address').split('/')[0];\n"
-    "      url.pathname = '/parameters'; url.search = ''; url.hash = 'network';\n"
-    "      link.href = url.href; link.textContent = url.href;\n"
-    "    }\n"
-    "    if (value('proxy_enabled') === 'true') {\n"
-    "      if (!value('proxy_host')) invalid(get('proxy_host'));\n"
-    "      if (value('proxy_signing') === 'true' && !value('proxy_signing_passphrase')) invalid(get('proxy_signing_passphrase'));\n"
-    "      for (const n of [1, 2]) {\n"
-    "        if (Number(value('proxy_video' + n + '_port')) && !value('proxy_video' + n + '_name')) invalid(get('proxy_video' + n + '_name'));\n"
-    "      }\n"
-    "      if (Number(value('proxy_video1_port')) && Number(value('proxy_video1_port')) === Number(value('proxy_video2_port')))\n"
-    "        invalid(get('proxy_video2_port'), L.ports);\n"
-    "    }\n"
-    "    for (const field of fields) {\n"
-    "      const bad = !field.validity.valid && (attempted || touched.has(field));\n"
-    "      const error = document.getElementById(field.id + '-error');\n"
-    "      field.setAttribute('aria-invalid', String(bad));\n"
-    "      error.hidden = !bad;\n"
-    "      error.textContent = bad ? field.validationMessage : '';\n"
-    "    }\n"
-    "    tabs.forEach((tab, i) => tab.classList.toggle('has-error', Boolean(panels[i].querySelector('[aria-invalid=true]'))));\n"
-    "    return fields.find(field => !field.validity.valid);\n"
-    "  }\n"
-    "  for (const name of ['input', 'change']) form.addEventListener(name, event => {\n"
-    "    touched.add(event.target);\n"
-    "    validate();\n"
-    "  });\n"
-    "  form.addEventListener('submit', event => {\n"
-    "    attempted = true;\n"
-    "    const bad = validate();\n"
-    "    if (bad) {\n"
-    "      event.preventDefault();\n"
-    "      reveal(bad); bad.focus();\n"
-    "      bad.reportValidity();\n"
-    "      return;\n"
-    "    }\n"
-    "    const reconnect = document.getElementById('network-reconnect');\n"
-    "    const link = document.getElementById('network-link');\n"
-    "    if (event.submitter && event.submitter.value === 'save_restart' && !reconnect.hidden &&\n"
-    "        new URL(link.href).hostname !== location.hostname) {\n"
-    "      // Keep the reconnect link visible if removing our address breaks the response.\n"
-    "      event.preventDefault();\n"
-    "      reveal(get('network_primary_address'));\n"
-    "      const body = new URLSearchParams(new FormData(form));\n"
-    "      body.set('action', 'save_restart');\n"
-    "      const buttons = [...form.querySelectorAll('button[type=submit]')];\n"
-    "      buttons.forEach(button => { button.disabled = true; });\n"
-    "      // Named submit buttons shadow form.action; read the HTML attribute.\n"
-    "      const endpoint = form.getAttribute('action').split('#')[0];\n"
-    "      fetch(endpoint, {method: 'POST', body, signal: AbortSignal.timeout(45000)})\n"
-    "        .then(response => response.text()).then(page => {\n"
-    "          document.open(); document.write(page); document.close();\n"
-    "        }).catch(() => {\n"
-    "          const notice = document.createElement('p');\n"
-    "          notice.className = 'notice error'; notice.textContent = L.connectionLost;\n"
-    "          reconnect.before(notice);\n"
-    "          buttons.forEach(button => { button.disabled = false; });\n"
-    "        });\n"
-    "    }\n"
-    "  });\n"
-    "  // Run our checks before native submission so dependent fields are checked too.\n"
-    "  form.noValidate = true;\n"
-    "  const bad = validate();\n"
-    "  if (attempted && bad) { reveal(bad); bad.focus(); }\n"
-    "})();\n"
-    ;
+static const char *parameters_script = "parameters.js";
 
 static void send_parameters_script(int fd)
 {
@@ -6174,66 +5615,7 @@ static void send_parameters_script(int fd)
 }
 
 #if WEB_HAVE_THERMAL
-static const char sensors_script[] =
-    "(() => {\n"
-    "  const script = document.currentScript;\n"
-    "  const lidar = document.getElementById('lidar');\n"
-    "  const lidarToggle = document.getElementById('lidar-toggle');\n"
-    "  const minimum = document.getElementById('thermal-min');\n"
-    "  const maximum = document.getElementById('thermal-max');\n"
-    "  const cpu = document.getElementById('cpu-temperature');\n"
-    "  const status = document.getElementById('sensor-status');\n"
-    "  if (!script || !lidar || !lidarToggle || !minimum || !maximum || !cpu || !status) return;\n"
-    "  let issued = 0;\n"
-    "  let applied = 0;\n"
-    "  const temperature = (value, x, y) => value === null ? L.unavailable : value.toFixed(2) + L.temperatureAt + x + ', ' + y + ')';\n"
-    "  const refresh = async () => {\n"
-    "    const requestId = ++issued;\n"
-    "    try {\n"
-    "      const response = await fetch('/sensors.json', {cache: 'no-store'});\n"
-    "      if (!response.ok) throw new Error('HTTP ' + response.status);\n"
-    "      const data = await response.json();\n"
-    "      if (requestId < applied) return;\n"
-    "      applied = requestId;\n"
-    "      if (data.lidar_enabled === false) lidar.textContent = L.disabled;\n"
-    "      else lidar.textContent = data.lidar_m === null ? L.unavailable : (data.lidar_m === 0 ? L.noReturn : data.lidar_m.toFixed(1) + ' m');\n"
-    "      lidarToggle.textContent = data.lidar_enabled ? L.disable : L.enable;\n"
-    "      lidarToggle.dataset.action = data.lidar_enabled ? 'disable' : 'enable';\n"
-    "      lidarToggle.disabled = data.lidar_enabled === null;\n"
-    "      minimum.textContent = temperature(data.minimum_c, data.minimum_x, data.minimum_y);\n"
-    "      maximum.textContent = temperature(data.maximum_c, data.maximum_x, data.maximum_y);\n"
-    "      cpu.textContent = data.cpu_c === null ? L.unavailable : data.cpu_c.toFixed(1) + ' °C';\n"
-    "      status.textContent = L.updated + new Date().toLocaleTimeString() + L.twicePerSecond;\n"
-    "    } catch (error) {\n"
-    "      if (requestId < applied) return;\n"
-    "      applied = requestId;\n"
-    "      lidar.textContent = minimum.textContent = maximum.textContent = cpu.textContent = L.unavailable;\n"
-    "      lidarToggle.disabled = true;\n"
-    "      status.textContent = L.sensorFailed + (error && error.message ? error.message : L.unknownError);\n"
-    "    }\n"
-    "  };\n"
-    "  lidarToggle.addEventListener('click', async () => {\n"
-    "    const action = lidarToggle.dataset.action;\n"
-    "    if (action !== 'enable' && action !== 'disable') return;\n"
-    "    lidarToggle.disabled = true;\n"
-    "    const body = new URLSearchParams({csrf: script.dataset.csrf, action});\n"
-    "    try {\n"
-    "      const response = await fetch('/sensors/lidar', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body});\n"
-    "      if (!response.ok) throw new Error((await response.text()).trim() || ('HTTP ' + response.status));\n"
-    "      lidar.textContent = action === 'enable' ? L.waitingRange : L.disabled;\n"
-    "      lidarToggle.textContent = action === 'enable' ? L.disable : L.enable;\n"
-    "      lidarToggle.dataset.action = action === 'enable' ? 'disable' : 'enable';\n"
-    "      status.textContent = action === 'enable' ? L.lidarEnabled : L.lidarDisabled;\n"
-    "    } catch (error) {\n"
-    "      status.textContent = L.lidarControlFailed + (error && error.message ? error.message : L.unknownError);\n"
-    "    } finally {\n"
-    "      lidarToggle.disabled = false;\n"
-    "      window.setTimeout(refresh, 100);\n"
-    "    }\n"
-    "  });\n"
-    "  refresh();\n"
-    "  window.setInterval(refresh, 500);\n"
-    "})();\n";
+static const char *sensors_script = "sensors.js";
 
 static void send_sensors_script(int fd)
 {
@@ -6252,164 +5634,7 @@ static void send_sensors_script(int fd)
 }
 #endif
 
-static const char live_script[] =
-    "(() => {\n"
-    "  const script = document.currentScript;\n"
-    "  const video = document.getElementById('live-video');\n"
-    "  const stream = document.getElementById('live-stream');\n"
-    "  const status = document.getElementById('live-status');\n"
-    "  const enable = document.getElementById('manual-enable');\n"
-    "  const controlStatus = document.getElementById('control-status');\n"
-    "  const rate = document.getElementById('live-rate');\n"
-    "  const rateValue = document.getElementById('live-rate-value');\n"
-    "  const zoom = document.getElementById('live-zoom');\n"
-    "  const zoomValue = document.getElementById('live-zoom-value');\n"
-    "  const attitudeDial = document.getElementById('attitude-dial');\n"
-    "  const attitudeWorld = document.getElementById('attitude-world');\n"
-    "  const attitudeHeading = document.getElementById('attitude-heading');\n"
-    "  const attitudeRoll = document.getElementById('attitude-roll');\n"
-    "  const attitudePitch = document.getElementById('attitude-pitch');\n"
-    "  const attitudeYaw = document.getElementById('attitude-yaw');\n"
-    "  const attitudeRollRate = document.getElementById('attitude-roll-rate');\n"
-    "  const attitudePitchRate = document.getElementById('attitude-pitch-rate');\n"
-    "  const attitudeYawRate = document.getElementById('attitude-yaw-rate');\n"
-    "  const attitudeStatus = document.getElementById('attitude-status');\n"
-    "  if (!script || !video || !stream || !status || !enable || !controlStatus || !rate || !rateValue || !zoom || !zoomValue || !attitudeDial || !attitudeWorld || !attitudeHeading || !attitudeRoll || !attitudePitch || !attitudeYaw || !attitudeRollRate || !attitudePitchRate || !attitudeYawRate || !attitudeStatus) return;\n"
-    "  let retry = null;\n"
-    "  let startedAt = 0;\n"
-    "  const start = () => {\n"
-    "    if (retry !== null) { window.clearTimeout(retry); retry = null; }\n"
-    "    startedAt = performance.now();\n"
-    "    status.textContent = L.connecting;\n"
-    "    video.src = '/live/video' + (Number(stream.value) + 1) + '.mp4?start=' + Date.now();\n"
-    "    video.load(); video.play().catch(() => {});\n"
-    "  };\n"
-    "  const reconnect = message => {\n"
-    "    status.textContent = message + L.retrying;\n"
-    "    if (retry === null) retry = window.setTimeout(start, 1500);\n"
-    "  };\n"
-    "  video.addEventListener('loadedmetadata', () => { status.textContent = L.livePrefix + video.videoWidth + '×' + video.videoHeight; });\n"
-    "  video.addEventListener('playing', () => { status.textContent = L.livePrefix + video.videoWidth + '×' + video.videoHeight; });\n"
-    "  video.addEventListener('ended', () => reconnect(L.streamEnded));\n"
-    "  video.addEventListener('error', () => {\n"
-    "    const names = ['', L.errorAborted, L.errorNetwork, L.errorDecode, L.errorUnsupported];\n"
-    "    const detail = video.error ? (names[video.error.code] || (L.errorCode + video.error.code)) + (video.error.message ? ': ' + video.error.message : '') : L.unknownError;\n"
-    "    reconnect(L.liveUnavailable + detail);\n"
-    "  });\n"
-    "  // Native players can keep playing an old buffer after an underrun.\n"
-    "  // Reopen at a fresh IDR: seeking a growing HTTP MP4 can fail or decode\n"
-    "  // the old backlog again. Leave an intentional pause alone.\n"
-    "  const catchUp = () => {\n"
-    "    if (video.paused || video.seeking || video.readyState < 2 || !video.buffered.length) return;\n"
-    "    if (performance.now() - startedAt < 5000) return; // let a new decoder settle\n"
-    "    const last = video.buffered.length - 1;\n"
-    "    const end = video.buffered.end(last);\n"
-    "    if (end - video.currentTime > 1.5) start();\n"
-    "  };\n"
-    "  window.setInterval(catchUp, 250);\n"
-    "  stream.addEventListener('change', start); start();\n"
-    "  let lease = '', held = null, renewing = false, leaving = false;\n"
-    "  const controls = [...document.querySelectorAll('[data-direction]'), document.getElementById('live-center'), rate, zoom];\n"
-    "  const refreshControls = () => { controls.forEach(control => { control.disabled = !lease; }); };\n"
-    "  enable.checked = false; refreshControls();\n"
-    "  const controlRequest = async (action, token, value) => {\n"
-    "    const body = new URLSearchParams({csrf: script.dataset.csrf, action, lease: token});\n"
-    "    if (value !== undefined) body.set('value', value);\n"
-    "    const controller = new AbortController();\n"
-    "    const timeout = window.setTimeout(() => controller.abort(), 1500);\n"
-    "    try {\n"
-    "      const response = await fetch('/live/control', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body, signal: controller.signal});\n"
-    "      const message = (await response.text()).trim();\n"
-    "      if (!response.ok) throw new Error(message || ('HTTP ' + response.status));\n"
-    "      return message;\n"
-    "    } finally { window.clearTimeout(timeout); }\n"
-    "  };\n"
-    "  const dropControl = () => {\n"
-    "    const previous = lease; lease = ''; held = null; enable.checked = false; refreshControls();\n"
-    "    if (previous) fetch('/live/control', {method: 'POST', keepalive: true,\n"
-    "      body: new URLSearchParams({csrf: script.dataset.csrf, action: 'release', lease: previous})}).catch(() => {});\n"
-    "  };\n"
-    "  enable.addEventListener('change', async () => {\n"
-    "    enable.disabled = true;\n"
-    "    try {\n"
-    "      if (enable.checked) {\n"
-    "        const token = await controlRequest('acquire', '');\n"
-    "        if (!/^[0-9a-f]{32}$/.test(token)) throw new Error(L.unknownError);\n"
-    "        lease = token;\n"
-    "        if (leaving) dropControl();\n"
-    "        else controlStatus.textContent = L.manualEnabled;\n"
-    "      } else {\n"
-    "        const previous = lease; lease = ''; held = null; refreshControls();\n"
-    "        if (previous) await controlRequest('release', previous);\n"
-    "        controlStatus.textContent = L.manualDisabled;\n"
-    "      }\n"
-    "    } catch (error) {\n"
-    "      dropControl(); controlStatus.textContent = L.controlFailed + error.message;\n"
-    "    } finally { enable.checked = !!lease; enable.disabled = false; refreshControls(); }\n"
-    "  });\n"
-    "  window.setInterval(async () => {\n"
-    "    if (!lease || renewing) return;\n"
-    "    const previous = lease; renewing = true;\n"
-    "    try { await controlRequest('renew', previous); }\n"
-    "    catch (error) { if (lease === previous) { dropControl(); controlStatus.textContent = L.controlFailed + error.message; } }\n"
-    "    finally { renewing = false; }\n"
-    "  }, 1000);\n"
-    "  window.addEventListener('pagehide', () => { leaving = true; dropControl(); });\n"
-    "  window.addEventListener('pageshow', () => { leaving = false; });\n"
-    "  const sendControl = async (action, value) => {\n"
-    "    if (!lease) { controlStatus.textContent = L.enableFirst; return false; }\n"
-    "    const previous = lease;\n"
-    "    try {\n"
-    "      const message = await controlRequest(action, previous, value);\n"
-    "      controlStatus.textContent = message || L.commandSent;\n"
-    "      await new Promise(resolve => window.setTimeout(resolve, 200));\n"
-    "      return lease === previous;\n"
-    "    } catch (error) {\n"
-    "      if (lease === previous) dropControl();\n"
-    "      controlStatus.textContent = L.controlFailed + error.message; return false;\n"
-    "    }\n"
-    "  };\n"
-    "  const release = () => { held = null; };\n"
-    "  document.querySelectorAll('[data-direction]').forEach(button => button.addEventListener('pointerdown', async event => {\n"
-    "    event.preventDefault(); if (!enable.checked || held) return; held = button.dataset.direction; button.setPointerCapture(event.pointerId);\n"
-    "    const direction = held; while (held === direction && await sendControl(direction, Number(rate.value).toFixed(0))) {}\n"
-    "  }));\n"
-    "  window.addEventListener('pointerup', release); window.addEventListener('pointercancel', release); window.addEventListener('blur', release);\n"
-    "  document.getElementById('live-center').addEventListener('click', () => sendControl('center'));\n"
-    "  rate.addEventListener('input', () => { rateValue.textContent = Number(rate.value).toFixed(0) + '°/s'; });\n"
-    "  zoom.addEventListener('input', () => { zoomValue.textContent = Number(zoom.value).toFixed(1) + 'x'; });\n"
-    "  zoom.addEventListener('change', () => sendControl('zoom', Number(zoom.value).toFixed(1)));\n"
-    "  let attitudePending = false;\n"
-    "  const attitudeUnavailable = message => {\n"
-    "    attitudeRoll.textContent = attitudePitch.textContent = attitudeYaw.textContent = '—';\n"
-    "    attitudeRollRate.textContent = attitudePitchRate.textContent = attitudeYawRate.textContent = '—';\n"
-    "    attitudeWorld.style.transform = 'translateY(0) rotate(0)';\n"
-    "    attitudeHeading.style.transform = 'rotate(0)';\n"
-    "    attitudeDial.setAttribute('aria-label', L.attitudeUnavailable);\n"
-    "    attitudeStatus.textContent = message;\n"
-    "  };\n"
-    "  const refreshAttitude = async () => {\n"
-    "    if (attitudePending) return; attitudePending = true;\n"
-    "    try {\n"
-    "      const response = await fetch('/live/attitude.json', {cache: 'no-store'});\n"
-    "      if (!response.ok) throw new Error('HTTP ' + response.status);\n"
-    "      const data = await response.json();\n"
-    "      if (data.roll_deg === null || data.pitch_deg === null || data.yaw_deg === null) { attitudeUnavailable(L.attitudeUnavailable); return; }\n"
-    "      const roll = Number(data.roll_deg), pitch = Number(data.pitch_deg), yaw = Number(data.yaw_deg);\n"
-    "      attitudeRoll.textContent = roll.toFixed(1) + '°'; attitudePitch.textContent = pitch.toFixed(1) + '°'; attitudeYaw.textContent = yaw.toFixed(1) + '°';\n"
-    "      attitudeRollRate.textContent = data.roll_rate_dps === null ? '—' : Number(data.roll_rate_dps).toFixed(1) + '°/s';\n"
-    "      attitudePitchRate.textContent = data.pitch_rate_dps === null ? '—' : Number(data.pitch_rate_dps).toFixed(1) + '°/s';\n"
-    "      attitudeYawRate.textContent = data.yaw_rate_dps === null ? '—' : Number(data.yaw_rate_dps).toFixed(1) + '°/s';\n"
-    "      const pitchPixels = Math.max(-55, Math.min(55, pitch * 1.15));\n"
-    "      attitudeWorld.style.transform = 'translateY(' + pitchPixels + 'px) rotate(' + (-roll) + 'deg)';\n"
-    "      attitudeHeading.style.transform = 'rotate(' + yaw + 'deg)';\n"
-    "      attitudeDial.setAttribute('aria-label', L.attitudeLabel.replace('%s', roll.toFixed(1)).replace('%s', pitch.toFixed(1)).replace('%s', yaw.toFixed(1)));\n"
-    "      attitudeStatus.textContent = L.liveAttitude;\n"
-    "    } catch (error) { attitudeUnavailable(L.attitudeFailed + (error && error.message ? error.message : L.unknownError)); }\n"
-    "    finally { attitudePending = false; }\n"
-    "  };\n"
-    "  refreshAttitude(); window.setInterval(refreshAttitude, 250);\n"
-    "})();\n";
+static const char *live_script = "live.js";
 
 static void send_live_script(int fd)
 {
@@ -6431,119 +5656,13 @@ static void send_live_script(int fd)
     send_script(fd, items, sizeof(items) / sizeof(items[0]), live_script);
 }
 
-static const char status_script[] =
-    "(() => {\n"
-    "  const form = document.getElementById('time-sync');\n"
-    "  const browserTime = document.getElementById('browser-time-ms');\n"
-    "  if (!form || !browserTime) return;\n"
-    "  form.addEventListener('submit', () => { browserTime.value = Date.now().toString(); });\n"
-    "})();\n";
+static const char *status_script = "status.js";
 
 /* the nav and login language selectors apply on change; the fallback
  * button is hidden once the script runs */
-static const char language_script[] =
-    "(() => {\n"
-    "  const nav = document.getElementById('lang-nav');\n"
-    "  if (nav && nav.form) {\n"
-    "    nav.form.querySelectorAll('.lang-apply').forEach(button => { button.hidden = true; });\n"
-    "    nav.addEventListener('change', () => nav.form.submit());\n"
-    "  }\n"
-    "  const login = document.getElementById('lang-login');\n"
-    "  if (login) login.addEventListener('change', () => { window.location.replace('/login?lang=' + encodeURIComponent(login.value)); });\n"
-    "})();\n";
+static const char *language_script = "language.js";
 
-static const char upgrade_script[] =
-    "(() => {\n"
-    "  const script = document.currentScript;\n"
-    "  const form = document.getElementById('firmware-upload');\n"
-    "  if (!form || !script) return;\n"
-    "  const input = document.getElementById('firmware');\n"
-    "  const button = document.getElementById('select-firmware');\n"
-    "  const progress = document.getElementById('firmware-progress');\n"
-    "  const status = document.getElementById('firmware-status');\n"
-    "  if (!input || !button || !progress || !status) return;\n"
-    "  const waitTimeout = 60000;\n"
-    "  const pollDelay = 1000;\n"
-    "  const waitForRestart = () => {\n"
-    "    const started = Date.now();\n"
-    "    let disconnected = false;\n"
-    "    const poll = () => {\n"
-    "      const elapsed = Date.now() - started;\n"
-    "      progress.value = Math.min(95, 50 + elapsed * 45 / waitTimeout);\n"
-    "      if (elapsed >= waitTimeout) {\n"
-    "        status.textContent = L.timeout;\n"
-    "        alert(L.timeoutAlert);\n"
-    "        return;\n"
-    "      }\n"
-    "      const check = new XMLHttpRequest();\n"
-    "      check.open('GET', '/upgrade-status?t=' + Date.now());\n"
-    "      check.timeout = 2000;\n"
-    "      check.onload = () => {\n"
-    "        if (check.status === 401) {\n"
-    "          progress.hidden = true;\n"
-    "          status.textContent = L.backLogin;\n"
-    "          alert(L.backLogin);\n"
-    "          window.location.replace('/login');\n"
-    "          return;\n"
-    "        }\n"
-    "        if (check.status === 200 && /^[0-9a-f]{64}$/.test(check.responseText.trim()) && check.responseText.trim() !== script.dataset.csrf) {\n"
-    "          progress.value = 100;\n"
-    "          status.textContent = L.back;\n"
-    "          alert(L.backAlert);\n"
-    "          window.location.reload();\n"
-    "          return;\n"
-    "        }\n"
-    "        status.textContent = disconnected ? L.rebooting : L.waitingUpdater;\n"
-    "        setTimeout(poll, pollDelay);\n"
-    "      };\n"
-    "      check.onerror = check.ontimeout = () => {\n"
-    "        disconnected = true;\n"
-    "        status.textContent = L.rebooting;\n"
-    "        setTimeout(poll, pollDelay);\n"
-    "      };\n"
-    "      check.send();\n"
-    "    };\n"
-    "    poll();\n"
-    "  };\n"
-    "  button.addEventListener('click', () => input.click());\n"
-    "  input.addEventListener('change', () => {\n"
-    "    const file = input.files && input.files[0];\n"
-    "    if (!file) return;\n"
-    "    const pattern = new RegExp('^' + L.prefix + '[A-Za-z0-9._-]+' + L.suffix.replace(/\\./g, '\\\\.') + '$');\n"
-    "    if (!(pattern.test(file.name) || (L.installName && file.name === L.installName))) {\n"
-    "      status.textContent = L.badName; return;\n"
-    "    }\n"
-    "    if (file.size < 1 || file.size > 134217728) {\n"
-    "      status.textContent = L.badSize; return;\n"
-    "    }\n"
-    "    if (!confirm(L.confirmUpload.replace('%s', file.name))) return;\n"
-    "    const request = new XMLHttpRequest();\n"
-    "    request.open('POST', '/upgrade');\n"
-    "    request.setRequestHeader('Content-Type', 'application/octet-stream');\n"
-    "    request.setRequestHeader('X-CSRF-Token', script.dataset.csrf);\n"
-    "    request.setRequestHeader('X-Firmware-Name', file.name);\n"
-    "    request.upload.onprogress = event => {\n"
-    "      if (event.lengthComputable) { progress.hidden = false; progress.value = event.loaded * 50 / event.total; }\n"
-    "      status.textContent = L.writing.replace('%s', L.mediaRoot + '/' + file.name + '.tmp');\n"
-    "    };\n"
-    "    request.onload = () => {\n"
-    "      status.textContent = request.responseText.trim() || (L.httpStatus + request.status);\n"
-    "      if (request.status === 201 && " WEB_UPGRADE_REBOOTS_JS ") {\n"
-    "        progress.value = 50;\n"
-    "        status.textContent = L.uploaded;\n"
-    "        waitForRestart();\n"
-    "      } else if (request.status === 201) {\n"
-    "        progress.value = 100;\n"
-    "      } else { button.disabled = false; input.disabled = false; input.value = ''; }\n"
-    "    };\n"
-    "    request.onerror = () => {\n"
-    "      status.textContent = L.closed;\n"
-    "      button.disabled = false; input.disabled = false;\n"
-    "    };\n"
-    "    button.disabled = true; input.disabled = true; progress.hidden = false; progress.value = 0;\n"
-    "    request.send(file);\n"
-    "  });\n"
-    "})();\n";
+static const char *upgrade_script = "upgrade.js";
 
 #if WEB_INSTALLS_FIRMWARE
 #define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_Z1
@@ -6564,7 +5683,7 @@ static void send_upgrade_script(int fd)
 {
     char bad_name[256];
     const struct js_string items[] = {
-        {"mediaRoot", UPGRADE_WRITE_ROOT},
+        {"mediaRoot", UPGRADE_WRITE_ROOT}, {"reboots", WEB_UPGRADE_REBOOTS_JS},
         {"prefix", FIRMWARE_PREFIX}, {"suffix", FIRMWARE_SUFFIX},
         {"installName", FIRMWARE_INSTALL_NAME_JS},
         {"timeout", T(S_JS_FW_TIMEOUT)}, {"timeoutAlert", T(S_JS_FW_TIMEOUT_ALERT)},
@@ -6583,39 +5702,7 @@ static void send_upgrade_script(int fd)
 }
 
 #if WEB_HAVE_SSH_KEYS
-static const char users_script[] =
-    "(() => {\n"
-    "  const form = document.getElementById('ssh-key-upload');\n"
-    "  const input = document.getElementById('public-key-files');\n"
-    "  const data = document.getElementById('public-key-data');\n"
-    "  const select = document.getElementById('select-public-key-files');\n"
-    "  const status = document.getElementById('public-key-status');\n"
-    "  if (!form || !input || !data || !select || !status) return;\n"
-    "  select.addEventListener('click', () => input.click());\n"
-    "  input.addEventListener('change', async () => {\n"
-    "    const files = Array.from(input.files || []);\n"
-    "    if (!files.length) return;\n"
-    "    if (files.some(file => !/\\.pub$/i.test(file.name))) {\n"
-    "      status.textContent = L.selectPub; return;\n"
-    "    }\n"
-    "    select.disabled = true;\n"
-    "    status.textContent = L.reading;\n"
-    "    try {\n"
-    "      const contents = await Promise.all(files.map(file => file.text()));\n"
-    "      const combined = contents.map(text => text.trim()).filter(Boolean).join('\\n');\n"
-    "      if (!combined) throw new Error(L.empty);\n"
-    "      if (new TextEncoder().encode(combined).length > 65536) {\n"
-    "        throw new Error(L.tooLarge);\n"
-    "      }\n"
-    "      data.value = combined;\n"
-    "      status.textContent = L.uploading;\n"
-    "      form.submit();\n"
-    "    } catch (error) {\n"
-    "      status.textContent = error && error.message ? error.message : L.unreadable;\n"
-    "      select.disabled = false;\n"
-    "    }\n"
-    "  });\n"
-    "})();\n";
+static const char *users_script = "users.js";
 
 static void send_users_script(int fd)
 {
@@ -6660,7 +5747,7 @@ static void sync_firmware_storage(void)
 #endif
 
 /* Stream the request body to output; errno describes a failure. */
-static bool receive_upload_body(int fd, const struct request *request, int output,
+static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int output,
                                 size_t *received)
 {
     char expect[64];
@@ -6778,6 +5865,7 @@ static unsigned zip_le16(const unsigned char *p)
 
 static bool gcu_entry_name_ok(const char *name, size_t length)
 {
+    if (memchr(name, 0, length)) return false;
     static const char *const allowed[] = {
         "gcu/ap/SHA256SUMS", "gcu/ap/manifest.json", "gcu/ap/service.sh",
         "gcu/ap/camera-app", "gcu/ap/z1mini-web", "gcu/ap/ax-capture",
@@ -6785,6 +5873,15 @@ static bool gcu_entry_name_ok(const char *name, size_t length)
         "gcu/ipc/run.sh", "gcu/ipc/camera_gcu.sh",
     };
 
+    static const char prefix[] = "gcu/ap/webroot/";
+    if (length > sizeof(prefix) - 1 && memcmp(name, prefix, sizeof(prefix) - 1) == 0) {
+        char asset[128];
+        const size_t count = length - (sizeof(prefix) - 1);
+        if (count >= sizeof(asset)) return false;
+        memcpy(asset, name + sizeof(prefix) - 1, count);
+        asset[count] = 0;
+        return APC_WebRoot::known_asset(asset);
+    }
     for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
         if (strlen(allowed[i]) == length && memcmp(name, allowed[i], length) == 0) {
             return true;
@@ -7158,7 +6255,7 @@ static void cleanup_gcu_upload(int *output, bool *created, const char *path)
     errno=saved;
 }
 
-static void handle_firmware_install(int fd, const struct request *request, const char *peer)
+static void handle_firmware_install(int fd, const APC_HTTPRequest *request, const char *peer)
 {
     char filename[256];
     char content_type[128];
@@ -7267,7 +6364,7 @@ done:
 
 #endif
 
-static void handle_firmware_upload(int fd, const struct request *request,
+static void handle_firmware_upload(int fd, const APC_HTTPRequest *request,
                                    const char *peer)
 {
 #if WEB_INSTALLS_FIRMWARE
@@ -7513,7 +6610,7 @@ enum range_result {
     RANGE_INVALID
 };
 
-static enum range_result parse_byte_range(const struct request *request, uint64_t size,
+static enum range_result parse_byte_range(const APC_HTTPRequest *request, uint64_t size,
                                           uint64_t *start, uint64_t *end)
 {
     char value[256];
@@ -7568,7 +6665,7 @@ static void safe_download_name(const char *path, char output[256])
     output[used] = '\0';
 }
 
-static void send_file_response(int client, const struct request *request,
+static void send_file_response(int client, const APC_HTTPRequest *request,
                                const char *requested_path, bool download)
 {
     char resolved[PATH_MAX];
@@ -7648,7 +6745,7 @@ static void send_file_response(int client, const struct request *request,
     close(file);
 }
 
-static void send_file_response_async(int client, const struct request *request,
+static void send_file_response_async(int client, const APC_HTTPRequest *request,
                                      const char *path, bool download)
 {
     pid_t worker = fork();
@@ -7664,43 +6761,7 @@ static void send_file_response_async(int client, const struct request *request,
     }
 }
 
-static const char reboot_script[] =
-    "(() => {\n"
-    "  const script = document.currentScript;\n"
-    "  const status = document.getElementById('reboot-status');\n"
-    "  const heading = document.getElementById('reboot-heading');\n"
-    "  if (!script || !status || !heading) return;\n"
-    "  const started = Date.now();\n"
-    "  const poll = () => {\n"
-    "    if (Date.now() - started >= 60000) {\n"
-    "      status.textContent = status.dataset.timeout;\n"
-    "      return;\n"
-    "    }\n"
-    "    const check = new XMLHttpRequest();\n"
-    "    check.open('GET', '/upgrade-status?t=' + Date.now());\n"
-    "    check.timeout = 2000;\n"
-    "    const retry = () => {\n"
-    "      status.textContent = status.dataset.wait;\n"
-    "      setTimeout(poll, 1000);\n"
-    "    };\n"
-    "    check.onload = () => {\n"
-    "      const token = check.responseText.trim();\n"
-    "      // A restart changes the server token, or invalidates the browser's\n"
-    "      // session. A response from the old server is not completion.\n"
-    "      if (check.status === 401 || (check.status === 200 &&\n"
-    "          /^[0-9a-f]{64}$/.test(token) && token !== script.dataset.csrf)) {\n"
-    "        heading.textContent = status.dataset.back;\n"
-    "        status.textContent = check.status === 401 ? status.dataset.login : status.dataset.back;\n"
-    "        window.location.replace('/');\n"
-    "        return;\n"
-    "      }\n"
-    "      retry();\n"
-    "    };\n"
-    "    check.onerror = check.ontimeout = retry;\n"
-    "    check.send();\n"
-    "  };\n"
-    "  poll();\n"
-    "})();\n";
+static const char *reboot_script = "reboot.js";
 
 static void send_rebooting_page(int fd)
 {
@@ -7763,8 +6824,8 @@ static void apply_configured_timezone(void)
 
 static void handle_request(int fd, const char *peer)
 {
-    struct request request = {};
-    int receive_status = receive_request(fd, &request);
+    APC_HTTPRequest request = {};
+    int receive_status = request.receive(fd);
     char session_token[65];
     bool login_route;
     int auth;
@@ -7774,7 +6835,7 @@ static void handle_request(int fd, const char *peer)
     /* Browsers commonly leave speculative connections idle.  Closing an
      * incomplete connection quietly avoids presenting an unsolicited 400 as
      * the result of an unrelated navigation on another connection. */
-    if (receive_status == RECEIVE_INCOMPLETE) return;
+    if (receive_status == -1) return;
     if (receive_status != 0) {
         if (receive_status == 500) {
             send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
@@ -7786,6 +6847,11 @@ static void handle_request(int fd, const char *peer)
             send_text_errorf(fd, 400, "Bad Request", S_E_MALFORMED);
         }
         return;
+    }
+    if (strcmp(request.method, "GET") == 0 &&
+        (strcmp(request.path, "/style.css") == 0 || strcmp(request.path, "/log.css") == 0)) {
+        send_asset(fd, request.path + 1, "text/css; charset=utf-8");
+        goto done;
     }
     /* Branding is public so login pages can display their favicon too. */
     if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/favicon.svg") == 0) {
@@ -7799,8 +6865,7 @@ static void handle_request(int fd, const char *peer)
     /* No credentials or tokens in this script. Serve it even if a restart
      * expired the session between loading the reboot page and its script. */
     if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/reboot.js") == 0) {
-        send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
-                      reboot_script, sizeof(reboot_script) - 1U, NULL);
+        send_asset(fd, reboot_script, "application/javascript; charset=utf-8");
         goto done;
     }
     select_language(&request);
@@ -7817,8 +6882,7 @@ static void handle_request(int fd, const char *peer)
             handle_login(fd, &request, peer);
         } else if (strcmp(request.method, "GET") == 0 &&
                    strcmp(request.path, "/language.js") == 0) {
-            send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
-                          language_script, sizeof(language_script) - 1U, NULL);
+            send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
                    strcmp(request.path, "/upgrade-status") == 0) {
             /* Reboot polling must reach its onload handler when the cookie
@@ -7848,8 +6912,7 @@ static void handle_request(int fd, const char *peer)
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
         send_parameter_page(fd, NULL, false, NULL);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/files.js") == 0) {
-        send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
-                      files_script, sizeof(files_script) - 1U, NULL);
+        send_asset(fd, files_script, "application/javascript; charset=utf-8");
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters.js") == 0) {
         send_parameters_script(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/raw") == 0) {
@@ -7875,11 +6938,9 @@ static void handle_request(int fd, const char *peer)
         send_sensors_script(fd);
 #endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/status.js") == 0) {
-        send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
-                      status_script, sizeof(status_script) - 1U, NULL);
+        send_asset(fd, status_script, "application/javascript; charset=utf-8");
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/language.js") == 0) {
-        send_response(fd, 200, "OK", "application/javascript; charset=utf-8",
-                      language_script, sizeof(language_script) - 1U, NULL);
+        send_asset(fd, language_script, "application/javascript; charset=utf-8");
 #if WEB_HAVE_SSH_KEYS
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/users.js") == 0) {
         send_users_script(fd);
@@ -8205,7 +7266,8 @@ static void handle_request(int fd, const char *peer)
         send_text_errorf(fd, 404, "Not Found", S_NOT_FOUND);
     }
 done:
-    free(request.storage);
+    // Request storage is released by its owner on every exit path.
+    return;
 }
 
 static void handle_signal(int signal_number)
@@ -8236,9 +7298,28 @@ static int create_listener(unsigned port)
 
 int main(int argc, char **argv)
 {
+    static char webroot_path[PATH_MAX];
 #ifdef WEB_PORTABLE_SITL
     if (portable_paths_init() < 0) { fprintf(stderr, "Invalid portable SITL paths\n"); return 2; }
 #endif
+#ifndef WEBROOT_PATH
+#define WEBROOT_PATH ""
+#endif
+    const char *assets = WEBROOT_PATH;
+#ifdef WEB_PORTABLE_SITL
+    assets = getenv("CAMERA_GIMBAL_SITL_WEBROOT");
+#endif
+    if (assets && assets[0]) webroot.set_path(assets);
+    else {
+        const size_t root_length = strlen(APP_DIR);
+        if (root_length > sizeof(webroot_path) - sizeof("/webroot")) {
+            fprintf(stderr, "Webroot path is too long\n");
+            return 2;
+        }
+        memcpy(webroot_path, APP_DIR, root_length);
+        memcpy(webroot_path + root_length, "/webroot", sizeof("/webroot"));
+        webroot.set_path(webroot_path);
+    }
     unsigned port = DEFAULT_PORT;
 
 #if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))

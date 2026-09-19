@@ -13,9 +13,9 @@ int main()
     assert(!response.append_html_n("", oversized));
     assert(response.size() == length);
     char *body = response.release();
-    assert(response.data() == nullptr && response.size() == 0);
+    assert(response.data()[0] == 0 && response.size() == 0);
     response.reset();
-    assert(strcmp(body, "&lt;&amp;&quot;&#39; 123") == 0);
+    assert(body == nullptr); // A failed response must never publish partial HTML.
     free(body);
     assert(response.append_url("space &?"));
     assert(strcmp(response.data(), "space%20%26%3F") == 0);

@@ -367,6 +367,14 @@ def test_login_and_languages(csrf):
     assert status == 200 and b"lang-login" in body
     subprocess.run(["node", "--check"], input=body, check=True)
 
+    status, stylesheet, style_headers = raw_request("GET", "/style.css")
+    assert status == 200 and b".live-video" in stylesheet
+    assert dict(style_headers)["Content-Type"].startswith("text/css")
+    assert "style-src 'self'" in dict(style_headers)["Content-Security-Policy"]
+    for private_asset in ("/head.html", "/webroot/head.html", "/../head.html", "/%2e%2e/head.html"):
+        status, _, _ = request("GET", private_asset, "initial-password")
+        assert status == 404, private_asset
+
     # wrong password, expired form token
     status, body, headers = login_form("wrong-password")
     assert status == 401 and b"Incorrect username or password" in body
