@@ -1,5 +1,5 @@
-#include "apcam/compiler.h"
 #pragma once
+#include "apcam/compiler.h"
 #include "mi/star/i6_sys.h"
 #include "mi/star/i6_snr.h"
 #include "mi/star/i6_vif.h"

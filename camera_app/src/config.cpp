@@ -114,6 +114,7 @@ const char *ca_video_codec_name(enum ca_video_codec codec)
 const char *ca_thermal_palette_name(enum ca_thermal_palette palette)
 {
     const auto *field = APC_Config::find("thermal", "palette");
+    if (!field) return "white_hot";
     for (size_t i = 0; i < field->option_count; i++) {
         if (field->options[i].value == (int)palette) return field->options[i].name;
     }

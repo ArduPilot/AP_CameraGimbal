@@ -94,6 +94,7 @@ release: camera-definitions
 		--output '$(RELEASE_ROOT)' --targets $(RELEASE_TARGETS)
 
 release-test:
+	python3 tests/test_cpp_build.py
 	python3 tests/test_release.py
 	python3 tests/test_build_dependencies.py
 	python3 tests/test_prebuilt_tools.py

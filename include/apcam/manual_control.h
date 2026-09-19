@@ -1,6 +1,6 @@
-#include "compiler.h"
 #ifndef APCAM_MANUAL_CONTROL_H
 #define APCAM_MANUAL_CONTROL_H
+#include "compiler.h"
 #include <stdint.h>
 /* Private loopback IPC shared by the web server and camera app. No persistent
  * state: a new app owns a new socket and issues new random lease tokens. */

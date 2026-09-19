@@ -104,8 +104,12 @@ inline bool APC_StringBuffer::vappendf(const char *fmt, va_list ap)
     va_copy(copy, ap);
     length = vsnprintf(NULL, 0, fmt, copy);
     va_end(copy);
-    if (length < 0 || !reserve((size_t)length)) return false;
-    vsnprintf(_data + _length, _capacity - _length, fmt, ap);
+    if (length < 0) { invalidate(); return false; }
+    if (!reserve((size_t)length)) return false;
+    if (vsnprintf(_data + _length, _capacity - _length, fmt, ap) != length) {
+        invalidate();
+        return false;
+    }
     _length += (size_t)length;
     return true;
 }
@@ -156,11 +160,11 @@ inline bool APC_StringBuffer::append_html(const char *text)
 inline bool APC_StringBuffer::append_html_n(const char *text,
                              size_t length)
 {
-    if (length == SIZE_MAX) return false;
+    if (length == SIZE_MAX) { invalidate(); return false; }
     char *copy = static_cast<char *>(malloc(length + 1));
     bool ok;
 
-    if (copy == NULL) return false;
+    if (copy == NULL) { invalidate(); return false; }
     memcpy(copy, text, length);
     copy[length] = '\0';
     ok = append_html(copy);

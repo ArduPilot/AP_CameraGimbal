@@ -5172,6 +5172,15 @@ static char *render_log_page(size_t *page_len)
     return page.release();
 }
 
+// Rendering can fail because assets are unavailable, not only for allocation.
+static bool send_missing_webroot_error(int fd)
+{
+    if (webroot.available()) return false;
+    send_text_error(fd, 503, "Service Unavailable",
+                    "Web interface assets unavailable. Reinstall the complete webroot or firmware package.\n", nullptr);
+    return true;
+}
+
 static char *render_login_page(const char *message, bool message_is_error,
                                size_t *page_len)
 {
@@ -5207,6 +5216,7 @@ static void send_login_page(int fd, int status, const char *message, bool is_err
     char *page = render_login_page(message, is_error, &length);
 
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -5389,6 +5399,7 @@ static void send_page(int fd, const char *message, bool is_error)
     size_t length;
     char *page = render_page(message, is_error, &length);
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -5403,6 +5414,7 @@ static void send_parameter_page(int fd, const char *message, bool is_error,
     size_t length;
     char *page = render_parameter_page(message, is_error, submitted, &length);
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_E_CONFIG_UNREADABLE);
         return;
     }
@@ -5416,6 +5428,7 @@ static void send_raw_page(int fd, const char *message, bool is_error)
     size_t length;
     char *page = render_raw_page(message, is_error, &length);
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_E_CONFIG_UNREADABLE);
         return;
     }
@@ -5430,6 +5443,7 @@ static void send_users_page(int fd, const char *message, bool is_error)
     char *page = render_users_page(message, is_error, &length);
 
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -5444,6 +5458,7 @@ static void send_sensors_page(int fd, const char *message, bool is_error)
     char *page = render_sensors_page(message, is_error, &length);
 
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -5458,6 +5473,7 @@ static void send_live_page(int fd)
     char *page = render_live_page(&length);
 
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -6559,6 +6575,7 @@ static void send_log_page(int fd)
     size_t length;
     char *page = render_log_page(&length);
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
         return;
     }
@@ -6584,6 +6601,7 @@ static void send_files_page(int fd, const char *path, const char *message, bool 
     size_t length;
     char *page = render_files_page(path, message, is_error, &length, error, sizeof(error));
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_error(fd, 400, "Bad Request", error, NULL);
         return;
     }
@@ -6598,6 +6616,7 @@ static void send_view_page(int fd, const char *path)
     size_t length;
     char *page = render_view_page(path, &length, error, sizeof(error));
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_error(fd, 400, "Bad Request", error, NULL);
         return;
     }
@@ -6611,6 +6630,7 @@ static void send_delete_page(int fd, const char *path)
     size_t length;
     char *page = render_delete_page(path, &length, error, sizeof(error));
     if (page == NULL) {
+        if (send_missing_webroot_error(fd)) return;
         send_text_error(fd, 403, "Forbidden", error, NULL);
         return;
     }
@@ -6799,6 +6819,11 @@ static void send_rebooting_page(int fd)
     body.appendf("</p><p><a id=reboot-home href=/ class=button>%s</a></p></main>"
                       "<script id=reboot-monitor src=/reboot.js data-csrf=\"%s\" defer></script></body></html>",
                T(S_REBOOT_HOME), csrf_token);
+    if (!body.valid()) {
+        if (!send_missing_webroot_error(fd))
+            send_text_errorf(fd, 500, "Internal Server Error", S_OUT_OF_MEMORY);
+        return;
+    }
     send_response(fd, 200, "OK", "text/html; charset=utf-8", body.data(), body.size(), NULL);
     body.reset();
 }

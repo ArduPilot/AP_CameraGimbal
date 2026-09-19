@@ -14,7 +14,10 @@ their existing layouts; compile-time ABI assertions remain enabled.
 
 `CXX` selects the cross C++ compiler and `HOST_CXX` the host compiler.
 Camera `CFLAGS` remain shared warning/optimization settings, with the C
-language standard removed before applying `CXXFLAGS`. ARM release binaries
+language standard removed before applying `CXXFLAGS`. Required GNU C++17,
+no-exceptions and no-RTTI flags follow user overrides; the web build also
+preserves its required warning flags. The web build accepts `CXXFLAGS` and
+retains `CFLAGS` compatibility with existing scripts. ARM release binaries
 link the C++ runtime statically so they do not require newer libraries on the
 camera. The Windows native builder uses the same C++ sources and still bundles
 its Cygwin dependencies. Native macOS SITL uses Apple Clang and libc++, with

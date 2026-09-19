@@ -1,6 +1,6 @@
-#include "apcam/compiler.h"
 #ifndef CAMERA_APP_EXPOSURE_H
 #define CAMERA_APP_EXPOSURE_H
+#include "apcam/compiler.h"
 #include <stdint.h>
 #include <math.h>
 
