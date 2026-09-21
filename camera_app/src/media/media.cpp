@@ -254,6 +254,13 @@ int APC_Media::configure(const struct ca_config *settings)
             return -1;
         }
     }
+    if (_backend->configure_raw_thermal(settings) < 0) {
+        int saved = errno;
+        (void)_backend->apply_overlay(old);
+        if (!ca_config_image_equal(old, settings)) (void)_backend->apply_image(old);
+        errno = saved;
+        return -1;
+    }
     _config.settings = *settings;
     return 0;
 }

@@ -41,6 +41,8 @@ void ca_config_defaults(struct ca_config *config)
     config->uart_protocol = CA_UART_NONE;
     config->thermal_palette = CA_PALETTE_WHITE_HOT;
     config->autorecord = CA_AUTORECORD_DISABLED;
+    config->raw_stream_fps = 5;
+    config->raw_record_fps = 5;
     config->main_resolution = (enum ca_video_resolution)APCAM_DEFAULT_MAIN_RESOLUTION;
     config->sub_resolution = (enum ca_video_resolution)APCAM_DEFAULT_SUB_RESOLUTION;
     config->recording_resolution = (enum ca_video_resolution)APCAM_DEFAULT_RECORDING_RESOLUTION;

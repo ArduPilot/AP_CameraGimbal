@@ -17,6 +17,7 @@
 #include "camera_app/mp4.h"
 #include "camera_app/raw_thermal.h"
 #include "camera_app/raw_thermal_server.h"
+#include "camera_app/thermal_stream.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/still.h"
 
@@ -77,6 +78,8 @@ struct APC_Media_MT11_State {
     struct ca_mt11_thermal *thermal;
     struct ca_raw_thermal *raw_thermal;
     struct ca_raw_thermal_server *raw_thermal_server;
+    ca_thermal_stream *thermal_stream;
+    APC_ATOMIC(uint8_t) stream_gain;
     uint16_t *thermal_latest;
     bool thermal_latest_valid;
     struct timespec thermal_latest_timestamp;
@@ -117,6 +120,9 @@ public:
     }
     bool ready() const override;
     int set_recording(bool active) override;
+    int configure_raw_thermal(const ca_config *settings) override {
+        return ca_thermal_stream_configure(_state->thermal_stream, settings);
+    }
     bool recording() const override;
     const char * recording_path() const override;
     int set_zoom(float zoom) override;
@@ -230,6 +236,7 @@ static void consume_frame(struct APC_Media_MT11_State *media, unsigned channel,
             (void)ca_mp4_close(media->mp4[i]);
             media->mp4[i] = NULL;
         }
+        (void)ca_thermal_stream_recording(media->thermal_stream, false, nullptr);
         atomic_store(&media->recording, false);
     }
     pthread_mutex_unlock(&media->lock);
@@ -355,6 +362,8 @@ static void thermal_frame(const uint8_t *display_yuyv,
     struct ca_thermal_range range = {};
     unsigned frame_number;
     td_s32 result;
+    ca_thermal_stream_publish(media->thermal_stream, radiometric_y16, captured_at,
+                             atomic_load(&media->stream_gain), !atomic_load(&media->inverted));
     if (ca_mt11_thermal_range_from_y16(
             radiometric_y16, CA_MT11_THERMAL_WIDTH,
             CA_MT11_THERMAL_HEIGHT, &range)) {
@@ -422,6 +431,8 @@ static void media_cleanup(struct APC_Media_MT11_State *media)
     ca_live_video_server_close(media->live_video);
     media->live_video = NULL;
     (void)media->owner->set_recording(false);
+    ca_thermal_stream_close(media->thermal_stream);
+    media->thermal_stream = nullptr;
     ca_rtsp_close(media->rtsp);
     media->rtsp = NULL;
     for (int channel = (int)CA_MT11_VENC_COUNT - 1; channel >= 0; channel--) {
@@ -530,6 +541,9 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
                                    CA_MT11_THERMAL_HEIGHT) < 0) {
         goto fail;
     }
+    stage = "lossless thermal startup";
+    media->stream_gain = 255;
+    if (ca_thermal_stream_open(&media->thermal_stream, config->rtsp_port, false, &config->settings) < 0) goto fail;
     ca_mt11_configure_vi(&media->vi_cfg[CA_MT11_ZOOM_PIPE], TD_FALSE);
     ca_mt11_configure_vi(&media->vi_cfg[CA_MT11_WIDE_PIPE], TD_TRUE);
     stage = "SYS/VB initialization";
@@ -735,6 +749,16 @@ int APC_Media_MT11::set_recording(bool active)
             errno = saved_errno;
             return -1;
         }
+        if (ca_thermal_stream_recording(media->thermal_stream, true, media->recording_path[0]) < 0) {
+            int saved = errno;
+            for (unsigned i=0; i<2; i++) {
+                (void)ca_mp4_close(media->mp4[i]); media->mp4[i] = nullptr;
+                (void)unlink(media->recording_path[i]);
+            }
+            pthread_mutex_unlock(&media->lock);
+            errno = saved;
+            return -1;
+        }
         atomic_store(&media->recording, true);
         media->recording_wait_keyframe[0] = true;
         media->recording_wait_keyframe[1] = true;
@@ -743,7 +767,7 @@ int APC_Media_MT11::set_recording(bool active)
         ca_log("recording started RGB=%s thermal=%s",
                media->recording_path[0], media->recording_path[1]);
     } else {
-        int result = 0;
+        int result = ca_thermal_stream_recording(media->thermal_stream, false, nullptr);
         for (unsigned channel = 0; channel < 2U; channel++) {
             if (ca_mp4_close(media->mp4[channel]) < 0) result = -1;
             media->mp4[channel] = NULL;
@@ -1004,7 +1028,9 @@ int APC_Media_MT11::get_thermal_gain(uint8_t *gain)
         errno = EINVAL;
         return -1;
     }
-    return ca_mt11_thermal_get_gain(media->thermal, gain);
+    int result = ca_mt11_thermal_get_gain(media->thermal, gain);
+    if (result == 0) media->stream_gain = *gain;
+    return result;
 }
 
 int APC_Media_MT11::set_thermal_gain(uint8_t gain)
@@ -1014,7 +1040,9 @@ int APC_Media_MT11::set_thermal_gain(uint8_t gain)
         errno = EINVAL;
         return -1;
     }
-    return ca_mt11_thermal_set_gain(media->thermal, gain);
+    int result = ca_mt11_thermal_set_gain(media->thermal, gain);
+    if (result == 0) media->stream_gain = gain;
+    return result;
 }
 
 int APC_Media_MT11::get_thermal_palette(uint8_t *palette)

@@ -91,6 +91,17 @@ keep their vendor telemetry separate. Internal gimbal sockets use automatically
 allocated ports. Existing MAVLink port and component settings are preserved;
 conflicting saved settings are reported before starting the group.
 
+When connecting a real camera and a simulator to the same vehicle, give each
+camera a distinct component ID. For example, keep the real MT11 at camera 100 /
+gimbal 154 (mount 1), and set the simulator's `camera_component_id` to 101 /
+gimbal 171 (mount 2). The gimbal component follows the camera component
+automatically; restart the camera app after changing its identity. Different
+network ports alone do not distinguish MAVLink devices. Duplicate identities
+can make map ROI commands drive the simulator while video comes from the real
+camera. After correcting a duplicate identity or disconnecting the simulator,
+restart vehicle SITL so its MAVLink mount backend discovers the intended link
+again. Set the corresponding `MNTn_TARG_RATE` above zero to enable commands.
+
 Slot 1 keeps its existing build/runtime directory. Additional slots use
 `<build>-instance-<number>/<camera>/runtime`, with separate parameters, login
 settings, recordings and logs. These are siblings of slot 1 so cleaning its
@@ -520,3 +531,21 @@ palette/source changes, autofocus, still captures and recording) with:
 ```sh
 make sitl-image-controls-test
 ```
+
+## Raw thermal FFV1 stream
+
+SITL-MT11 advertises stream 3, lossless 640x512 16-bit FFV1 in Matroska, at
+RTSP port + 2 (normally `http://127.0.0.1:8556/thermal.mkv`). The source is a
+labelled full-depth sensor test pattern, with capture-time simulated telemetry.
+Use `camera view rawthermal` in the updated MAVProxy camera module.
+See [build, viewer, automated tests and protocol details](../camera_app/RAW_THERMAL.md).
+
+Raw thermal recording and streaming use independent live rates,
+`RAW_RECORD_FPS` (0–25; 0 disables recording) and `RAW_STREAM_FPS` (1–25),
+both defaulting to 5 fps. These are also in web Parameters → Video and in
+`[thermal] record_fps` / `stream_fps`. Raw `.mkv` files follow the existing
+manual and automatic video recording policy, including While Armed.
+`python3 sitl/test_raw_thermal_stream.py --mavproxy /path/to/MAVProxy`
+checks both rates, slow clients, recording without streaming, arm/disarm,
+live changes through both MAVLink protocols and INI reload, and exact decoded
+sensor samples. See [raw thermal details](../camera_app/RAW_THERMAL.md).

@@ -208,7 +208,7 @@ def main():
                     "-t", "1", *params, "-y", str(fixture)], check=True)
     config = directory / "camera.ini"
     codec = "h265" if args.codec == "hevc" else "h264"
-    config.write_text(f"[stream.main]\nresolution = 1920x1080\ncodec = {codec}\n[stream.sub]\nresolution = 1280x720\ncodec = {codec}\n[mavlink]\nsystem_id = 0\n")
+    config.write_text(f"[stream.main]\nresolution = 1920x1080\ncodec = {codec}\n[stream.sub]\nresolution = 1280x720\ncodec = {codec}\n[recording]\nresolution = 1920x1080\n[mavlink]\nsystem_id = 0\n")
     gimbal_port, mav_port, rtsp_port = port(socket.SOCK_DGRAM), port(), port()
     camera_ready, gimbal_ready = directory / "camera.ready", directory / "gimbal.ready"
     camera_ready.unlink(missing_ok=True)
@@ -351,10 +351,9 @@ def main():
 
             for zoom in (2.0, 4.0, 5.0, 1.0):
                 command(link, M.MAV_CMD_SET_CAMERA_ZOOM, 2, (zoom - 1) / (.09 if args.backend == "mt11" else .05))
-                # MT11 quantizes E5739 optical zoom in tenths after the 3.44x
-                # wide/tele crossover. A8 uses a continuous digital crop.
-                magnification = (3.44 * (int(zoom * 10 / 3.44 + .0001) / 10)
-                                 if args.backend == "mt11" and zoom > 3.44 else zoom)
+                # MAVLink zoom operates on the selected RGB lens. The initial
+                # wide lens keeps its digital crop across the tele crossover.
+                magnification = zoom
                 visible_fov = math.degrees(2 * math.atan(math.tan(math.radians(88) / 2) / magnification))
                 for stream_id in (1, 2):
                     expected_fov = 24.2 if args.backend == "mt11" and stream_id == 2 else visible_fov

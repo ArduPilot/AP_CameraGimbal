@@ -674,6 +674,8 @@ try:
         "osd_thermal_fov": "true",
         "log_disarmed": "false",
         "thermal_palette": "white_hot",
+        "raw_stream_fps": "8",
+        "raw_record_fps": "3",
         "autorecord": "while_armed",
         "recording_resolution": "1920x1080",
         "main_resolution": "1920x1080",
@@ -723,6 +725,8 @@ try:
     assert 'cross = "true"' in saved_config and 'thermal_fov = "true"' in saved_config
     assert 'recording = "true"' in saved_config
     assert 'autorecord = "while_armed"' in saved_config
+    assert 'stream_fps = "8"' in saved_config
+    assert 'record_fps = "3"' in saved_config
     assert 'alias = "main.264"' in saved_config and 'alias = ""' in saved_config
     assert "retained from an installation" in saved_config
     status, body, _ = request("GET", "/parameters", "initial-password")

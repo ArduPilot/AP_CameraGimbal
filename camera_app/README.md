@@ -895,6 +895,24 @@ SITL saves these fields but never modifies the host network. Address and route
 handling is tested in an isolated Linux network namespace; see the
 [SITL network test](../sitl/README.md#supportproxy-integration-tests) instructions.
 
+## Lossless raw thermal video
+
+MT11 and SITL-MT11 now advertise a third, full-depth 640x512 FFV1/Matroska
+thermal stream over HTTP (normally port 8556). Every frame includes its own
+position, vehicle/gimbal attitudes, timestamps and temperature range. MAVProxy
+can display temperatures and save the original 16-bit samples with metadata.
+`RAW_STREAM_FPS` and `RAW_RECORD_FPS` independently set streaming and recording
+rates through MAVLink or web Parameters (both default to 5 fps; recording 0
+disables raw files). Lossless `.raw.mkv` files accompany ordinary video and
+follow the same manual/automatic recording policy, including while armed.
+Changes apply live. Metadata timestamps have microsecond resolution; container
+playback timestamps use millisecond ticks.
+Display RTSP streams and the legacy port-7345 raw service remain available.
+See [the raw thermal protocol, limitations and test instructions](RAW_THERMAL.md).
+Discovery uses experimental MAVLink stream type 200 pending upstream allocation.
+The [MT11 hardware test results](../docs/mt11-raw-thermal-test.md) cover lossless
+samples, live telemetry and concurrent video at the default 5 Hz.
+
 ## Install
 
 ```sh

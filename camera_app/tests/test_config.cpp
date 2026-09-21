@@ -47,6 +47,7 @@ int main(int argc, char **argv)
     assert(config.support.video1_port == 0U);
     assert(config.support.video2_port == 0U);
     assert(config.autorecord == CA_AUTORECORD_DISABLED);
+    assert(config.raw_stream_fps == 5 && config.raw_record_fps == 5);
     assert(config.mavlink_system_id == 0U);
     assert(config.mavlink_camera_component_id == 100U);
     assert(config.mavlink_tcp_port == 14550U);
@@ -104,7 +105,7 @@ int main(int argc, char **argv)
                   "ironbow") == 0);
     assert(strcmp(config.main_alias, "main.264") == 0 && config.sub_alias[0] == '\0');
 
-    assert(ca_config_param_count() == 34U);
+    assert(ca_config_param_count() == 36U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);
@@ -147,6 +148,19 @@ int main(int argc, char **argv)
     assert(config.mavlink_system_id == 0U);
     assert(ca_config_param_save(&config, path,
         (size_t)ca_config_param_find("THERMAL_PALETTE"), 1) < 0);
+    size_t stream_fps = (size_t)ca_config_param_find("RAW_STREAM_FPS");
+    size_t record_fps = (size_t)ca_config_param_find("RAW_RECORD_FPS");
+    assert(ca_config_param_save(&config, path, stream_fps, 10) == 0);
+    assert(ca_config_param_save(&config, path, record_fps, 0) == 0);
+    ca_config_defaults(&config);
+    assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(config.raw_stream_fps == 10 && config.raw_record_fps == 0);
+    assert(ca_config_param_save(&config, path, stream_fps, 0) < 0);
+    assert(ca_config_param_save(&config, path, stream_fps, 26) < 0);
+    assert(ca_config_param_save(&config, path, record_fps, -1) < 0);
+    assert(ca_config_param_save(&config, path, record_fps, 26) < 0);
+    assert(ca_config_param_save(&config, path, record_fps, 1.5f) < 0);
+    assert(ca_config_param_save(&config, path, record_fps, NAN) < 0);
     size_t autorecord = (size_t)ca_config_param_find("REC_AUTOSTART");
     assert(ca_config_param_save(&config, path, autorecord, 2) == 0);
     assert(config.autorecord == CA_AUTORECORD_WHILE_ARMED);

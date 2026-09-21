@@ -149,6 +149,10 @@ enum string_id {
     S_H_POSITION_TARGETING,
     S_P_THERMAL_PALETTE,
     S_H_THERMAL_PALETTE,
+    S_P_RAW_STREAM_FPS,
+    S_H_RAW_STREAM_FPS,
+    S_P_RAW_RECORD_FPS,
+    S_H_RAW_RECORD_FPS,
     S_P_AUTORECORD,
     S_H_AUTORECORD_APP,
     S_P_RECORDING_RESOLUTION,
@@ -699,6 +703,10 @@ static constexpr Translations translations = [] {
     result[S_H_POSITION_TARGETING] = {"When enabled, advertise and handle geographic ROI targets in the camera. Disable to make ArduPilot calculate and send angle targets. Changes apply when saved; the updated capability is advertised to the flight controller.", "启用时，由相机宣告并处理地理 ROI 目标。禁用时，由 ArduPilot 计算并发送角度目标。保存后生效。", "有効にすると、カメラが地理 ROI ターゲットを通知して処理します。無効にすると、ArduPilot が角度ターゲットを計算して送信します。保存時に反映します。"};
     result[S_P_THERMAL_PALETTE] = {"Thermal palette", "热成像调色板", "サーマルパレット"};
     result[S_H_THERMAL_PALETTE] = {"Pseudo-colour palette applied by the thermal module to video and still images.", "热成像模块应用于视频和照片的伪彩调色板。", "サーマルモジュールが映像と静止画に適用する疑似カラーパレット。"};
+    result[S_P_RAW_STREAM_FPS] = {"Raw thermal streaming rate (fps)", "原始热成像流帧率 (fps)", "生サーマル配信レート (fps)"};
+    result[S_H_RAW_STREAM_FPS] = {"1–25 fps; default 5. Applies immediately. Slow connections receive fewer frames; every delivered frame remains lossless.", "1–25 fps，默认 5，立即生效。低速连接会跳帧，但保留每帧的全部数据。", "1～25 fps、初期値5。即時反映。低速回線ではフレームを間引きますが、各フレームは可逆圧縮です。"};
+    result[S_P_RAW_RECORD_FPS] = {"Raw thermal recording rate (fps)", "原始热成像录像帧率 (fps)", "生サーマル録画レート (fps)"};
+    result[S_H_RAW_RECORD_FPS] = {"0 disables; 1–25 fps, default 5. Saves lossless Matroska beside video files and follows the same recording controls and automatic recording policy. Applies immediately.", "0 关闭；1–25 fps，默认 5。与视频文件一起保存无损 Matroska，遵循相同的录像控制和自动录像设置。立即生效。", "0で無効、1～25 fps、初期値5。動画と同じ場所に可逆圧縮Matroskaを保存し、同じ録画操作と自動録画設定に従います。即時反映。"};
     result[S_P_AUTORECORD] = {"Automatic recording", "自动录像", "自動録画"};
     result[S_H_AUTORECORD_APP] = {"Enabled starts recording immediately and at startup. While Armed follows the current armed state and stops on disarm, using MAVLink HEARTBEAT from the selected system's autopilot (component 1).", "启用会在应用启动后开始录像。解锁时模式根据所选系统飞控（组件 1）的 MAVLink 心跳，在解锁时开始录像、上锁时停止。", "有効では起動時に録画を開始します。アーム中では選択したシステムのオートパイロット（コンポーネント 1）の MAVLink HEARTBEAT に従い、アームで開始、ディスアームで停止します。"};
     result[S_P_RECORDING_RESOLUTION] = {"Recording resolution", "录像分辨率", "録画解像度"};
