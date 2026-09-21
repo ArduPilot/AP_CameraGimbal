@@ -252,16 +252,18 @@ The estimator cannot measure a constant one-way delay or a device's internal
 sampling delay.
 
 For earth-frame gimbal status, the camera interpolates vehicle yaw and yaw rate
-at the gimbal feedback timestamp, with wrapped-angle interpolation. The yaw
+at the gimbal feedback timestamp, with wrapped-angle interpolation and at most
+250 ms of extrapolation on either side of the history. The yaw
 history retains older samples when buffered telemetry shares a corrected
 millisecond, replacing only the newest value. The outgoing
 `GIMBAL_DEVICE_ATTITUDE_STATUS.time_boot_ms` identifies that feedback sample;
 resending cached feedback keeps its timestamp. MT11 feedback has no device clock,
 so its receive timestamp remains the best available sample-time estimate. If
 matching vehicle history is unavailable, status uses the vehicle frame and marks
-it accordingly. Extrapolation is limited to 250 ms; rate tracking stops when
-required vehicle data cannot be predicted to the current time within that limit.
-`ATTITUDE` takes over as soon as the primary attitude exceeds that prediction
+it accordingly. Yaw and position extrapolation are limited to 250 ms, after
+which the last samples are held (attitude for 1 s, position for 1.5 s) so a
+short telemetry gap does not flip the feedback frame or stop rate tracking.
+`ATTITUDE` takes over as soon as the primary attitude exceeds the prediction
 horizon. Near vertical pitch, where its Euler yaw rate is undefined, it still
 updates attitude metadata but cannot supply control prediction. Metadata ages
 also include the estimated transport lag.

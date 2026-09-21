@@ -65,9 +65,13 @@ struct ca_telemetry_clock {
 };
 
 /* Vehicle yaw in the camera's monotonic clock. Rates are Euler yaw rates.
- * Keep enough samples to bracket cached gimbal feedback even at 100 Hz. */
+ * Keep enough samples to bracket cached gimbal feedback even at 100 Hz.
+ * Outside the samples, yaw is extrapolated for at most prediction_ms (and
+ * past the newest sample then held until hold_ms), so a short telemetry gap
+ * or a fresh history does not flip feedback between earth and vehicle frames. */
 struct ca_yaw_history {
     static constexpr unsigned prediction_ms = 250;
+    static constexpr unsigned hold_ms = 1000;
     struct sample { uint64_t ms; float yaw, rate; } samples[128];
     unsigned count, next;
 
@@ -94,13 +98,20 @@ struct ca_yaw_history {
         if (!count) return false;
         const sample &last = samples[(next + 127) % 128];
         if (ms >= last.ms) {
-            if (ms - last.ms > prediction_ms) return false;
+            if (ms - last.ms > hold_ms) return false;
+            const uint64_t ahead = ms - last.ms < prediction_ms ? ms - last.ms : prediction_ms;
             rate = last.rate;
-            yaw = remainderf(last.yaw + rate * ((ms - last.ms) * .001f), 2 * float(M_PI));
+            yaw = remainderf(last.yaw + rate * (ahead * .001f), 2 * float(M_PI));
             return true;
         }
         const sample *previous = &samples[(next + 128 - count) % 128];
-        if (ms < previous->ms) return false;
+        if (ms < previous->ms) {
+            // Feedback captured just before the first sample after a reset.
+            if (previous->ms - ms > prediction_ms) return false;
+            rate = previous->rate;
+            yaw = remainderf(previous->yaw - rate * ((previous->ms - ms) * .001f), 2 * float(M_PI));
+            return true;
+        }
         for (unsigned i = 1; i < count; i++) {
             const sample &s = samples[(next + 128 - count + i) % 128];
             if (ms <= s.ms) {

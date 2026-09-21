@@ -49,7 +49,8 @@
 #define CA_EVENT_UART UINT64_C(3)
 #define CA_EVENT_CLIENT_BASE UINT64_C(0x100)
 #define CA_MAVLINK_UART_OUTPUT (MAVLINK_MAX_PACKET_LEN * 16U)
-#define VEHICLE_ATTITUDE_TIMEOUT_MS 1000U
+#define VEHICLE_ATTITUDE_TIMEOUT_MS ca_yaw_history::hold_ms
+#define VEHICLE_POSITION_TIMEOUT_MS 1500U
 #define VEHICLE_PREDICTION_MS ca_yaw_history::prediction_ms
 #define TARGET_LOCATION_INTERVAL_MS 100U
 #define TELEMETRY_INTERVAL_REQUEST_MS 5000U
@@ -1106,7 +1107,7 @@ static bool current_vehicle_position(const struct ca_mavlink_server *server,
 {
     uint64_t now = monotonic_ms();
     if (!server->have_vehicle_position ||
-        now - server->vehicle_position_updated_ms > VEHICLE_PREDICTION_MS) {
+        now - server->vehicle_position_updated_ms > VEHICLE_POSITION_TIMEOUT_MS) {
         return false;
     }
     int32_t lat = server->vehicle_lat_e7, lon = server->vehicle_lon_e7;
@@ -1115,7 +1116,8 @@ static bool current_vehicle_position(const struct ca_mavlink_server *server,
                           VEHICLE_PREDICTION_MS) * 0.001f;
     /* ROI bearing and vehicle yaw must refer to the same instant. Reusing a
      * stationary position between packets while extrapolating yaw makes the
-     * gimbal slew backwards, then jump forwards on the next position packet. */
+     * gimbal slew backwards, then jump forwards on the next position packet.
+     * Both predictions stop at VEHICLE_PREDICTION_MS and are then held. */
     if (!ca_targeting_predict_position(&lat, &lon, &alt, server->vehicle_vn_m_s,
                                        server->vehicle_ve_m_s, server->vehicle_vd_m_s,
                                        elapsed)) return false;
@@ -1283,8 +1285,11 @@ static void pack_gimbal_status(struct ca_mavlink_server *server,
     uint16_t flags = GIMBAL_DEVICE_FLAGS_ROLL_LOCK |
                      GIMBAL_DEVICE_FLAGS_PITCH_LOCK |
                      GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME;
+    // Prefer vehicle yaw aligned with the feedback sample; otherwise the
+    // held current yaw keeps the frame stable while history is sparse.
     bool have_vehicle = server->vehicle_yaw_history.at(
-        attitude->timestamp_ms, vehicle_yaw, vehicle_yaw_rate);
+        attitude->timestamp_ms, vehicle_yaw, vehicle_yaw_rate) ||
+        current_vehicle_attitude(server, &vehicle_yaw, &vehicle_yaw_rate);
     if (have_vehicle) {
         flags |= GIMBAL_DEVICE_FLAGS_ACCEPTS_YAW_IN_EARTH_FRAME;
     }
