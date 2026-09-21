@@ -88,6 +88,29 @@ int main(void)
     printf("circling ROI: peak bearing error %.3f -> %.3f degrees\n",
            degrees(old_worst), degrees(worst));
 
-    puts("targeting tests passed");
+    float pr, yr;
+    // Stationary target north, aircraft translating east: clockwise bearing
+    // decreases. Northward motion towards an elevated target raises pitch.
+    assert(ca_targeting_global_rates(latitude, longitude, 600, north_100m, longitude, 650,
+                                     0, 10, 0, &pr, &yr));
+    assert(fabsf(yr + .1f) < .0001f && fabsf(pr) < .0001f);
+    assert(ca_targeting_global_rates(latitude, longitude, 600, north_100m, longitude, 650,
+                                     10, 0, 0, &pr, &yr));
+    assert(fabsf(pr - .04f) < .0001f && fabsf(yr) < .0001f);
+    assert(ca_targeting_global_rates(latitude, longitude, 600, north_100m, longitude, 650,
+                                     0, 0, 5, &pr, &yr));
+    assert(fabsf(pr - .04f) < .0001f);
+    assert(ca_targeting_global_rates(latitude, longitude, 600, north_100m, longitude, 650,
+                                     0, 0, 0, &pr, &yr));
+    assert(pr == 0 && yr == 0);
+    // Date-line crossing is a short eastward LOS, not a nearly-global vector.
+    assert(ca_targeting_global_rates(latitude, 1799999500, 600, latitude, -1799999500, 600,
+                                     1, 0, 0, &pr, &yr));
+    assert(yr > .1f && yr < .12f && fabsf(pr) < .0001f);
+    assert(!ca_targeting_global_rates(latitude, longitude, 600, latitude, longitude, 500,
+                                      1, 0, 0, &pr, &yr));
+    assert(!ca_targeting_global_rates(latitude, longitude, 600, north_100m, longitude, 500,
+                                      NAN, 0, 0, &pr, &yr));
+    puts("targeting position, LOS angle and analytic rate tests passed");
     return 0;
 }

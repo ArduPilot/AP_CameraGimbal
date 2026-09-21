@@ -70,3 +70,37 @@ bool ca_targeting_global_angles(int32_t vehicle_lat_e7,
     *pitch_rad = (float)atan2(altitude_m, horizontal_m);
     return true;
 }
+
+
+bool ca_targeting_global_rates(int32_t vehicle_lat_e7, int32_t vehicle_lon_e7,
+                               float vehicle_alt_amsl_m, int32_t target_lat_e7,
+                               int32_t target_lon_e7, float target_alt_amsl_m,
+                               float vn, float ve, float vd,
+                               float *pitch_rate, float *yaw_rate)
+{
+    if (!pitch_rate || !yaw_rate ||
+        !valid_location(vehicle_lat_e7, vehicle_lon_e7, vehicle_alt_amsl_m) ||
+        !valid_location(target_lat_e7, target_lon_e7, target_alt_amsl_m) ||
+        !isfinite(vn) || !isfinite(ve) || !isfinite(vd)) return false;
+    const double lat = vehicle_lat_e7 * 1.0e-7 * DEG_TO_RAD;
+    const double target_lat = target_lat_e7 * 1.0e-7 * DEG_TO_RAD;
+    const double dlon = remainder((double(target_lon_e7) - vehicle_lon_e7) * 1.0e-7 * DEG_TO_RAD,
+                                  2 * PI_D);
+    const double s = sin(lat), c = cos(lat), st = sin(target_lat), ct = cos(target_lat);
+    if (fabs(c) < 1.0e-6) return false;
+    const double x = c * st - s * ct * cos(dlon), y = ct * sin(dlon);
+    const double norm = hypot(x, y);
+    if (norm * EARTH_RADIUS_M < 0.1) return false;
+    const double range = EARTH_RADIUS_M * atan2(norm, s * st + c * ct * cos(dlon));
+    const double up = double(target_alt_amsl_m) - vehicle_alt_amsl_m;
+    const double range_rate = -(vn * x + ve * y) / norm;
+    // Differentiate the same great-circle bearing used by global_angles.
+    // Avoid rounding a predicted lat/lon back to integer E7 coordinates.
+    const double lat_rate = vn / EARTH_RADIUS_M;
+    const double dlon_rate = -ve / (EARTH_RADIUS_M * c);
+    const double dx = (-s * st - c * ct * cos(dlon)) * lat_rate + s * ct * sin(dlon) * dlon_rate;
+    const double dy = ct * cos(dlon) * dlon_rate;
+    *yaw_rate = float((x * dy - y * dx) / (norm * norm));
+    *pitch_rate = float((range * vd - up * range_rate) / (range * range + up * up));
+    return isfinite(*yaw_rate) && isfinite(*pitch_rate);
+}

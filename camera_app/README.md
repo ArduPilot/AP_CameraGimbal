@@ -240,6 +240,36 @@ location capability and test ArduPilot-calculated angle targeting instead.
 After a camera-app restart, its device information is announced again so a
 connected ArduPilot instance sees the updated capability.
 
+Vehicle boot timestamps are mapped into the camera's monotonic clock using the
+minimum-delay estimator from ArduPilot `AP_RTC/JitterCorrection`. Separate
+estimators for `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE`, fallback `ATTITUDE`, and
+`GLOBAL_POSITION_INT` remove variable transport delay and follow clock drift.
+They use a 500 ms maximum estimated lag and 100-sample convergence window.
+Duplicate and reordered timestamps do not refresh state; 32-bit timestamp wraps
+are unwrapped, and a backwards clock after a stream outage is reacquired.
+Legacy streams with zero timestamps use arrival time until a timestamp is known.
+The estimator cannot measure a constant one-way delay or a device's internal
+sampling delay.
+
+For earth-frame gimbal status, the camera interpolates vehicle yaw and yaw rate
+at the gimbal feedback timestamp, with wrapped-angle interpolation. The outgoing
+`GIMBAL_DEVICE_ATTITUDE_STATUS.time_boot_ms` identifies that feedback sample;
+resending cached feedback keeps its timestamp. MT11 feedback has no device clock,
+so its receive timestamp remains the best available sample-time estimate. If
+matching vehicle history is unavailable, status uses the vehicle frame and marks
+it accordingly. Extrapolation is limited to 250 ms; rate tracking stops when
+required vehicle data cannot be predicted to the current time within that limit.
+Metadata ages also include the estimated transport lag.
+
+Rate-based ROI tracking derives earth-frame pitch and yaw LOS rates directly
+from `GLOBAL_POSITION_INT` position and NED velocity for a stationary geographic
+ROI. It differentiates the great-circle bearing and elevation geometry without
+rounding a future position to integer latitude/longitude. Motor yaw feed-forward
+is the earth-frame LOS rate minus the vehicle yaw rate. The existing pointing
+correction, rate limits, motor quantisation and lag still apply. At an undefined
+bearing (within 10 cm horizontally of the ROI, or at a geographic pole), rate
+tracking stops instead of producing a singular rate.
+
 `uart.protocol` selects `none`, `siyi` or `mavlink` for the external
 flight-controller connection on `/dev/ttyAMA4`. The selected protocol uses
 230400 baud, 8 data bits, no parity and one stop bit. This UART selection is

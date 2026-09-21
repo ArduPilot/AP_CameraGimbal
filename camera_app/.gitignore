@@ -10,6 +10,7 @@ tests/test_mp4_rollover
 tests/test_protocol
 tests/test_mavlink
 tests/test_mavlink_time
+tests/test_telemetry_time
 tests/test_gimbal_rate
 tests/test_e5739
 tests/test_thermal

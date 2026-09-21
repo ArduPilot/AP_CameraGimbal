@@ -107,6 +107,23 @@ int main(void)
                                          &annotated, &length) == 0);
         assert(annotated == NULL);
     }
+    // Transport age must survive insertion into frame metadata.
+    struct timespec sampled;
+    assert(clock_gettime(CLOCK_MONOTONIC, &sampled) == 0);
+    uint64_t sample_ms = uint64_t(sampled.tv_sec) * 1000 + sampled.tv_nsec / 1000000 - 200;
+    ca_metadata_set_position(-353632610, 1491652300, 600, 20, 0, sample_ms);
+    ca_metadata_set_velocity(1, 2, 3, sample_ms);
+    ca_metadata_set_vehicle_attitude_motion(0, 0, 0, .1f, sample_ms);
+    ca_metadata_snapshot(&m);
+    assert(m.have_position && m.position_age_ms >= 200);
+    assert(m.have_velocity && m.velocity_age_ms >= 200);
+    assert(m.have_vehicle_attitude && m.vehicle_attitude_age_ms >= 200);
+    sample_ms -= CA_METADATA_MAX_AGE_MS;
+    ca_metadata_set_position(-353632610, 1491652300, 600, 20, 0, sample_ms);
+    ca_metadata_set_velocity(1, 2, 3, sample_ms);
+    ca_metadata_set_vehicle_attitude_motion(0, 0, 0, .1f, sample_ms);
+    ca_metadata_snapshot(&m);
+    assert(!m.have_position && !m.have_velocity && !m.have_vehicle_attitude);
     puts("PASS video telemetry JSON, H.264/H.265 SEI escaping and access-unit insertion");
     return 0;
 }
