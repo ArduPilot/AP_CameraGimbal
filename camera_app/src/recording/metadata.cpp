@@ -31,6 +31,7 @@ static struct {
     float gimbal_roll_rad;
     float gimbal_pitch_rad;
     float gimbal_yaw_rad;
+    float gimbal_yaw_rate_rad_s;
     float zoom;
 } state = {.lock = PTHREAD_MUTEX_INITIALIZER};
 
@@ -99,10 +100,18 @@ void ca_metadata_set_gimbal_attitude(float roll_rad, float pitch_rad,
 void ca_metadata_set_gimbal_attitude_sample(float roll_rad, float pitch_rad,
                                             float yaw_rad, uint64_t timestamp_ms)
 {
+    ca_metadata_set_gimbal_attitude_motion(roll_rad, pitch_rad, yaw_rad, NAN, timestamp_ms);
+}
+
+void ca_metadata_set_gimbal_attitude_motion(float roll_rad, float pitch_rad,
+                                            float yaw_rad, float yaw_rate_rad_s,
+                                            uint64_t timestamp_ms)
+{
     pthread_mutex_lock(&state.lock);
     state.gimbal_roll_rad = roll_rad;
     state.gimbal_pitch_rad = pitch_rad;
     state.gimbal_yaw_rad = yaw_rad;
+    state.gimbal_yaw_rate_rad_s = yaw_rate_rad_s;
     state.gimbal_attitude_ms = timestamp_ms + 1U;
     pthread_mutex_unlock(&state.lock);
 }
@@ -155,6 +164,7 @@ void ca_metadata_snapshot(struct ca_metadata *snapshot)
         snapshot->gimbal_roll_rad = state.gimbal_roll_rad;
         snapshot->gimbal_pitch_rad = state.gimbal_pitch_rad;
         snapshot->gimbal_yaw_rad = state.gimbal_yaw_rad;
+        snapshot->gimbal_yaw_rate_rad_s = state.gimbal_yaw_rate_rad_s;
     }
     snapshot->zoom = state.zoom;
     pthread_mutex_unlock(&state.lock);

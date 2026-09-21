@@ -73,7 +73,17 @@ struct ca_yaw_history {
 
     void add(uint64_t ms, float yaw, float rate)
     {
-        if (count && ms <= samples[(next + 127) % 128].ms) count = next = 0;
+        if (count) {
+            sample &last = samples[(next + 127) % 128];
+            // Buffered samples can share a corrected millisecond. Replace
+            // the newest value without losing older feedback's brackets.
+            // Clock resets are handled explicitly by the caller.
+            if (ms < last.ms) return;
+            if (ms == last.ms) {
+                last = {ms, yaw, rate};
+                return;
+            }
+        }
         samples[next] = {ms, yaw, rate};
         next = (next + 1) % 128;
         if (count < 128) count++;

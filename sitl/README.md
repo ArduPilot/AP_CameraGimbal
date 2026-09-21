@@ -255,10 +255,12 @@ jitter without buffering future telemetry. Frames are rendered ahead of their
 50 ms presentation deadlines and published on that cadence. Two queued encoded
 frames plus the frame awaiting display provide about 150 ms of render headroom
 at 20 fps, so a short texture upload does not pause playback. Prediction remains
-capped at 250 ms; the frame queue cannot grow without bound. Gimbal Euler rates are
-estimated from successive timestamped samples with angle wrapping. Recorded SEI
-also includes optional NED `velocity` and vehicle `yaw_rate_rad_s` fields; old
-telemetry readers continue to work.
+capped at 250 ms; the frame queue cannot grow without bound. The predictor uses
+measured vehicle and gimbal yaw rates, avoiding rate noise from differences of
+rounded gimbal angles. Other Euler rates, and legacy gimbal records without a
+rate, use successive timestamped samples with angle wrapping. Recorded SEI
+includes optional NED `velocity` and `yaw_rate_rad_s` fields in both attitude
+objects; old telemetry readers continue to work.
 
 Prefetch and performance settings:
 

@@ -65,6 +65,22 @@ int main(void)
     ca_metadata_snapshot(&m);
     assert(ca_video_metadata_json(&m, &utc, 0, json, sizeof(json)) > 0U);
     assert(strstr(json, "yaw_rate_rad_s") == NULL);
+    // A real backend sample preserves both measured rate and sample age.
+    struct timespec now;
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    uint64_t gimbal_ms = uint64_t(now.tv_sec) * 1000 + now.tv_nsec / 1000000 - 200;
+    ca_metadata_set_gimbal_attitude_motion(0, -.2f, .3f, -.4f, gimbal_ms);
+    ca_metadata_snapshot(&m);
+    assert(m.have_gimbal_attitude && m.gimbal_yaw_rate_rad_s == -.4f);
+    assert(m.gimbal_attitude_age_ms >= 200);
+    assert(ca_video_metadata_json(&m, &utc, 0, json, sizeof(json)) > 0U);
+    assert(strstr(json, "\"yaw_rate_rad_s\":-0.400000") != NULL);
+    // Legacy attitude-only producers must clear any previously measured rate.
+    ca_metadata_set_gimbal_attitude(0, 0, 0);
+    ca_metadata_snapshot(&m);
+    assert(isnan(m.gimbal_yaw_rate_rad_s));
+    assert(ca_video_metadata_json(&m, &utc, 0, json, sizeof(json)) > 0U);
+    assert(strstr(json, "yaw_rate_rad_s") == NULL);
     m.have_position = m.have_vehicle_attitude = m.have_gimbal_attitude = true;
     m.lat_e7 = -353632610; m.lon_e7 = 1491652300;
     m.alt_amsl_m = 620.25f; m.alt_relative_m = 36.5f;

@@ -58,9 +58,13 @@ size_t ca_video_metadata_json(const struct ca_metadata *m,
     JSON(",\"gimbal_attitude\":");
     if (m->have_gimbal_attitude && isfinite(m->gimbal_roll_rad) &&
         isfinite(m->gimbal_pitch_rad) && isfinite(m->gimbal_yaw_rad)) {
-        JSON("{\"roll_rad\":%.6f,\"pitch_rad\":%.6f,\"yaw_rad\":%.6f,\"age_ms\":%u}",
+        JSON("{\"roll_rad\":%.6f,\"pitch_rad\":%.6f,\"yaw_rad\":%.6f,\"age_ms\":%u",
              (double)m->gimbal_roll_rad, (double)m->gimbal_pitch_rad,
              (double)m->gimbal_yaw_rad, m->gimbal_attitude_age_ms);
+        if (isfinite(m->gimbal_yaw_rate_rad_s)) {
+            JSON(",\"yaw_rate_rad_s\":%.6f", (double)m->gimbal_yaw_rate_rad_s);
+        }
+        JSON("}");
     } else JSON("null");
     JSON(",\"heading_rad\":");
     if (m->have_position && isfinite(m->heading_rad)) JSON("%.6f", (double)m->heading_rad);

@@ -7,6 +7,7 @@
 
 static uint64_t now_ms = 100000;
 static uint64_t metadata_attitude_ms, metadata_position_ms;
+static float metadata_pitch, metadata_yaw_rate;
 int test_clock_gettime(clockid_t clock, struct timespec *value)
 {
     assert(clock == CLOCK_MONOTONIC);
@@ -17,8 +18,8 @@ int test_clock_gettime(clockid_t clock, struct timespec *value)
 void ca_log(const char *, ...) {}
 uint64_t ca_binlog_time_us() { return now_ms * 1000; }
 void ca_binlog_emit(uint8_t, const void *, size_t) {}
-void ca_metadata_set_vehicle_attitude_motion(float, float, float, float, uint64_t stamp)
-{ metadata_attitude_ms = stamp; }
+void ca_metadata_set_vehicle_attitude_motion(float, float pitch, float, float rate, uint64_t stamp)
+{ metadata_attitude_ms = stamp; metadata_pitch = pitch; metadata_yaw_rate = rate; }
 void ca_metadata_set_position(int32_t, int32_t, float, float, float, uint64_t stamp)
 { metadata_position_ms = stamp; }
 void ca_metadata_set_velocity(float, float, float, uint64_t) {}
@@ -73,9 +74,83 @@ static void clock_tests()
     assert(stamp == 100500);
 }
 
+static void history_burst_tests()
+{
+    ca_telemetry_clock clock {};
+    ca_yaw_history history {};
+    uint64_t stamp;
+    bool reset;
+    assert(clock.sample(990000, 1, 1070000, stamp, reset));
+    history.add(stamp, 0, 1);
+    assert(clock.sample(1000000, 1, 1080000, stamp, reset));
+    history.add(stamp, .01f, 1);
+    // Buffered packets can map to the same millisecond as the offset improves.
+    assert(clock.sample(1010000, 1, 1080000, stamp, reset));
+    history.add(stamp, .02f, 2);
+    float yaw, rate;
+    assert(history.count == 2);
+    assert(history.at(1075, yaw, rate));
+    assert(fabsf(yaw - .01f) < 1e-6 && rate == 1.5f);
+    assert(history.at(1080, yaw, rate) && yaw == .02f && rate == 2);
+    history.add(1079, 9, 9); // a regressing estimate must not destroy history
+    assert(history.at(1075, yaw, rate) && fabsf(yaw - .01f) < 1e-6);
+
+    ca_mavlink_server server {};
+    server.vehicle_yaw_history = history;
+    save_vehicle_attitude(&server, 0, 0, 1, 0, 1090, false, true);
+    assert(!server.vehicle_yaw_history.at(1075, yaw, rate));
+    assert(server.vehicle_yaw_history.at(1090, yaw, rate) && yaw == 1);
+}
+
+static void fallback_tests()
+{
+    ca_mavlink_server server {};
+    server.autopilot_system_id = 42;
+    server.autopilot_component_id = 1;
+    server.system_id = 42;
+    server.gimbal_component_id = 154;
+    now_ms = 200000;
+    attitude(server, 1000000, 0, 1);
+    mavlink_message_t msg;
+    mavlink_msg_attitude_pack(42, 1, &msg, 1000, 0, 0, .5f, 0, 0, .5f);
+    handle_attitude(&server, &msg); // establish fallback clock while primary is fresh
+    float yaw, rate;
+    now_ms = 200250;
+    mavlink_msg_attitude_pack(42, 1, &msg, 1250, 0, 0, .5f, 0, 0, .5f);
+    handle_attitude(&server, &msg);
+    assert(server.vehicle_attitude_primary && current_vehicle_attitude(&server, &yaw, &rate));
+    now_ms++;
+    mavlink_msg_attitude_pack(42, 1, &msg, 1251, 0, 0, .5f, 0, 0, .5f);
+    handle_attitude(&server, &msg);
+    assert(!server.vehicle_attitude_primary);
+    assert(current_vehicle_attitude(&server, &yaw, &rate) && yaw == .5f && rate == .5f);
+    now_ms = 200260;
+    attitude(server, 1260000, .26f, 1);
+    assert(server.vehicle_attitude_primary && current_vehicle_attitude(&server, &yaw, &rate));
+
+    // Euler yaw rate is undefined at vertical pitch, but the attitude still
+    // belongs in metadata. It must not supply a NaN to control prediction.
+    now_ms = 200600;
+    for (float pitch : {PI_F / 2, -PI_F / 2}) {
+        mavlink_msg_attitude_pack(42, 1, &msg, now_ms - 199000,
+                                  .1f, pitch, .8f, 0, 0, .5f);
+        handle_attitude(&server, &msg);
+        assert(metadata_attitude_ms == now_ms && metadata_pitch == pitch);
+        assert(isnan(metadata_yaw_rate));
+        assert(!current_vehicle_attitude(&server, &yaw, &rate));
+        now_ms += 100;
+    }
+    mavlink_msg_attitude_pack(42, 1, &msg, 1800, 0, 0, .8f, 0, 0, .5f);
+    handle_attitude(&server, &msg);
+    assert(current_vehicle_attitude(&server, &yaw, &rate) && rate == .5f);
+    now_ms = 100000;
+}
+
 int main()
 {
     clock_tests();
+    history_burst_tests();
+    fallback_tests();
     ca_mavlink_server server {};
     server.autopilot_system_id = 42;
     server.autopilot_component_id = 1;

@@ -1673,13 +1673,19 @@ static void handle_attitude(struct ca_mavlink_server *server,
     if (!server->fallback_clock.sample(attitude.time_boot_ms, 1000, now * 1000,
                                        sample_ms, reset)) return;
     if (server->primary_attitude_ms &&
-        now - server->primary_attitude_ms < VEHICLE_ATTITUDE_TIMEOUT_MS) return;
+        now - server->primary_attitude_ms <= VEHICLE_PREDICTION_MS) return;
     /* ATTITUDE rates are body rates; convert to Euler yaw rate. */
     float cp = cosf(attitude.pitch);
     float yaw_rate = fabsf(cp) > 0.01f ?
         (attitude.pitchspeed * sinf(attitude.roll) +
          attitude.yawspeed * cosf(attitude.roll)) / cp : NAN;
-    if (!isfinite(yaw_rate)) return;
+    if (!isfinite(yaw_rate)) {
+        // Vertical pitch makes Euler yaw rate undefined, not the measured
+        // attitude. Preserve metadata without feeding an invalid rate to ROI.
+        ca_metadata_set_vehicle_attitude_motion(attitude.roll, attitude.pitch,
+                                                attitude.yaw, NAN, sample_ms);
+        return;
+    }
     save_vehicle_attitude(server, attitude.roll, attitude.pitch, attitude.yaw,
                           yaw_rate, sample_ms, false, reset);
 }
@@ -2977,9 +2983,10 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     ca_metadata_set_zoom(ca_media_zoom(server->media));
     if (ca_backend_gimbal_attitude(server->backend, &attitude) &&
         now >= attitude.timestamp_ms && now - attitude.timestamp_ms < 1000U) {
-        ca_metadata_set_gimbal_attitude_sample(attitude.roll_rad,
+        ca_metadata_set_gimbal_attitude_motion(attitude.roll_rad,
                                                attitude.pitch_rad,
-                                               attitude.yaw_rad, attitude.timestamp_ms);
+                                               attitude.yaw_rad, attitude.yaw_rate_rad_s,
+                                               attitude.timestamp_ms);
         if (have_peer(server) && now - server->last_attitude_status_ms >= 200U) {
             mavlink_message_t message;
             server->last_attitude_status_ms = now;

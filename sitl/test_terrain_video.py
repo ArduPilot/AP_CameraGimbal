@@ -123,6 +123,32 @@ def prediction():
     print('PASS 4 Hz -> 20 Hz prediction, bounded loss, yaw wrap, jitter correction and presentation lead')
 
 
+def quantised_gimbal_prediction():
+    np = video.np
+    errors = []
+    # MT11 rounds angles to 0.1 degree. Sparse rendering with a variable lead
+    # amplifies the noise if yaw rate is differentiated from those angles.
+    for measured_rate in (False, True):
+        predictor = video.PosePredictor()
+        yaw_errors = []
+        for i in range(300):
+            now = i * .147
+            sampled = math.floor(now / .058) * .058
+            lead = .15 if i % 3 else .08
+            sample = {'roll_rad': 0, 'pitch_rad': 0,
+                      'yaw_rad': math.radians(round(11 * sampled, 1)),
+                      'age_ms': round((now - sampled + lead) * 1000)}
+            if measured_rate:
+                sample['yaw_rate_rad_s'] = math.radians(11)
+            yaw = predictor.angles('gimbal', sample, now + lead, .25 + lead)[2]
+            yaw_errors.append((math.degrees(yaw) - 11 * (now + lead) + 180) % 360 - 180)
+        errors.append(np.array(yaw_errors[20:]))
+    assert np.std(errors[1]) < .03
+    assert max(abs(errors[1])) < .05
+    assert np.std(np.diff(errors[1])) < .3 * np.std(np.diff(errors[0]))
+    print('PASS measured gimbal yaw rate reduces quantisation-induced prediction jitter')
+
+
 def stable_lod():
     from types import SimpleNamespace
     tile = SimpleNamespace(bbox=(149, -35.01, 149.01, -35),
@@ -298,6 +324,7 @@ if __name__ == '__main__':
     video.socket.setdefaulttimeout(10)
     geometry()
     prediction()
+    quantised_gimbal_prediction()
     stable_lod()
     synthetic()
     if args.network:

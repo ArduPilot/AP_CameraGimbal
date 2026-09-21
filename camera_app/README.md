@@ -252,14 +252,19 @@ The estimator cannot measure a constant one-way delay or a device's internal
 sampling delay.
 
 For earth-frame gimbal status, the camera interpolates vehicle yaw and yaw rate
-at the gimbal feedback timestamp, with wrapped-angle interpolation. The outgoing
+at the gimbal feedback timestamp, with wrapped-angle interpolation. The yaw
+history retains older samples when buffered telemetry shares a corrected
+millisecond, replacing only the newest value. The outgoing
 `GIMBAL_DEVICE_ATTITUDE_STATUS.time_boot_ms` identifies that feedback sample;
 resending cached feedback keeps its timestamp. MT11 feedback has no device clock,
 so its receive timestamp remains the best available sample-time estimate. If
 matching vehicle history is unavailable, status uses the vehicle frame and marks
 it accordingly. Extrapolation is limited to 250 ms; rate tracking stops when
 required vehicle data cannot be predicted to the current time within that limit.
-Metadata ages also include the estimated transport lag.
+`ATTITUDE` takes over as soon as the primary attitude exceeds that prediction
+horizon. Near vertical pitch, where its Euler yaw rate is undefined, it still
+updates attitude metadata but cannot supply control prediction. Metadata ages
+also include the estimated transport lag.
 
 Rate-based ROI tracking derives earth-frame pitch and yaw LOS rates directly
 from `GLOBAL_POSITION_INT` position and NED velocity for a stationary geographic
@@ -305,9 +310,9 @@ by UTF-8 JSON without a trailing NUL. The schema is `apcg.telemetry.v1`:
 | `pts90k` | Frame timestamp in 90 kHz ticks. RTSP uses the 32-bit RTP timestamp (wraps); MP4 uses its video sample timeline starting at zero. |
 | `utc_us` | Camera system UTC time in microseconds since the Unix epoch, when telemetry was sampled. |
 | `position` | `lat_e7`, `lon_e7` in degrees × 10⁷; `alt_amsl_m`, `alt_relative_m` in metres; `age_ms`. |
-| `vehicle_attitude` | `roll_rad`, `pitch_rad`, `yaw_rad`, `age_ms` and optional `yaw_rate_rad_s` (earth-frame Euler yaw rate). Prefers `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE`; falls back to `ATTITUDE` after one second without it. |
+| `vehicle_attitude` | `roll_rad`, `pitch_rad`, `yaw_rad`, `age_ms` and optional `yaw_rate_rad_s` (earth-frame Euler yaw rate). Prefers `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE`; falls back to `ATTITUDE` after the 250 ms prediction horizon expires. |
 | `velocity` | `vn_m_s`, `ve_m_s`, `vd_m_s` (North/East/Down metres per second), and `age_ms`, from `GLOBAL_POSITION_INT` or `AUTOPILOT_STATE_FOR_GIMBAL_DEVICE`. |
-| `gimbal_attitude` | Mounting-corrected `roll_rad`, `pitch_rad`, `yaw_rad` and `age_ms`; yaw is relative to the vehicle. |
+| `gimbal_attitude` | Mounting-corrected `roll_rad`, `pitch_rad`, `yaw_rad`, `age_ms` and optional measured `yaw_rate_rad_s`; yaw and its rate are relative to the vehicle. |
 | `heading_rad` | Vehicle heading from the position message, in radians. |
 | `zoom` | Camera zoom factor, or null if unknown. |
 | `hfov_deg` | Effective horizontal field of view of this video stream in degrees, including optical zoom and digital crop; null if unknown. |

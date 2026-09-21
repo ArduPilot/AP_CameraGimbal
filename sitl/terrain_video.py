@@ -229,7 +229,10 @@ class PosePredictor:
             self.history[key] = (stamp, angles.copy(), rates)
         rates = rates.copy()
         # AUTOPILOT_STATE supplies earth-frame yaw rate. ATTITUDE fallback is
-        # converted from body rates by the MAVLink receiver.
+        # converted from body rates by the MAVLink receiver. Gimbal metadata
+        # carries the backend's vehicle-relative yaw rate; prefer it to noisy
+        # differences of quantised feedback angles. Legacy records still use
+        # the finite-difference estimate above.
         yaw_rate = sample.get('yaw_rate_rad_s')
         if isinstance(yaw_rate, (int, float)) and math.isfinite(yaw_rate):
             rates[2] = yaw_rate
