@@ -169,6 +169,20 @@ class ReconstructedTelemetryTests(unittest.TestCase):
         snap = self.telemetry(gimbal_yaw_earth=False).sample(1500, pts_ms=1500)
         self.assertAlmostEqual(math.degrees(snap['gimbal_attitude']['yaw_rad']), 90, places=4)
 
+    def test_dataflash_degrees_become_radians(self):
+        # ATT angles and RATE.Y (ArduPilot unit 'k') are logged in degrees.
+        rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
+        rows['ATT'] = [Record(1000000, Roll=0.0, Pitch=-10.0, Yaw=180.0)]
+        rows['RATE'] = [Record(1000000, Y=90.0)]
+        built, _, _ = thermal.build_telemetry_series(rows, boot_ms=0)
+        times, columns, _ = built['vehicle_rate']
+        self.assertEqual(times, [1000.0])
+        self.assertAlmostEqual(columns['yaw_rate_rad_s'][0], math.pi / 2)
+        _, columns, _ = built['vehicle_attitude']
+        self.assertAlmostEqual(columns['pitch_rad'][0], math.radians(-10))
+        self.assertAlmostEqual(columns['yaw_rad'][0], math.pi)
+        self.assertNotIn('position', built)
+
     def test_gimbal_source_prefers_signal(self):
         records = [Record(t, Roll=0.0, DRoll=0.0, Pitch=0.0, DPitch=-35.0,
                           YawB=0.0, DYawB=0.0, YawE=y, DYawE=float('nan'))

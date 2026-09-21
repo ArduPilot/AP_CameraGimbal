@@ -226,7 +226,12 @@ def load_bin_telemetry(bin_path):
     if not boot_offsets:
         raise ValueError('%s has no GPS UTC; cannot align frame timestamps' % bin_path.name)
     boot_ms = statistics.median(boot_offsets) * 1000.0
+    built, gimbal_yaw_earth, gimbal_source = build_telemetry_series(rows, boot_ms)
+    return BinTelemetry(built, bin_path.name, gimbal_yaw_earth, gimbal_source)
 
+
+def build_telemetry_series(rows, boot_ms):
+    """Map dataflash rows (degrees) to the telemetry series (radians, ms)."""
     def series(name, columns, angle_columns=()):
         records = rows[name]
         if not records:
@@ -246,13 +251,13 @@ def load_bin_telemetry(bin_path):
         'vehicle_attitude': series('ATT', {
             'roll_rad': lambda r: rad(r.Roll), 'pitch_rad': lambda r: rad(r.Pitch),
             'yaw_rad': lambda r: rad(r.Yaw)}, angle_columns=('yaw_rad',)),
-        'vehicle_rate': series('RATE', {'yaw_rate_rad_s': lambda r: r.Y}),
+        'vehicle_rate': series('RATE', {'yaw_rate_rad_s': lambda r: rad(r.Y)}),
     }
     gimbal, gimbal_yaw_earth, gimbal_source = build_gimbal(rows['MNT'], boot_ms, rad)
     if gimbal is not None:
         built['gimbal_attitude'] = gimbal
-    return BinTelemetry({name: s for name, s in built.items() if s is not None},
-                        bin_path.name, gimbal_yaw_earth, gimbal_source)
+    return ({name: s for name, s in built.items() if s is not None},
+            gimbal_yaw_earth, gimbal_source)
 
 
 def build_gimbal(records, boot_ms, rad):
