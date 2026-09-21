@@ -37,6 +37,7 @@ struct ca_metadata {
     float gimbal_roll_rad;
     float gimbal_pitch_rad;
     float gimbal_yaw_rad;
+    float gimbal_yaw_rate_rad_s;
     /* 0 when unknown */
     float zoom;
     /* Effective horizontal FOV after optical/digital zoom, degrees; 0 unknown.
@@ -59,6 +60,9 @@ void ca_metadata_set_vehicle_attitude_motion(float roll_rad, float pitch_rad,
 /* Preserve the backend sample time when polling cached gimbal state. */
 void ca_metadata_set_gimbal_attitude_sample(float roll_rad, float pitch_rad,
                                             float yaw_rad, uint64_t timestamp_ms);
+void ca_metadata_set_gimbal_attitude_motion(float roll_rad, float pitch_rad,
+                                            float yaw_rad, float yaw_rate_rad_s,
+                                            uint64_t timestamp_ms);
 void ca_metadata_set_zoom(float zoom);
 /* copies the current state; sources older than CA_METADATA_MAX_AGE_MS are
  * reported as absent */
