@@ -97,8 +97,11 @@ static void history_burst_tests()
 
     ca_mavlink_server server {};
     server.vehicle_yaw_history = history;
-    save_vehicle_attitude(&server, 0, 0, 1, 0, 1090, false, true);
-    assert(!server.vehicle_yaw_history.at(1075, yaw, rate));
+    save_vehicle_attitude(&server, 0, 0, 1, 2, 1090, false, true);
+    // Feedback just before the first sample extrapolates backwards from it.
+    assert(server.vehicle_yaw_history.at(1075, yaw, rate) && rate == 2);
+    assert(fabsf(yaw - (1 - 2 * .015f)) < 1e-6);
+    assert(!server.vehicle_yaw_history.at(839, yaw, rate));
     assert(server.vehicle_yaw_history.at(1090, yaw, rate) && yaw == 1);
 }
 
@@ -137,7 +140,8 @@ static void fallback_tests()
         handle_attitude(&server, &msg);
         assert(metadata_attitude_ms == now_ms && metadata_pitch == pitch);
         assert(isnan(metadata_yaw_rate));
-        assert(!current_vehicle_attitude(&server, &yaw, &rate));
+        // The held primary sample still serves control, never the NaN rate.
+        assert(current_vehicle_attitude(&server, &yaw, &rate) && rate == 1);
         now_ms += 100;
     }
     mavlink_msg_attitude_pack(42, 1, &msg, 1800, 0, 0, .8f, 0, 0, .5f);
@@ -217,16 +221,23 @@ int main()
     assert(history.at(2050, yaw, rate));
     assert(fabsf(fabsf(yaw) - PI_F) < 1e-5 && rate == 2);
     assert(!history.at(0, yaw, rate));
-    assert(!history.at(2400, yaw, rate));
+    // Beyond the newest sample extrapolation stops at 250 ms and the value
+    // is held for up to hold_ms.
+    assert(history.at(2400, yaw, rate) && rate == 3);
+    assert(fabsf(remainderf(yaw - (-179 * PI_F / 180 + 3 * .25f), 2 * PI_F)) < 1e-5);
+    assert(history.at(3100, yaw, rate));
+    assert(!history.at(3101, yaw, rate));
     gimbal.timestamp_ms = 90000; // outside the available vehicle history
+    now_ms = 101300;             // and the current vehicle yaw has expired
     pack_gimbal_status(&server, &msg, &gimbal);
     mavlink_msg_gimbal_device_attitude_status_decode(&msg, &status);
     assert(status.flags & GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME);
     assert(!(status.flags & GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME));
     assert(status.angular_velocity_z == -1);
-    now_ms = 101400;
-    assert(!current_vehicle_attitude(&server, &yaw, &rate));
+    now_ms = 101700; // position held for 1.5 s after its 100100 sample
     assert(!current_vehicle_position(&server, &lat, nullptr, nullptr));
+    now_ms = 101400; // attitude held for 1 s after its 100200 sample
+    assert(!current_vehicle_attitude(&server, &yaw, &rate));
     // ATTITUDE takes over only after primary expiry and becomes usable for ROI.
     mavlink_msg_attitude_pack(42, 1, &msg, 3400, 0, 0, .8f, 0, 0, .5f);
     handle_attitude(&server, &msg);
