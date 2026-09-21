@@ -494,7 +494,7 @@ with C-cast encoding, advertised in `AUTOPILOT_VERSION.capabilities`. All values
 are exactly representable in the protocol's float field. Booleans use 0/1;
 enums use the numeric choices below. String settings, including
 `general.timezone` and SupportProxy names and credentials, are available only
-through the web UI/INI. The six additional proxy parameters are listed in
+through the web UI/INI. The additional proxy parameters are listed in
 [SupportProxy](#supportproxy).
 
 | MAVLink name | INI setting | Values |
@@ -783,15 +783,28 @@ fetches and verifies both pinned public dependencies under `build/deps`.
 
 ## SupportProxy
 
+Use `camera view rawthermal` in MAVProxy connected through the proxy to view
+the raw stream. The proxy also supplies `scripts/view_raw_thermal.py` for
+standalone desktop viewing. Its MPEG-TS browser player cannot decode FFV1;
+the web page offers the desktop viewer when a raw publisher is active.
+
 The **SupportProxy** section of the web UI's Parameters tab configures an
 optional connection to an ArduPilot SupportProxy instance. It is disabled by
 default. Set the server hostname or IPv4 address, its user MAVLink UDP port,
-and the separate RTSP publish ports assigned to video1 and video2. A port of
+and the separate publish ports assigned to video1, video2 and (on thermal
+cameras) raw thermal video3. A port of
 zero disables that connection. Save the settings and restart camera-app.
 
 Video is published over RTSP/TCP without transcoding. Both H.264 and H.265 are
 supported, using the same sources as the local RTSP streams, including their
 per-frame telemetry and zoom-adjusted FOV. Each stream has a configurable name.
+Raw thermal stream 3 uses HTTP chunked PUT with lossless FFV1/Matroska, keeping
+all 16-bit samples and capture metadata. It requires the Matroska-capable
+SupportProxy update. Set `PROXY_VID3_PORT` (web: **Raw thermal port**) to the
+proxy's third video port; zero disables it. `RAW_STREAM_FPS` controls its rate.
+Its worker keeps at most the newest queued frame plus one in flight, so a slow
+uplink skips whole frames without delaying SD recording.
+
 Set the optional publish password to match the proxy entry. Without a publish
 password, the proxy must allow session-based publishing (`session_ok`) and the
 MAVLink connection must remain active. A publish password also permits
@@ -807,8 +820,8 @@ controller over its local link with the proxy signature removed. The local
 flight-controller connection therefore does not require the proxy's key.
 
 Camera stream-information requests received through the proxy advertise the
-configured stream names and proxy HTTP viewer URLs (`/v1.ts` and `/v2.ts` on
-their respective ports). Viewer access remains subject to the proxy's access
+configured stream names and proxy HTTP viewer URLs (`/v1.ts`, `/v2.ts`, and
+`/v3.mkv` on their respective ports). Raw thermal uses experimental type 200. Viewer access remains subject to the proxy's access
 rules. Requests received locally continue to advertise local RTSP URLs.
 
 Camera networking is configured independently in **Parameters → Network**,
@@ -830,6 +843,8 @@ video1_port = 40001
 video2_port = 40002
 video1_name = "Front Camera"
 video2_name = "Thermal Camera"
+video3_port = 40003
+video3_name = "Raw Thermal"
 publish_password = "replace-with-your-publish-password"
 [network]
 interface = eth0
@@ -848,11 +863,12 @@ The numeric settings are also exposed by the MAVLink parameter service:
 | `PROXY_SIGN_ID` | MAVLink signing link ID | 1 |
 | `PROXY_VID1_PORT` | Video1 RTSP publish port; 0 disables | 0 |
 | `PROXY_VID2_PORT` | Video2 RTSP publish port; 0 disables | 0 |
+| `PROXY_VID3_PORT` | Raw thermal Matroska publish port; thermal cameras only; 0 disables | 0 |
 
 Hostnames, names, passwords and network addresses are string settings and are
 configured through the web UI or INI file. Settings take effect after restart.
 
-Each video publisher has an independent worker and a queue limited to 60 frames
+The H.264/H.265 publishers each have an independent worker and a queue limited to 60 frames
 or 2 MiB, plus its current frame and socket buffers. Queue overflow drops
 queued video and resumes at a keyframe on the same TCP connection, allowing
 congestion control to recover without blocking local recording or live video.

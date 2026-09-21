@@ -15,8 +15,17 @@ between this firmware and MAVProxy, **not an upstream MAVLink allocation**.
 It needs an upstream stream-type/encoding proposal before interoperable release.
 Display streams 1 and 2 retain their RTSP types and normal behaviour. The legacy
 one-frame-per-TCP-connection service on port 7345 is unchanged. The raw stream
-is available on a direct camera network connection; support-proxy routes do
-not currently tunnel it and advertise an empty URI and no running flag.
+is available directly and through an updated SupportProxy. Configure
+`[support_proxy] video3_port` (`PROXY_VID3_PORT`, default 0) and optionally
+`video3_name`. Proxy routes advertise `http://PROXY:PORT/v3.mkv`; a disabled
+proxy stream has an empty URI and no running flag. The proxy preserves the
+Matroska bytes, native samples and metadata, with the same `RAW_STREAM_FPS`.
+The proxy publisher is independent of the local HTTP listener (which may be
+disabled using `CAMERA_APP_RAW_THERMAL_PORT=0`).
+
+MAVProxy's `camera view rawthermal` works through this route. SupportProxy's
+`scripts/view_raw_thermal.py` provides a standalone greyscale viewer with
+optional palettes, temperature readout and native frame/metadata saves.
 
 ## Transport and per-frame metadata
 
@@ -191,3 +200,16 @@ relative timing is explicitly labelled. Add `--bin FLIGHT.bin` to reconstruct
 each frame's `apcg.telemetry.v1` pose from an ArduPilot dataflash log, matched by
 absolute UTC (needs `pymavlink`). See the
 [converter options and timing semantics](../tools/README.md#legacy-thermal-directories-to-lossless-video).
+
+## Interrupted recordings
+
+The live Matroska layout does not require a closing index or footer. Complete
+FFV1 Clusters remain playable after an interrupted write; a truncated final
+frame may be discarded or reported as an end-of-file error. Cuts inside the
+header and payload of a later frame in an actual MT11 file were tested with
+PyAV: the preceding complete frames still decoded as gray16le.
+
+This is a container property, not a power-loss guarantee for the filesystem.
+The camera calls `fdatasync` at recording stop; unsynchronised kernel/card
+buffers can be lost if power is removed. Stopping before power-off remains
+safest. The amount of lost tail data is not bounded by this format.

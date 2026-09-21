@@ -511,6 +511,7 @@ static void put_text(char *destination, size_t size, const char *text)
     size_t length = strlen(text);
     if (length > size) length = size;
     memcpy(destination, text, length);
+    if (length < size) memset(destination+length, 0, size-length);
 }
 
 static bool interface_ipv4(char address[INET_ADDRSTRLEN])
@@ -832,7 +833,7 @@ static void stream_properties(const struct ca_mavlink_server *server,
 
 static unsigned stream_count()
 {
-    return APCAM_NUM_STREAMS + (ca_thermal_stream_port() != 0 ? 1U : 0U);
+    return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
 }
 
 static void send_stream_information(struct ca_mavlink_server *server,
@@ -882,7 +883,16 @@ static void send_stream_information(struct ca_mavlink_server *server,
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
         (void)route_local_ipv4(server, route, host);
         snprintf(uri,sizeof(uri),"http://%s:%u/thermal.mkv",host,ca_thermal_stream_port());
-        if (route->kind == ROUTE_PROXY) { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
+        if (!ca_thermal_stream_port()) { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
+        if (route->kind == ROUTE_PROXY) {
+            const auto &support = server->settings.support;
+            put_text(info.name, sizeof(info.name), support.video3_name);
+            if (support.enabled && support.video3_port) {
+                snprintf(uri, sizeof(uri), "http://%s:%u/v3.mkv", support.host, support.video3_port);
+                if (ca_thermal_stream_enabled()) info.flags |= VIDEO_STREAM_STATUS_FLAGS_RUNNING;
+            }
+            else { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
+        }
         put_text(info.uri,sizeof(info.uri),uri);
         info.encoding = VIDEO_STREAM_ENCODING_UNKNOWN; // FFV1 is identified by Matroska CodecID
         info.hfov = (uint16_t)lroundf(ca_media_hfov(server->media, true));
@@ -918,6 +928,9 @@ static void send_stream_status(struct ca_mavlink_server *server,
         status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,true));
         status.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
             (ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
+        const bool reachable = route->kind == ROUTE_PROXY ?
+            server->settings.support.enabled && server->settings.support.video3_port : ca_thermal_stream_port() != 0;
+        if (!reachable) status.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
     }
     status.stream_id = (uint8_t)stream_id;
     (void)mavlink_msg_video_stream_status_encode_status(

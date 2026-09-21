@@ -267,6 +267,14 @@ private:
         {"support_proxy", "video2_name", Kind::String,
          offsetof(struct ca_config, support.video2_name),
          sizeof(((struct ca_config *)0)->support.video2_name), NULL, 0U, 0, 63, NULL},
+#if APCAM_HAVE_THERMAL
+        {"support_proxy", "video3_port", Kind::Uint,
+         offsetof(struct ca_config, support.video3_port),
+         sizeof(((struct ca_config *)0)->support.video3_port), NULL, 0U, 0, 65535, "PROXY_VID3_PORT"},
+        {"support_proxy", "video3_name", Kind::String,
+         offsetof(struct ca_config, support.video3_name),
+         sizeof(((struct ca_config *)0)->support.video3_name), NULL, 0U, 0, 63, NULL},
+#endif
         {"support_proxy", "publish_password", Kind::String,
          offsetof(struct ca_config, support.publish_password),
          sizeof(((struct ca_config *)0)->support.publish_password), NULL, 0U, 0, 127, NULL},
@@ -326,7 +334,10 @@ public:
             (support->host[0] && (!support->signing || support->signing_passphrase[0]) &&
              (!support->video1_port || support->video1_name[0]) &&
              (!support->video2_port || support->video2_name[0]) &&
-             (!support->video1_port || support->video1_port != support->video2_port));
+             (!support->video1_port || support->video1_port != support->video2_port) &&
+             (!support->video3_port || (support->video3_name[0] &&
+               support->video3_port != support->video1_port &&
+               support->video3_port != support->video2_port)));
     }
 
 private:

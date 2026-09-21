@@ -16,6 +16,7 @@ void ca_thermal_stream_publish(ca_thermal_stream *, const uint16_t *pixels,
                                const timespec *captured_at, uint8_t gain, bool rotated_180);
 void ca_thermal_stream_close(ca_thermal_stream *);
 unsigned ca_thermal_stream_port();
+bool ca_thermal_stream_available();
 unsigned ca_thermal_stream_fps();
 bool ca_thermal_stream_enabled();
 void ca_thermal_stream_enable(bool enabled);

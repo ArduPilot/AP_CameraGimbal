@@ -693,6 +693,12 @@ static const struct parameter replacement_parameters[] = {
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"proxy_video2_name", "support_proxy", "video2_name", S_P_PROXY_VIDEO2_NAME, S_H_PROXY_VIDEO2_NAME,
      PARAM_TEXT, 0, 63, 1, NULL, 0},
+#if WEB_HAVE_THERMAL
+    {"proxy_video3_port", "support_proxy", "video3_port", S_P_PROXY_VIDEO3_PORT, S_H_PROXY_VIDEO3_PORT,
+     PARAM_INTEGER, 0, 65535, 1, NULL, 0},
+    {"proxy_video3_name", "support_proxy", "video3_name", S_P_PROXY_VIDEO3_NAME, S_H_PROXY_VIDEO3_NAME,
+     PARAM_TEXT, 0, 63, 1, NULL, 0},
+#endif
     {"proxy_publish_password", "support_proxy", "publish_password", S_P_PROXY_PUBLISH_PASSWORD, S_H_PROXY_PUBLISH_PASSWORD,
      PARAM_PASSWORD, 0, 127, 1, NULL, 0},
     {"osd_cross", "overlay", "cross", S_P_OSD_CROSS, S_H_OSD_CROSS,
@@ -746,7 +752,11 @@ static const char *replacement_defaults[] = {
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264",
     APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS, "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
-    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2", "", "false", "false", "false", "eth0", "", "", "",
+    "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2",
+#if WEB_HAVE_THERMAL
+    "0", "Raw Thermal (16-bit)",
+#endif
+    "", "false", "false", "false", "eth0", "", "", "",
 };
 
 
@@ -2145,6 +2155,7 @@ static bool collect_replacement_parameter_updates(
     }
     const char *enabled = "false", *host = "", *signing = "false", *passphrase = "";
     const char *video1_port = "0", *video2_port = "0", *video1_name = "", *video2_name = "";
+    const char *video3_port = "0", *video3_name = "";
     for (size_t i = 0; i < count; i++) {
         if (strcmp(updates[i].section, "support_proxy") != 0) continue;
 #define SUPPORT_VALUE(key_name, destination) \
@@ -2157,6 +2168,8 @@ static bool collect_replacement_parameter_updates(
         SUPPORT_VALUE("video2_port", video2_port);
         SUPPORT_VALUE("video1_name", video1_name);
         SUPPORT_VALUE("video2_name", video2_name);
+        SUPPORT_VALUE("video3_port", video3_port);
+        SUPPORT_VALUE("video3_name", video3_name);
 #undef SUPPORT_VALUE
     }
     if (strcmp(enabled, "true") == 0) {
@@ -2170,6 +2183,11 @@ static bool collect_replacement_parameter_updates(
             invalid = S_P_PROXY_VIDEO2_NAME;
         else if (strcmp(video1_port, "0") != 0 && strcmp(video1_port, video2_port) == 0)
             invalid = S_P_PROXY_VIDEO2_PORT;
+        if (invalid == S_COUNT && strcmp(video3_port, "0") != 0) {
+            if (!*video3_name) invalid = S_P_PROXY_VIDEO3_NAME;
+            else if (!strcmp(video3_port, video1_port) || !strcmp(video3_port, video2_port))
+                invalid = S_P_PROXY_VIDEO3_PORT;
+        }
         if (invalid != S_COUNT) {
             snprintf(error, error_size, T(S_E_INVALID_VALUE), T(invalid));
             log_message("parameter validation failed: %s", error);

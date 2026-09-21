@@ -291,6 +291,10 @@ enum string_id {
     S_H_PROXY_VIDEO2_PORT,
     S_P_PROXY_VIDEO2_NAME,
     S_H_PROXY_VIDEO2_NAME,
+    S_P_PROXY_VIDEO3_PORT,
+    S_H_PROXY_VIDEO3_PORT,
+    S_P_PROXY_VIDEO3_NAME,
+    S_H_PROXY_VIDEO3_NAME,
     S_P_PROXY_PUBLISH_PASSWORD,
     S_H_PROXY_PUBLISH_PASSWORD,
     S_P_NETWORK_PRIMARY,
@@ -840,11 +844,15 @@ static constexpr Translations translations = [] {
     result[S_H_PROXY_VIDEO1_PORT] = {"RTSP publishing port for video1. Set to 0 to disable this stream.", "video1 的 RTSP 发布端口。设为 0 禁用此视频流。", "video1 の RTSP 送信ポート。0 でこのストリームを無効にします。"};
     result[S_P_PROXY_VIDEO1_NAME] = {"Video 1 stream name", "视频 1 流名称", "映像 1 ストリーム名"};
     result[S_H_PROXY_VIDEO1_NAME] = {"Stream name used in the RTSP publishing URL.", "RTSP 发布 URL 中使用的流名称。", "RTSP 送信 URL で使用するストリーム名。"};
-    result[S_E_PROXY_VIDEO_PORTS] = {"Video 1 and Video 2 must use different ports.", "视频 1 和视频 2 必须使用不同端口。", "映像 1 と映像 2 には異なるポートを指定してください。"};
+    result[S_E_PROXY_VIDEO_PORTS] = {"Enabled video streams must use different ports.", "启用的视频流必须使用不同端口。", "有効な映像ストリームには異なるポートを指定してください。"};
     result[S_P_PROXY_VIDEO2_PORT] = {"Video 2 port", "视频 2 端口", "映像 2 ポート"};
     result[S_H_PROXY_VIDEO2_PORT] = {"RTSP publishing port for video2. Set to 0 to disable this stream.", "video2 的 RTSP 发布端口。设为 0 禁用此视频流。", "video2 の RTSP 送信ポート。0 でこのストリームを無効にします。"};
     result[S_P_PROXY_VIDEO2_NAME] = {"Video 2 stream name", "视频 2 流名称", "映像 2 ストリーム名"};
     result[S_H_PROXY_VIDEO2_NAME] = {"Stream name used in the RTSP publishing URL.", "RTSP 发布 URL 中使用的流名称。", "RTSP 送信 URL で使用するストリーム名。"};
+    result[S_P_PROXY_VIDEO3_PORT] = {"Raw thermal port", "原始热成像端口", "生サーマル映像ポート"};
+    result[S_H_PROXY_VIDEO3_PORT] = {"Matroska HTTP publishing port for video3. Set to 0 to disable this stream.", "video3 的 Matroska HTTP 发布端口。设为 0 禁用此视频流。", "video3 の Matroska HTTP 送信ポート。0 でこのストリームを無効にします。"};
+    result[S_P_PROXY_VIDEO3_NAME] = {"Raw thermal stream name", "原始热成像流名称", "生サーマル映像ストリーム名"};
+    result[S_H_PROXY_VIDEO3_NAME] = {"Name advertised for the raw thermal stream.", "发布的原始热成像流名称。", "通知される生サーマル映像ストリーム名。"};
     result[S_P_PROXY_PUBLISH_PASSWORD] = {"Video publish password", "视频发布密码", "映像送信パスワード"};
     result[S_H_PROXY_PUBLISH_PASSWORD] = {"Optional SupportProxy video publish password. Without it, allow publishing via the MAVLink session on the proxy.", "可选的 SupportProxy 视频发布密码。留空时需在代理上允许通过 MAVLink 会话发布。", "任意の SupportProxy 映像送信パスワード。空欄の場合、プロキシで MAVLink セッション経由の送信を許可してください。"};
     result[S_P_NETWORK_PRIMARY] = {"Primary IPv4 address/prefix", "主 IPv4 地址/前缀", "プライマリ IPv4 アドレス/プレフィックス"};
