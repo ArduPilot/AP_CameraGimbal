@@ -1564,11 +1564,13 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         if (!isfinite(params[0]) || params[0] < 0 || params[0] > stream_count() || floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
         unsigned stream = (unsigned)params[0];
         bool enabled = command == MAV_CMD_VIDEO_START_STREAMING;
-        if (stream == 0U || stream == CA_RAW_THERMAL_STREAM_ID) ca_thermal_stream_enable(enabled);
         if (stream == 0U) {
+            ca_thermal_stream_enable(enabled);
             for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = enabled;
         }
-        else if (stream == CA_RAW_THERMAL_STREAM_ID && ca_thermal_stream_port()) {}
+        // stream_count() only admits the raw stream when it is available,
+        // whether through the local listener or SupportProxy alone.
+        else if (stream == CA_RAW_THERMAL_STREAM_ID) ca_thermal_stream_enable(enabled);
         else if (stream <= APCAM_NUM_STREAMS) server->stream_enabled[stream - 1U] = enabled;
         else return MAV_RESULT_DENIED;
         send_stream_status(server, route, stream == 0U ? 1U : stream);

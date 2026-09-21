@@ -560,4 +560,6 @@ python3 sitl/test_support_proxy.py --proxy ../SupportProxy --raw-thermal --recon
 
 This checks stream 3 discovery over the proxy, all native sample bits against
 the SITL pattern, capture-time position metadata, and recovery after restarting
-the proxy alongside the two existing display streams.
+the proxy alongside the two existing display streams. The camera runs without
+its local raw HTTP listener, so stream 3 start/stop commands are also checked
+with SupportProxy as the only transport.
