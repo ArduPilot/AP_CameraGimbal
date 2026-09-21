@@ -102,6 +102,8 @@ network_gateway = 192.0.2.1
         CAMERA_APP_READY_PATH=str(camera_ready), CAMERA_APP_RECORD_STATE=str(directory / 'recording.state'),
         CAMERA_APP_RECORD_ROOT=str(recordings), CAMERA_APP_CAPTURE_ROOT=str(directory / 'capture'),
         CAMERA_APP_SITL_VIDEO1=str(fixture), CAMERA_APP_SITL_VIDEO2=str(fixture))
+    if args.raw_thermal:
+        env['CAMERA_APP_RAW_THERMAL_PORT'] = '0'  # publish through the proxy alone
     camera = gimbal = proxy = fc = eng = feeder = None
     done = threading.Event(); received_commands = []; feed_errors = []
     logs = []
@@ -198,9 +200,15 @@ network_gateway = 192.0.2.1
             counts = list(pool.map(lambda x: video(*x), [(v1, 1), (v2, 2)][:streams]))
         def check_raw():
             if not args.raw_thermal: return
-            sys.path.insert(0, str(args.mavproxy))
+            import importlib.util
             import numpy as np
-            from MAVProxy.modules.mavproxy_camera.thermal_stream import ThermalReader
+            # The shared helpers already imported the installed MAVProxy, so
+            # load the checkout's reader by path rather than through sys.path.
+            spec = importlib.util.spec_from_file_location(
+                'thermal_stream', args.mavproxy / 'MAVProxy/modules/mavproxy_camera/thermal_stream.py')
+            thermal_stream = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(thermal_stream)
+            ThermalReader = thermal_stream.ThermalReader
             wait_for(lambda: re.search(r'video slot 2 stats:.*join=ready',
                                       (directory/'proxy.log').read_text()), 'raw stream not ready')
             uri = f'http://127.0.0.1:{v3}/v3.mkv'
@@ -211,6 +219,13 @@ network_gateway = 192.0.2.1
                 assert info and info.stream_id == 3 and info.count == 3 and info.type == 200, info
                 assert info.uri == f'http://localhost:{v3}/v3.mkv', info
                 assert info.name == 'Raw Thermal' and info.flags & M.VIDEO_STREAM_STATUS_FLAGS_THERMAL, info
+                # Without a local listener the stream must still start and stop.
+                for command, running in ((M.MAV_CMD_VIDEO_STOP_STREAMING, False), (M.MAV_CMD_VIDEO_START_STREAMING, True)):
+                    eng.mav.command_long_send(42, 100, command, 0, 3, 0, 0, 0, 0, 0, 0)
+                    status = eng.recv_match(type='VIDEO_STREAM_STATUS', blocking=True, timeout=5)
+                    assert status and status.stream_id == 3 and bool(status.flags & M.VIDEO_STREAM_STATUS_FLAGS_RUNNING) == running, status
+                    ack = eng.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
+                    assert ack and ack.command == command and ack.result == M.MAV_RESULT_ACCEPTED, ack
             reader = ThermalReader(uri)
             try:
                 stamps = []
