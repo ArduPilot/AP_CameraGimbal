@@ -171,6 +171,11 @@ src/streaming/thermal_stream.o: CPPFLAGS += -DCA_THERMAL_STREAM_FFV1 -I$(THERMAL
 src/streaming/thermal_stream.o: $(THERMAL_TARGET_LIBS)
 $(SITL_OBJDIR)/c/src/streaming/thermal_stream.o: CPPFLAGS += -DCA_THERMAL_STREAM_FFV1 -I$(THERMAL_CODECS_ROOT)/host/include
 $(SITL_OBJDIR)/c/src/streaming/thermal_stream.o: $(THERMAL_HOST_LIBS)
+# System libraries the static libav archives need (e.g. -lbcrypt on Cygwin),
+# taken from the pkg-config files ffmpeg's configure installed.
+thermal_extra_libs = $(filter-out -L% -lavcodec -lavutil,$(shell sed -n 's/^Libs\(\.private\)\{0,1\}: *//p' $(THERMAL_CODECS_ROOT)/$(1)/lib/pkgconfig/libavcodec.pc $(THERMAL_CODECS_ROOT)/$(1)/lib/pkgconfig/libavutil.pc 2>/dev/null))
+THERMAL_TARGET_EXTRA_LIBS = $(call thermal_extra_libs,aarch64)
+THERMAL_HOST_EXTRA_LIBS = $(call thermal_extra_libs,host)
 endif
 $(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a &: ../tools/build_thermal_codecs.sh
 	../tools/build_thermal_codecs.sh host
@@ -252,7 +257,7 @@ else
 $(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 		-Wl,--start-group $(MEDIA_LIBS) -Wl,--end-group \
-		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) -lpthread -lm -ldl
+		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm -ldl
 endif
 
 %.o: %.cpp
@@ -454,7 +459,7 @@ sitl: $(SITL_TARGET)
 
 $(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
 	mkdir -p $(dir $@)
-	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) -lpthread -lm
+	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 
 $(SITL_OBJDIR)/c/%.o: %.cpp $(MINIMP4_HEADER)
 	mkdir -p $(dir $@)
@@ -760,7 +765,7 @@ $(TEST_TARGET) tests/test_config tests/test_thermal_monitor build/tests/test_a8_
 thermal-codec-bench: build/thermal-codec-bench build/mt11/thermal-codec-bench
 build/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_HOST_LIBS)
 	mkdir -p $(@D)
-	$(HOST_CXX) -O2 -std=c++17 -Wall -Wextra -Werror -I$(THERMAL_CODECS_ROOT)/host/include -o $@ $< $(THERMAL_HOST_LIBS) -lpthread -lm
+	$(HOST_CXX) -O2 -std=c++17 -Wall -Wextra -Werror -I$(THERMAL_CODECS_ROOT)/host/include -o $@ $< $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 build/mt11/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_TARGET_LIBS)
 	mkdir -p $(@D)
-	aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra -Werror -static -I$(THERMAL_CODECS_ROOT)/aarch64/include -o $@ $< $(THERMAL_TARGET_LIBS) -lpthread -lm
+	aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra -Werror -static -I$(THERMAL_CODECS_ROOT)/aarch64/include -o $@ $< $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm
