@@ -121,6 +121,7 @@ public:
 #ifdef CAMERA_APP_SITL
         return ca_thermal_stream_configure(_state->thermal_stream, settings);
 #else
+        (void)settings;
         return 0;
 #endif
     }
