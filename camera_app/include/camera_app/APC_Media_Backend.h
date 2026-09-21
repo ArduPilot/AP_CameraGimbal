@@ -40,6 +40,7 @@ public:
     virtual int set_inverted(bool inverted) = 0;
     virtual int exposure(unsigned lens, struct ca_exposure *sample) = 0;
     virtual int apply_overlay(const struct ca_config *settings) = 0;
+    virtual int configure_raw_thermal(const ca_config *) { return 0; }
     virtual int apply_image(const struct ca_config *settings) = 0;
 protected:
     APC_Media_Backend() = default;

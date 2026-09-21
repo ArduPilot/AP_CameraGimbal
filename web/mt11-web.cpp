@@ -627,6 +627,12 @@ static const struct parameter replacement_parameters[] = {
     {"thermal_palette", "thermal", "palette", S_P_THERMAL_PALETTE, S_H_THERMAL_PALETTE,
      PARAM_ENUM, 0, 0, 0, palette_options,
      sizeof(palette_options) / sizeof(palette_options[0])},
+#if WEB_HAVE_THERMAL
+    {"raw_stream_fps", "thermal", "stream_fps", S_P_RAW_STREAM_FPS, S_H_RAW_STREAM_FPS,
+     PARAM_INTEGER, 1, 25, 1, NULL, 0},
+    {"raw_record_fps", "thermal", "record_fps", S_P_RAW_RECORD_FPS, S_H_RAW_RECORD_FPS,
+     PARAM_INTEGER, 0, 25, 1, NULL, 0},
+#endif
     {"autorecord", "recording", "autorecord", S_P_AUTORECORD, S_H_AUTORECORD_APP,
      PARAM_ENUM, 0, 0, 0, autorecord_options, 3},
     {"recording_resolution", "recording", "resolution", S_P_RECORDING_RESOLUTION,
@@ -730,7 +736,11 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
-    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot", "false",
+    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",
+#if WEB_HAVE_THERMAL
+    "5", "5",
+#endif
+    "false",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION),
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264",
@@ -6721,7 +6731,7 @@ static void send_file_response(int client, const APC_HTTPRequest *request,
         return;
     }
     file = open(resolved, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    /* camera-app holds an exclusive lock while appending each MP4 frame.
+    /* camera-app holds an exclusive lock while appending each MP4 frame or raw Matroska cluster.
      * Snapshot its length between writes, then release the lock so recording
      * continues throughout even a slow download of this immutable prefix. */
     if (file < 0 || flock(file, LOCK_SH) < 0 ||

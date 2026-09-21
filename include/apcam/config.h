@@ -135,6 +135,8 @@ struct ca_config {
     enum ca_uart_protocol uart_protocol;
     enum ca_thermal_palette thermal_palette;
     enum ca_autorecord_mode autorecord;
+    unsigned raw_stream_fps;
+    unsigned raw_record_fps;
     enum ca_video_resolution main_resolution;
     enum ca_video_resolution sub_resolution;
     enum ca_video_resolution recording_resolution;

@@ -4,6 +4,7 @@
 #include <new>
 #include "camera_app/APC_Media_Backend.h"
 #include "camera_app/binlog.h"
+#include "camera_app/thermal_stream.h"
 #include "camera_app/video_fov.h"
 #include "camera_app/recorder.h"
 #include "apcam/lens.h"
@@ -57,6 +58,9 @@ struct APC_Media_SITL_State {
     atomic_bool inverted;
     char *capture_root;
 #ifdef CAMERA_APP_SITL
+    ca_thermal_stream *thermal_stream;
+    pthread_t thermal_thread;
+    bool thermal_thread_started;
     struct ca_live_video_server *live_video;
     struct ca_rtsp *rtsp;
     unsigned rtsp_port;
@@ -113,6 +117,13 @@ public:
     }
     bool ready() const override;
     int set_recording(bool active) override;
+    int configure_raw_thermal(const ca_config *settings) override {
+#ifdef CAMERA_APP_SITL
+        return ca_thermal_stream_configure(_state->thermal_stream, settings);
+#else
+        return 0;
+#endif
+    }
     bool recording() const override;
     const char * recording_path() const override;
     int set_zoom(float zoom) override;
@@ -166,7 +177,7 @@ static int write_file_all(int fd, const uint8_t *data, size_t length)
 #ifdef CAMERA_APP_SITL
 static int close_sitl_recording(struct APC_Media_SITL_State *media)
 {
-    int result = 0;
+    int result = ca_thermal_stream_recording(media->thermal_stream, false, nullptr);
     for (unsigned i = 0U; i < 2U; i++) {
         if (ca_mp4_close(media->mp4[i]) < 0) result = -1;
         media->mp4[i] = NULL;
@@ -214,6 +225,24 @@ static void advance_time(struct timespec *time, int64_t ns)
 static int64_t time_difference_ns(struct timespec a, struct timespec b)
 {
     return (a.tv_sec - b.tv_sec) * INT64_C(1000000000) + a.tv_nsec - b.tv_nsec;
+}
+
+static void *render_raw_thermal(void *opaque)
+{
+    auto *media = static_cast<APC_Media_SITL_State *>(opaque);
+    uint16_t *pixels = new(std::nothrow) uint16_t[640U*512U];
+    if (!pixels) return nullptr;
+    uint64_t frame = 0;
+    while (!atomic_load(&media->video_stop)) {
+        ca_thermal_test_pattern(pixels, ++frame);
+        timespec captured;
+        clock_gettime(CLOCK_REALTIME, &captured);
+        ca_thermal_stream_publish(media->thermal_stream, pixels, &captured,
+                                 media->thermal_gain, !atomic_load(&media->inverted));
+        usleep(40000); // native 25 Hz, independent of terrain rendering cost
+    }
+    delete[] pixels;
+    return nullptr;
 }
 
 static void *render_terrain_frames(void *opaque)
@@ -590,6 +619,17 @@ int APC_Media_SITL::init(const struct ca_media_config *config)
     pthread_mutex_init(&media->image_lock, NULL);
     pthread_cond_init(&media->capture_changed, NULL);
     media->image_settings = config->settings;
+    if (media->has_thermal) {
+        int error = ca_thermal_stream_open(&media->thermal_stream, config->rtsp_port, true, &config->settings);
+        if (error == 0 && media->thermal_stream) {
+            error = pthread_create(&media->thermal_thread, nullptr, render_raw_thermal, media);
+            if (error == 0) media->thermal_thread_started = true;
+            else errno = error;
+        }
+        if (error != 0) {
+            int saved = errno; media->owner->shutdown(); errno = saved; return -1;
+        }
+    }
     media->record_root = strdup(config->record_root);
     if (media->record_root == NULL || open_sitl_video(media, config) < 0) {
         int saved_errno = errno;
@@ -631,6 +671,7 @@ int APC_Media_SITL::set_recording(bool active)
             media->wait_keyframe[i] = true;
         }
         if (result == 0) result = ca_recorder_set(&media->recorder, true);
+        if (result == 0) result = ca_thermal_stream_recording(media->thermal_stream, true, media->recording_path[0]);
         if (result < 0) (void)close_sitl_recording(media);
         else atomic_store(&media->sitl_recording, true);
     done:
@@ -1033,10 +1074,13 @@ void APC_Media_SITL::shutdown()
     if (media == NULL) return;
 #ifdef CAMERA_APP_SITL
     atomic_store(&media->video_stop, true);
+    if (media->thermal_thread_started) pthread_join(media->thermal_thread, nullptr);
     ca_sitl_terrain_interrupt(media->terrain);
     if (media->video_thread_started) pthread_join(media->video_thread, NULL);
     ca_sitl_terrain_close(media->terrain);
     (void)close_sitl_recording(media);
+    ca_thermal_stream_close(media->thermal_stream);
+    media->thermal_stream = nullptr;
     pthread_mutex_destroy(&media->record_lock);
     pthread_mutex_destroy(&media->image_lock);
     pthread_cond_destroy(&media->capture_changed);

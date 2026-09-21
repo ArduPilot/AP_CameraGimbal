@@ -43,3 +43,52 @@ MT11 platform images used by the package builder are under
 Native GDB is intentionally not part of the MT11 overlay. A stripped static
 GDB 17.2 build occupied 10.2 MiB (4.1 MiB compressed), which is too costly on
 the camera's 140 MiB `/app` volume.
+
+- `build_thermal_codecs.sh host|aarch64` builds pinned minimal FFmpeg libraries
+  for the MT11 FFV1 stream and the codec benchmark. Invoked by the camera Makefile.
+- `raw_thermal_probe.py URI --mavproxy PATH --output DIRECTORY` captures native
+  16-bit FFV1 frames and paired JSON metadata from MT11 or SITL. See the
+  [raw thermal testing guide](../camera_app/RAW_THERMAL.md).
+
+## Legacy thermal directories to lossless video
+
+`thermal_to_video.py` converts a flat directory of 640x512 little-endian uint16
+`.bin` frames to the same FFV1 level-3 Matroska profile used by the MT11 raw
+stream. It uses range coding, slice CRCs and independent frames; every sensor
+bit is preserved. Install `numpy` and `av>=18.1` in the Python environment.
+
+```sh
+python3 tools/thermal_to_video.py /path/to/capture /path/to/capture.mkv
+python3 tools/thermal_to_video.py --extract /path/to/capture.mkv /path/to/extracted
+```
+
+Both commands print counts and encoding reports the complete container size and
+compression ratio. Extraction restores original filenames and file modification
+times and verifies each decoded frame against its stored SHA-256. Output files
+and directories must not already exist. Results are published only after success;
+invalid input, checksum errors and incomplete archives are rejected.
+
+By default, playback timing comes from the camera filenames
+`YYYY-MM-DD_HH-MM-SS_MILLISECONDS_I.bin`, sorted by parsed time (so `_13` is
+13 milliseconds, before `_100`). If any filename lacks that format, file
+modification times are used for ordering and timing instead. `--fps 5` overrides
+playback timing with a fixed 5 Hz cadence while retaining original names and
+modification times. This does not resample or discard any frames. Gaps in the
+original capture are otherwise retained.
+
+The per-frame `apcg.thermal.v1` metadata includes temperature range, original
+filename, file modification time in nanoseconds, source SHA-256 and archive frame
+count. `capture_monotonic_us` is reconstructed elapsed time plus one microsecond,
+marked `capture_clock=reconstructed_relative` and `timestamp_source=legacy_*`;
+it is not a recovered hardware clock. Filename timezone is not assumed. Old raw
+files have no vehicle/gimbal pose, so `telemetry` is null. Display rotation is
+180 degrees by default (upright MT11); `--rotation 0` changes this metadata only.
+
+`--extract --metadata` additionally writes a matching `.json` for each `.bin`.
+Extraction also accepts recordings of the new camera stream; without original
+filenames, files are named by frame ID. Camera-stream files lack the archive's
+source checksums and expected frame count; FFV1 decoding/CRC and range checks
+still apply. The converter handles raw pixels and file timestamps, and does not
+import any external telemetry sidecar files.
+
+Run the converter regressions with `python3 tests/test_thermal_to_video.py`.

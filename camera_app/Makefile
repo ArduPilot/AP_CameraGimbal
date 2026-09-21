@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := all
 CAMERA_BACKEND ?= mt11
 include ../include/apcam/targets.mk
 SUPPORTED_BACKENDS := mt11 a8 zr10 z1mini
@@ -108,7 +109,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/protocol/siyi_server.cpp \
 	src/protocol/private_uart.cpp \
 	src/recording/recorder_state.cpp \
-	src/recording/raw_thermal.cpp \
+	src/recording/raw_thermal.cpp src/streaming/thermal_stream.cpp \
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp \
@@ -160,6 +161,21 @@ XOP_HOST_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,$(SITL_OBJDIR)/xop/%.o,\
 	$(XOP_HOST_SOURCES)) $(SITL_OBJDIR)/xop/xop/RtspConnection.o \
 	$(SITL_OBJDIR)/xop/xop/RtpConnection.o
 SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
+
+# Full-depth thermal codecs are only linked into the MT11 firmware/SITL.
+THERMAL_CODECS_ROOT := $(abspath ../build/deps/thermal-codecs)
+ifeq ($(CAMERA_BACKEND),mt11)
+THERMAL_TARGET_LIBS := $(THERMAL_CODECS_ROOT)/aarch64/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/aarch64/lib/libavutil.a
+THERMAL_HOST_LIBS := $(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a
+src/streaming/thermal_stream.o: CPPFLAGS += -DCA_THERMAL_STREAM_FFV1 -I$(THERMAL_CODECS_ROOT)/aarch64/include
+src/streaming/thermal_stream.o: $(THERMAL_TARGET_LIBS)
+$(SITL_OBJDIR)/c/src/streaming/thermal_stream.o: CPPFLAGS += -DCA_THERMAL_STREAM_FFV1 -I$(THERMAL_CODECS_ROOT)/host/include
+$(SITL_OBJDIR)/c/src/streaming/thermal_stream.o: $(THERMAL_HOST_LIBS)
+endif
+$(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a &: ../tools/build_thermal_codecs.sh
+	../tools/build_thermal_codecs.sh host
+$(THERMAL_CODECS_ROOT)/aarch64/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/aarch64/lib/libavutil.a &: ../tools/build_thermal_codecs.sh
+	THERMAL_CROSS_COMPILE='$(CROSS_COMPILE)' ../tools/build_thermal_codecs.sh aarch64
 
 SSH_HOST ?= MT11
 SSH ?= ssh
@@ -233,10 +249,10 @@ build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o: build/xop_rtp_connection.cpp
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 else
-$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB)
+$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 		-Wl,--start-group $(MEDIA_LIBS) -Wl,--end-group \
-		-Wl,--gc-sections -lpthread -lm -ldl
+		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) -lpthread -lm -ldl
 endif
 
 %.o: %.cpp
@@ -436,9 +452,9 @@ thermal-mavlink-test: $(HOST_TARGET) $(A8_HOST_TARGET)
 
 sitl: $(SITL_TARGET)
 
-$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) Makefile
+$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
 	mkdir -p $(dir $@)
-	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) -lpthread -lm
+	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) -lpthread -lm
 
 $(SITL_OBJDIR)/c/%.o: %.cpp $(MINIMP4_HEADER)
 	mkdir -p $(dir $@)
@@ -738,3 +754,13 @@ tests/test_binlog_sys: tests/test_binlog_sys.cpp src/recording/binlog.cpp src/re
 
 # Shared schema and C++ ownership changes must invalidate host regression binaries.
 $(TEST_TARGET) tests/test_config tests/test_thermal_monitor build/tests/test_a8_exposure: $(wildcard ../include/apcam/*.h) $(wildcard include/camera_app/APC_*.h)
+
+# Standalone probes: safe to run without owning the MT11 camera hardware.
+.PHONY: thermal-codec-bench
+thermal-codec-bench: build/thermal-codec-bench build/mt11/thermal-codec-bench
+build/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_HOST_LIBS)
+	mkdir -p $(@D)
+	$(HOST_CXX) -O2 -std=c++17 -Wall -Wextra -Werror -I$(THERMAL_CODECS_ROOT)/host/include -o $@ $< $(THERMAL_HOST_LIBS) -lpthread -lm
+build/mt11/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_TARGET_LIBS)
+	mkdir -p $(@D)
+	aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra -Werror -static -I$(THERMAL_CODECS_ROOT)/aarch64/include -o $@ $< $(THERMAL_TARGET_LIBS) -lpthread -lm

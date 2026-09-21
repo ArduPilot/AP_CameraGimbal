@@ -18,6 +18,7 @@
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
 #include "camera_app/telemetry_time.h"
+#include "camera_app/thermal_stream.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -829,6 +830,11 @@ static void stream_properties(const struct ca_mavlink_server *server,
     }
 }
 
+static unsigned stream_count()
+{
+    return APCAM_NUM_STREAMS + (ca_thermal_stream_port() != 0 ? 1U : 0U);
+}
+
 static void send_stream_information(struct ca_mavlink_server *server,
                                     const struct route *route,
                                     unsigned stream_id)
@@ -836,11 +842,11 @@ static void send_stream_information(struct ca_mavlink_server *server,
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
     info.bitrate = 4096000U;
-    info.count = APCAM_NUM_STREAMS;
+    info.count = stream_count();
     info.type = VIDEO_STREAM_TYPE_RTSP;
     unsigned width, height;
     enum ca_video_codec codec;
-    if (stream_id < 1U || stream_id > APCAM_NUM_STREAMS) stream_id = 1U;
+    if (stream_id < 1U || stream_id > stream_count()) stream_id = 1U;
     stream_properties(server, stream_id, &width, &height, &codec, &info.flags);
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
@@ -865,7 +871,22 @@ static void send_stream_information(struct ca_mavlink_server *server,
                           server->rtsp_port, stream_id);
     }
     if (length > 0 && (size_t)length < sizeof(uri)) put_text(info.uri, sizeof(info.uri), uri);
-    info.encoding = codec == CA_VIDEO_H265 ? VIDEO_STREAM_ENCODING_H265
+    if (stream_id == CA_RAW_THERMAL_STREAM_ID) {
+        info.type = CA_VIDEO_STREAM_TYPE_HTTP_MATROSKA;
+        info.bitrate = 0; // lossless content-dependent bitrate
+        info.framerate = ca_thermal_stream_fps();
+        info.resolution_h = 640; info.resolution_v = 512;
+        info.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
+            (ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
+        put_text(info.name, sizeof(info.name), "Raw Thermal (16-bit)");
+        char host[INET_ADDRSTRLEN] = "0.0.0.0";
+        (void)route_local_ipv4(server, route, host);
+        snprintf(uri,sizeof(uri),"http://%s:%u/thermal.mkv",host,ca_thermal_stream_port());
+        if (route->kind == ROUTE_PROXY) { uri[0] = 0; info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING; }
+        put_text(info.uri,sizeof(info.uri),uri);
+        info.encoding = VIDEO_STREAM_ENCODING_UNKNOWN; // FFV1 is identified by Matroska CodecID
+        info.hfov = (uint16_t)lroundf(ca_media_hfov(server->media, true));
+    } else info.encoding = codec == CA_VIDEO_H265 ? VIDEO_STREAM_ENCODING_H265
                                            : VIDEO_STREAM_ENCODING_H264;
     (void)mavlink_msg_video_stream_information_encode_status(
         server->system_id, server->camera_component_id,
@@ -881,7 +902,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.bitrate = 4096000U;
     unsigned width, height;
     enum ca_video_codec codec;
-    if (stream_id < 1U || stream_id > APCAM_NUM_STREAMS) stream_id = 1U;
+    if (stream_id < 1U || stream_id > stream_count()) stream_id = 1U;
     stream_properties(server, stream_id, &width, &height, &codec,
                       &status.flags);
     (void)codec;
@@ -891,6 +912,13 @@ static void send_stream_status(struct ca_mavlink_server *server,
     status.resolution_v = (uint16_t)height;
     status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U));
+    if (stream_id == CA_RAW_THERMAL_STREAM_ID) {
+        status.bitrate = 0; status.framerate = ca_thermal_stream_fps();
+        status.resolution_h = 640; status.resolution_v = 512;
+        status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,true));
+        status.flags = VIDEO_STREAM_STATUS_FLAGS_THERMAL |
+            (ca_thermal_stream_enabled() ? VIDEO_STREAM_STATUS_FLAGS_RUNNING : 0);
+    }
     status.stream_id = (uint8_t)stream_id;
     (void)mavlink_msg_video_stream_status_encode_status(
         server->system_id, server->camera_component_id,
@@ -902,9 +930,9 @@ static bool send_stream_selection(struct ca_mavlink_server *server,
                                   const struct route *route,
                                   uint32_t message_id, unsigned stream_id)
 {
-    if (stream_id > APCAM_NUM_STREAMS) return false;
+    if (stream_id > stream_count()) return false;
     unsigned first = stream_id == 0U ? 1U : stream_id;
-    unsigned last = stream_id == 0U ? APCAM_NUM_STREAMS : stream_id;
+    unsigned last = stream_id == 0U ? stream_count() : stream_id;
     for (unsigned stream = first; stream <= last; stream++) {
         if (message_id == MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION) {
             send_stream_information(server, route, stream);
@@ -1520,11 +1548,14 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         return MAV_RESULT_ACCEPTED;
     case MAV_CMD_VIDEO_START_STREAMING:
     case MAV_CMD_VIDEO_STOP_STREAMING: {
+        if (!isfinite(params[0]) || params[0] < 0 || params[0] > stream_count() || floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
         unsigned stream = (unsigned)params[0];
         bool enabled = command == MAV_CMD_VIDEO_START_STREAMING;
+        if (stream == 0U || stream == CA_RAW_THERMAL_STREAM_ID) ca_thermal_stream_enable(enabled);
         if (stream == 0U) {
             for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = enabled;
         }
+        else if (stream == CA_RAW_THERMAL_STREAM_ID && ca_thermal_stream_port()) {}
         else if (stream <= APCAM_NUM_STREAMS) server->stream_enabled[stream - 1U] = enabled;
         else return MAV_RESULT_DENIED;
         send_stream_status(server, route, stream == 0U ? 1U : stream);

@@ -291,6 +291,12 @@ private:
         {"network", "gateway", Kind::String,
          offsetof(struct ca_config, network.gateway),
          sizeof(((struct ca_config *)0)->network.gateway), NULL, 0U, 0, 15, NULL},
+#if APCAM_HAVE_THERMAL
+        {"thermal", "stream_fps", Kind::Uint, offsetof(struct ca_config, raw_stream_fps),
+         sizeof(((struct ca_config *)0)->raw_stream_fps), NULL, 0U, 1, 25, "RAW_STREAM_FPS"},
+        {"thermal", "record_fps", Kind::Uint, offsetof(struct ca_config, raw_record_fps),
+         sizeof(((struct ca_config *)0)->raw_record_fps), NULL, 0U, 0, 25, "RAW_RECORD_FPS"},
+#endif
     };
 
 public:

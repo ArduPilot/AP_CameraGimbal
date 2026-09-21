@@ -476,6 +476,10 @@ class Launcher(QtWidgets.QWidget):
             ports = [('web', int(env[prefix + 'WEB_PORT']), ('TCP',)),
                      ('RTSP', rtsp, ('TCP',)), ('live video', rtsp + 1, ('TCP',)),
                      ('vendor TCP', vendor_tcp, ('TCP',)), ('vendor UDP', vendor_udp, ('UDP',))]
+            if panel.camera.currentData() == 'mt11':
+                raw_port = int(env.get('CAMERA_APP_RAW_THERMAL_PORT', rtsp + 2))
+                if raw_port:
+                    ports.append(('raw thermal', raw_port, ('TCP',)))
             for transport in ('TCP', 'UDP'):
                 port = int(env.get(prefix + 'MAVLINK_' + transport + '_PORT', settings[transport.lower() + '_port']))
                 if port:
