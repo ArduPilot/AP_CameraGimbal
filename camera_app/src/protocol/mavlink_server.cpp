@@ -17,6 +17,7 @@
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
+#include "camera_app/telemetry_time.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -48,8 +49,7 @@
 #define CA_EVENT_CLIENT_BASE UINT64_C(0x100)
 #define CA_MAVLINK_UART_OUTPUT (MAVLINK_MAX_PACKET_LEN * 16U)
 #define VEHICLE_ATTITUDE_TIMEOUT_MS 1000U
-#define VEHICLE_POSITION_TIMEOUT_MS 1500U
-#define VEHICLE_PREDICTION_MS 250U
+#define VEHICLE_PREDICTION_MS ca_yaw_history::prediction_ms
 #define TARGET_LOCATION_INTERVAL_MS 100U
 #define TELEMETRY_INTERVAL_REQUEST_MS 5000U
 #define THERMAL_DEFAULT_INTERVAL_MS 200U
@@ -136,14 +136,16 @@ struct ca_mavlink_server {
     uint64_t last_target_location_ms;
     uint64_t vehicle_attitude_updated_ms;
     uint64_t vehicle_position_updated_ms;
+    uint64_t primary_attitude_ms;
+    bool vehicle_attitude_primary;
+    ca_telemetry_clock attitude_clock, fallback_clock, position_clock;
+    ca_yaw_history vehicle_yaw_history;
     uint64_t recording_started_ms;
     uint64_t next_capture_ms;
     uint32_t image_count;
     int32_t next_image_index;
     int32_t captures_remaining;
     float capture_interval_s;
-    float vehicle_yaw_rad;
-    float vehicle_yaw_rate_rad_s;
     int32_t vehicle_lat_e7;
     int32_t vehicle_lon_e7;
     float vehicle_alt_amsl_m;
@@ -1050,14 +1052,10 @@ static bool current_vehicle_attitude(const struct ca_mavlink_server *server,
             VEHICLE_ATTITUDE_TIMEOUT_MS) {
         return false;
     }
-    float elapsed = (float)(now - server->vehicle_attitude_updated_ms) /
-                    1000.0f;
-    elapsed = fminf(elapsed, VEHICLE_PREDICTION_MS * 0.001f);
-    if (yaw != NULL) {
-        *yaw = wrap_pi_f(server->vehicle_yaw_rad +
-                         server->vehicle_yaw_rate_rad_s * elapsed);
-    }
-    if (yaw_rate != NULL) *yaw_rate = server->vehicle_yaw_rate_rad_s;
+    float aligned_yaw, aligned_rate;
+    if (!server->vehicle_yaw_history.at(now, aligned_yaw, aligned_rate)) return false;
+    if (yaw != NULL) *yaw = aligned_yaw;
+    if (yaw_rate != NULL) *yaw_rate = aligned_rate;
     return true;
 }
 
@@ -1067,8 +1065,7 @@ static bool current_vehicle_position(const struct ca_mavlink_server *server,
 {
     uint64_t now = monotonic_ms();
     if (!server->have_vehicle_position ||
-        now - server->vehicle_position_updated_ms >
-            VEHICLE_POSITION_TIMEOUT_MS) {
+        now - server->vehicle_position_updated_ms > VEHICLE_PREDICTION_MS) {
         return false;
     }
     int32_t lat = server->vehicle_lat_e7, lon = server->vehicle_lon_e7;
@@ -1171,21 +1168,19 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
         stop_tracking_rate(server);
         return;
     }
-    /* Differentiate a short position/yaw prediction, rather than noisy
-     * differences between incoming telemetry samples, for feed-forward. */
-    float future_pitch, future_yaw;
-    const float horizon = .1f, radians = PI_F / 180.0f;
-    if (!ca_targeting_predict_position(&lat, &lon, &alt, server->vehicle_vn_m_s,
-                                       server->vehicle_ve_m_s, server->vehicle_vd_m_s, horizon) ||
-        !ca_targeting_global_angles(lat, lon, alt, server->target_lat_e7,
-            server->target_lon_e7, server->target_alt_amsl_m, &future_pitch, &future_yaw)) {
+    const float radians = PI_F / 180.0f;
+    float pitch_rate, yaw_rate;
+    if (!ca_targeting_global_rates(lat, lon, alt, server->target_lat_e7,
+            server->target_lon_e7, server->target_alt_amsl_m,
+            server->vehicle_vn_m_s, server->vehicle_ve_m_s, server->vehicle_vd_m_s,
+            &pitch_rate, &yaw_rate)) {
         stop_tracking_rate(server);
         return;
     }
     float desired[2] = {pitch, yaw};
     float feedback[2] = {attitude.pitch_rad, attitude.yaw_rad};
-    float feed_forward[2] = {(future_pitch - pitch) / horizon,
-        wrap_pi_f(future_yaw - yaw_earth) / horizon - vehicle_yaw_rate};
+    // LOS motion is earth-frame. The yaw motor must also cancel vehicle yaw.
+    float feed_forward[2] = {pitch_rate, yaw_rate - vehicle_yaw_rate};
     const float minimum[2] = {APCAM_GIMBAL_PITCH_MIN * radians, APCAM_GIMBAL_YAW_MIN * radians};
     const float maximum[2] = {APCAM_GIMBAL_PITCH_MAX * radians, APCAM_GIMBAL_YAW_MAX * radians};
     float output[2];
@@ -1247,8 +1242,8 @@ static void pack_gimbal_status(struct ca_mavlink_server *server,
     uint16_t flags = GIMBAL_DEVICE_FLAGS_ROLL_LOCK |
                      GIMBAL_DEVICE_FLAGS_PITCH_LOCK |
                      GIMBAL_DEVICE_FLAGS_YAW_IN_VEHICLE_FRAME;
-    bool have_vehicle = current_vehicle_attitude(
-        server, &vehicle_yaw, &vehicle_yaw_rate);
+    bool have_vehicle = server->vehicle_yaw_history.at(
+        attitude->timestamp_ms, vehicle_yaw, vehicle_yaw_rate);
     if (have_vehicle) {
         flags |= GIMBAL_DEVICE_FLAGS_ACCEPTS_YAW_IN_EARTH_FRAME;
     }
@@ -1262,7 +1257,8 @@ static void pack_gimbal_status(struct ca_mavlink_server *server,
     euler_to_quaternion(attitude->roll_rad, attitude->pitch_rad,
                         yaw, q);
     mavlink_gimbal_device_attitude_status_t status = {};
-    status.time_boot_ms = boot_ms(server);
+    status.time_boot_ms = attitude->timestamp_ms >= server->started_ms ?
+        uint32_t(attitude->timestamp_ms - server->started_ms) : 0;
     memcpy(status.q, q, sizeof(q));
     status.angular_velocity_x = attitude->roll_rate_rad_s;
     status.angular_velocity_y = attitude->pitch_rate_rad_s;
@@ -1593,6 +1589,21 @@ static void quaternion_to_euler(const float q[4], float *roll, float *pitch,
                   1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
 }
 
+static void save_vehicle_attitude(struct ca_mavlink_server *server,
+                                  float roll, float pitch, float yaw, float yaw_rate,
+                                  uint64_t sample_ms, bool primary, bool reset)
+{
+    if (reset || primary != server->vehicle_attitude_primary) {
+        server->vehicle_yaw_history = {};
+    }
+    server->vehicle_attitude_primary = primary;
+    server->vehicle_attitude_updated_ms = sample_ms;
+    server->have_vehicle_attitude = true;
+    if (primary) server->primary_attitude_ms = sample_ms;
+    server->vehicle_yaw_history.add(sample_ms, yaw, yaw_rate);
+    ca_metadata_set_vehicle_attitude_motion(roll, pitch, yaw, yaw_rate, sample_ms);
+}
+
 static void handle_autopilot_state_for_gimbal(
     struct ca_mavlink_server *server,
     const mavlink_message_t *message)
@@ -1626,22 +1637,22 @@ static void handle_autopilot_state_for_gimbal(
     float yaw_rate = message->len >= 57U ? state.angular_velocity_z : NAN;
     if (!isfinite(yaw_rate)) yaw_rate = state.feed_forward_angular_velocity_z;
     if (!isfinite(yaw_rate)) yaw_rate = 0.0f;
-    ca_metadata_set_vehicle_attitude_motion(roll, pitch, yaw, yaw_rate);
-    ca_metadata_set_velocity(state.vx, state.vy, state.vz);
+    uint64_t sample_ms;
+    bool reset;
+    if (!server->attitude_clock.sample(state.time_boot_us, 1, monotonic_ms() * 1000,
+                                       sample_ms, reset)) return;
+    save_vehicle_attitude(server, roll, pitch, yaw, yaw_rate, sample_ms, true, reset);
+    ca_metadata_set_velocity(state.vx, state.vy, state.vz, sample_ms);
     CA_BINLOG(CA_LOG_ATT, ca_log_att, .boot_ms=(uint32_t)(state.time_boot_us/1000),
         .source=1, .roll=roll*57.295779513f,.pitch=pitch*57.295779513f,
         .yaw=yaw*57.295779513f,.rollrate=NAN,.pitchrate=NAN,.yawrate=yaw_rate*57.295779513f);
-    server->vehicle_yaw_rad = yaw;
-    server->vehicle_yaw_rate_rad_s = yaw_rate;
-    server->vehicle_attitude_updated_ms = monotonic_ms();
-    server->have_vehicle_attitude = true;
 }
 
 static void handle_attitude(struct ca_mavlink_server *server,
                             const mavlink_message_t *message)
 {
-    /* Metadata fallback only: never overwrite a fresh gimbal-state quaternion
-     * with the independently scheduled ATTITUDE stream. */
+    /* Never overwrite a fresh gimbal-state quaternion with the independently
+     * scheduled ATTITUDE stream. Map its clock even while it is a standby. */
     mavlink_attitude_t attitude;
     if (message->sysid != server->autopilot_system_id ||
         message->compid != server->autopilot_component_id) {
@@ -1656,15 +1667,21 @@ static void handle_attitude(struct ca_mavlink_server *server,
         .roll=attitude.roll*57.295779513f,.pitch=attitude.pitch*57.295779513f,
         .yaw=attitude.yaw*57.295779513f,.rollrate=attitude.rollspeed*57.295779513f,
         .pitchrate=attitude.pitchspeed*57.295779513f,.yawrate=attitude.yawspeed*57.295779513f);
-    if (server->have_vehicle_attitude &&
-        monotonic_ms() - server->vehicle_attitude_updated_ms < VEHICLE_ATTITUDE_TIMEOUT_MS) return;
+    uint64_t sample_ms;
+    bool reset;
+    const uint64_t now = monotonic_ms();
+    if (!server->fallback_clock.sample(attitude.time_boot_ms, 1000, now * 1000,
+                                       sample_ms, reset)) return;
+    if (server->primary_attitude_ms &&
+        now - server->primary_attitude_ms < VEHICLE_ATTITUDE_TIMEOUT_MS) return;
     /* ATTITUDE rates are body rates; convert to Euler yaw rate. */
     float cp = cosf(attitude.pitch);
     float yaw_rate = fabsf(cp) > 0.01f ?
         (attitude.pitchspeed * sinf(attitude.roll) +
          attitude.yawspeed * cosf(attitude.roll)) / cp : NAN;
-    ca_metadata_set_vehicle_attitude_motion(attitude.roll, attitude.pitch,
-                                            attitude.yaw, yaw_rate);
+    if (!isfinite(yaw_rate)) return;
+    save_vehicle_attitude(server, attitude.roll, attitude.pitch, attitude.yaw,
+                          yaw_rate, sample_ms, false, reset);
 }
 
 static void handle_system_time(struct ca_mavlink_server *server,
@@ -1717,13 +1734,17 @@ static void handle_global_position_int(
         lon_e7 < -1800000000 || lon_e7 > 1800000000) {
         return;
     }
+    uint64_t sample_ms;
+    bool reset;
+    if (!server->position_clock.sample(position.time_boot_ms, 1000, monotonic_ms() * 1000,
+                                       sample_ms, reset)) return;
     ca_metadata_set_position(lat_e7, lon_e7, alt_mm * 0.001f,
                              relative_alt_mm * 0.001f,
                              heading_cdeg == 0xffffU
                                  ? NAN
-                                 : heading_cdeg * 0.01f * (float)(M_PI / 180.0));
+                                 : heading_cdeg * 0.01f * (float)(M_PI / 180.0), sample_ms);
     ca_metadata_set_velocity(position.vx * 0.01f, position.vy * 0.01f,
-                              position.vz * 0.01f);
+                              position.vz * 0.01f, sample_ms);
     CA_BINLOG(CA_LOG_POS, ca_log_pos, .boot_ms=position.time_boot_ms,
         .lat=lat_e7,.lon=lon_e7,.alt=alt_mm*.001f,.relalt=relative_alt_mm*.001f,
         .vn=position.vx*.01f,.ve=position.vy*.01f,.vd=position.vz*.01f);
@@ -1734,7 +1755,7 @@ static void handle_global_position_int(
     server->vehicle_vn_m_s = position.vx * 0.01f;
     server->vehicle_ve_m_s = position.vy * 0.01f;
     server->vehicle_vd_m_s = position.vz * 0.01f;
-    server->vehicle_position_updated_ms = monotonic_ms();
+    server->vehicle_position_updated_ms = sample_ms;
     server->have_vehicle_position = true;
     if (first_position) {
         ca_log("MAVLink vehicle position available");

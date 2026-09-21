@@ -275,6 +275,11 @@ tests/test_mavlink_time: tests/test_mavlink_time.cpp src/protocol/mavlink_server
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/mavlink.cpp -lm
 
+tests/test_telemetry_time: tests/test_telemetry_time.cpp src/protocol/mavlink_server.cpp \
+                          include/camera_app/telemetry_time.h src/protocol/targeting.cpp src/protocol/mavlink.cpp $(MAVLINK_DEPS)
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections -o $@ $< src/protocol/targeting.cpp src/protocol/mavlink.cpp -lm
+
 $(CONFIG_TEST_TARGET): tests/test_config.cpp src/config.cpp include/camera_app/config.h $(APCAM_HEADERS)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
 
@@ -527,7 +532,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
 		src/log.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp -lpthread -lm
 
-test: system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -538,6 +543,7 @@ test: system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-
 	$(HOST_TARGET) $(A8_HOST_TARGET)
 	./$(TEST_TARGET)
 	./$(MAVLINK_TEST_TARGET)
+	./tests/test_telemetry_time
 	./tests/test_mavlink_time
 	./tests/test_gimbal_rate
 	./tests/test_support_mavlink
@@ -598,7 +604,7 @@ install-init: $(APP_INIT) $(APP_SELECTION) $(TIMESYNC)
 
 clean:
 	rm -f tests/test_gimbal_rate
-	rm -f tests/test_mavlink_time
+	rm -f tests/test_telemetry_time tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
 	rm -f tests/test_system_stats tests/test_binlog_sys tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.cpp=.o) $(COMMON_SOURCES:.cpp=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \

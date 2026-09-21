@@ -49,7 +49,7 @@ void ca_metadata_set_model(const char *model)
 }
 
 void ca_metadata_set_position(int32_t lat_e7, int32_t lon_e7, float alt_amsl_m,
-                              float alt_relative_m, float heading_rad)
+                              float alt_relative_m, float heading_rad, uint64_t timestamp_ms)
 {
     pthread_mutex_lock(&state.lock);
     state.lat_e7 = lat_e7;
@@ -57,7 +57,7 @@ void ca_metadata_set_position(int32_t lat_e7, int32_t lon_e7, float alt_amsl_m,
     state.alt_amsl_m = alt_amsl_m;
     state.alt_relative_m = alt_relative_m;
     state.heading_rad = heading_rad;
-    state.position_ms = monotonic_ms();
+    state.position_ms = timestamp_ms ? timestamp_ms : monotonic_ms();
     pthread_mutex_unlock(&state.lock);
 }
 
@@ -67,26 +67,26 @@ void ca_metadata_set_vehicle_attitude(float roll_rad, float pitch_rad,
     ca_metadata_set_vehicle_attitude_motion(roll_rad, pitch_rad, yaw_rad, NAN);
 }
 
-void ca_metadata_set_velocity(float vn_m_s, float ve_m_s, float vd_m_s)
+void ca_metadata_set_velocity(float vn_m_s, float ve_m_s, float vd_m_s, uint64_t timestamp_ms)
 {
     if (!isfinite(vn_m_s) || !isfinite(ve_m_s) || !isfinite(vd_m_s)) return;
     pthread_mutex_lock(&state.lock);
     state.vn_m_s = vn_m_s;
     state.ve_m_s = ve_m_s;
     state.vd_m_s = vd_m_s;
-    state.velocity_ms = monotonic_ms();
+    state.velocity_ms = timestamp_ms ? timestamp_ms : monotonic_ms();
     pthread_mutex_unlock(&state.lock);
 }
 
 void ca_metadata_set_vehicle_attitude_motion(float roll_rad, float pitch_rad,
-                                             float yaw_rad, float yaw_rate_rad_s)
+                                             float yaw_rad, float yaw_rate_rad_s, uint64_t timestamp_ms)
 {
     pthread_mutex_lock(&state.lock);
     state.vehicle_yaw_rate_rad_s = yaw_rate_rad_s;
     state.vehicle_roll_rad = roll_rad;
     state.vehicle_pitch_rad = pitch_rad;
     state.vehicle_yaw_rad = yaw_rad;
-    state.vehicle_attitude_ms = monotonic_ms();
+    state.vehicle_attitude_ms = timestamp_ms ? timestamp_ms : monotonic_ms();
     pthread_mutex_unlock(&state.lock);
 }
 

@@ -170,6 +170,8 @@ sitl-test: sitl
 sitl-mavlink-test: sitl
 	python3 sitl/test_mavlink_parameters.py --backend mt11 --build $(SITL_BUILD)
 	python3 sitl/test_roi_motion.py --build $(SITL_BUILD)
+	python3 sitl/test_roi_motion.py --build $(SITL_BUILD) --jitter
+	python3 sitl/test_roi_motion.py --build $(SITL_BUILD) --jitter --rate
 	$(SITL_VIDEO_PYTHON) sitl/test_gimbal_angle_hold.py --build $(SITL_BUILD)
 
 a8_sitl-mavlink-test: a8_sitl

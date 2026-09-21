@@ -21,6 +21,12 @@ make zr10_sitl-test
 make sitl-live-tracking-test
 ```
 
+`make sitl-mavlink-test` also exercises circling ROI tracking with sparse
+position data and injected 0–100 ms delay/reordering, in angle and rate modes.
+`make -C camera_app tests/test_telemetry_time tests/test_targeting` builds the
+deterministic clock/history and analytic LOS-rate tests; run both executables
+from `camera_app/tests/` after building them.
+
 The live tracking test uses isolated ports and files, and requires the usual
 MAVLink/video test dependencies. It checks web saves against the
 running app, rate tracking, stale-data stops and video-format changes deferred
