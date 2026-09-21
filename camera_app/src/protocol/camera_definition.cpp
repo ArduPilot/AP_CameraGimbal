@@ -44,6 +44,7 @@ static const struct ca_camera_parameter parameters[] = {
     OPTIONS("CAM_THERM_GAIN", "Thermal gain", CA_CAMERA_GAIN, 1, gains),
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
+    CONFIG("PROXY_VID3_PORT", "SupportProxy raw thermal port (0 disables)"),
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif

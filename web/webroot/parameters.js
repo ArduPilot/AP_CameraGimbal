@@ -108,11 +108,14 @@
     if (value('proxy_enabled') === 'true') {
       if (!value('proxy_host')) invalid(get('proxy_host'));
       if (value('proxy_signing') === 'true' && !value('proxy_signing_passphrase')) invalid(get('proxy_signing_passphrase'));
-      for (const n of [1, 2]) {
+      const usedPorts = new Set();
+      for (const n of [1, 2, 3]) {
+        if (!get('proxy_video' + n + '_port')) continue;
+        const port = Number(value('proxy_video' + n + '_port'));
+        if (port && usedPorts.has(port)) invalid(get('proxy_video' + n + '_port'), L.ports);
+        if (port) usedPorts.add(port);
         if (Number(value('proxy_video' + n + '_port')) && !value('proxy_video' + n + '_name')) invalid(get('proxy_video' + n + '_name'));
       }
-      if (Number(value('proxy_video1_port')) && Number(value('proxy_video1_port')) === Number(value('proxy_video2_port')))
-        invalid(get('proxy_video2_port'), L.ports);
     }
     for (const field of fields) {
       const bad = !field.validity.valid && (attempted || touched.has(field));

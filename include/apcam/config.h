@@ -110,8 +110,10 @@ struct ca_support_config {
     unsigned signing_link_id;
     unsigned video1_port;
     unsigned video2_port;
+    unsigned video3_port;
     char video1_name[64];
     char video2_name[64];
+    char video3_name[64];
     char publish_password[128];
     /* Legacy INI keys; new settings belong to ca_network_config below. */
     char network_interface[16];

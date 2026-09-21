@@ -30,7 +30,7 @@ EXPECTED = {
     "VIDEO_SUB_RES", "VIDEO_SUB_CODEC", "IMG_BRIGHTNESS", "IMG_SATURATION",
     "IMG_CONTRAST", "IMG_EXPOSURE", "IMG_ISO", "IMG_SHUTTER", "IMG_METERING",
     "IMG_WHITE_BAL", "MAV_POS_TARGET", "TRACK_METHOD", "MAV_TCP_PORT", "MAV_UDP_PORT", "MAV_SYSID", "MAV_CAM_COMP_ID",
-    "PROXY_ENABLE", "PROXY_MAV_PORT", "PROXY_SIGN", "PROXY_SIGN_ID", "PROXY_VID1_PORT", "PROXY_VID2_PORT",
+    "PROXY_ENABLE", "PROXY_MAV_PORT", "PROXY_SIGN", "PROXY_SIGN_ID", "PROXY_VID1_PORT", "PROXY_VID2_PORT", "PROXY_VID3_PORT",
 }
 
 
@@ -181,7 +181,7 @@ def main():
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     if args.backend != "mt11":
-        EXPECTED.discard("OSD_THERMAL_FOV")
+        EXPECTED.difference_update({"OSD_THERMAL_FOV", "RAW_STREAM_FPS", "RAW_RECORD_FPS", "PROXY_VID3_PORT"})
     repo = pathlib.Path(__file__).resolve().parents[1]
     build = (args.build or repo / "build" / ("sitl" if args.backend == "mt11" else "a8-sitl")).resolve()
     directory = (args.output or pathlib.Path(tempfile.mkdtemp(prefix="camera-mavlink-test-"))).resolve()

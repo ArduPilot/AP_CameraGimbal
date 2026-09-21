@@ -651,7 +651,7 @@ try:
     assert b'name="mavlink_system_id" id="mavlink_system_id" type=number min="0" max="255" step="1" value="0"' in body
     assert b'<option value="100" selected>Camera 1 (100)</option>' in body
     assert b'<option value="105">Camera 6 (105)</option>' in body
-    for name in (b"proxy_video1_port", b"proxy_video2_port"):
+    for name in (b"proxy_video1_port", b"proxy_video2_port", b"proxy_video3_port"):
         assert re.search(rb'<input[^>]*name="' + name + rb'"[^>]*value="0"', body)
     assert b'name="position_targeting"' in body
     assert b'name="osd_cross"' in body and b'name="osd_thermal_fov"' in body
@@ -701,6 +701,8 @@ try:
         "proxy_video1_port": "40001",
         "proxy_video1_name": "video1",
         "proxy_video2_port": "40002",
+        "proxy_video3_port": "40003",
+        "proxy_video3_name": "Raw Thermal",
         "proxy_video2_name": "video2",
         "proxy_publish_password": "",
         "network_interface": "eth0",
@@ -781,6 +783,7 @@ try:
                     {"network_secondary_address": "192.0.2.25/33"},
                     {"network_gateway": "bad"}, {"proxy_host": "bad/host"},
                     {"proxy_signing_passphrase": ""}, {"proxy_video2_port": "40001"},
+                    {"proxy_video3_port": "40002"}, {"proxy_video3_name": ""},
                     {"proxy_video1_name": ""}, {"proxy_mavlink_port": "65536"}):
         _, invalid_body, _ = form("/parameters", "initial-password", csrf, dict(valid_proxy, **changes))
         assert b"Parameters saved" not in invalid_body

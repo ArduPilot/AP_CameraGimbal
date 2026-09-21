@@ -10,6 +10,7 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 
 #ifdef CA_THERMAL_STREAM_FFV1
 #include "thermal_codec.h"
+#include "camera_app/support_video.h"
 #include "thermal_matroska.h"
 #include "camera_app/log.h"
 #include "camera_app/metadata.h"
@@ -34,13 +35,14 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 
 using thermal_mkv::Bytes;
 static std::atomic<unsigned> public_port{0}, public_fps{5};
-static std::atomic<bool> enabled{true};
+static std::atomic<bool> enabled{true}, available{false};
 static uint64_t mono_us() {
     timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
     return uint64_t(t.tv_sec)*1000000 + t.tv_nsec/1000;
 }
 struct ca_thermal_stream {
     int listener = -1;
+    ca_support_video *proxy = nullptr;
     pthread_t thread{};
     bool started = false, simulated = false;
     std::atomic<bool> stop{false};
@@ -267,7 +269,7 @@ static void *thermal_worker(void *opaque)
             stream_fps = public_fps.load();
             next_encode = 0;
         }
-        bool stream_due = false;
+        bool stream_due = s->proxy && enabled.load();
         for (auto &c:clients) stream_due |= c.streaming && !c.pending;
         stream_due = stream_due && now >= next_encode;
         uint64_t generation;
@@ -305,6 +307,7 @@ static void *thermal_worker(void *opaque)
         if (stream_due) {
             auto data=std::make_shared<Bytes>(thermal_mkv::frame(encoded,json.c_str(),(capture-epoch)/1000));
             for (auto &c:clients) if (c.streaming && !c.pending) { c.pending=data; c.progress_us=now; }
+            if (enabled.load()) ca_support_video_push(s->proxy, data->data(), data->size(), 0, true);
             previous=sequence; next_encode=next_deadline(next_encode,now,stream_fps);
         }
         if (record_due) {
@@ -357,23 +360,29 @@ int ca_thermal_stream_open(ca_thermal_stream **result,unsigned rtsp_port,bool si
             int error=errno; if (s->listener>=0) close(s->listener); delete s; errno=error; return -1;
         }
     }
+    if (ca_support_video_open_matroska(&s->proxy, &settings->support, s->header.data(), s->header.size()) < 0) {
+        if (s->listener >= 0) close(s->listener);
+        delete s; return -1;
+    }
     enabled=true; public_fps=fps;
     int error=pthread_create(&s->thread,nullptr,thermal_worker,s);
-    if (error) { close(s->listener); delete s; errno=error; return -1; }
-    s->started=true; public_port=port; *result=s;
+    if (error) { ca_support_video_close(s->proxy); close(s->listener); delete s; errno=error; return -1; }
+    s->started=true; public_port=port; available=port || s->proxy; *result=s;
     ca_log("lossless thermal ready: HTTP port=%u FFV1 gray16 640x512 %u fps%s",port,fps,simulated?" (test pattern)":"");
     return 0;
 }
 void ca_thermal_stream_close(ca_thermal_stream *s)
 {
     if (!s) return;
-    public_port=0; s->stop=true;
+    public_port=0; available=false; s->stop=true;
     if (s->started) pthread_join(s->thread,nullptr);
+    ca_support_video_close(s->proxy);
     (void)ca_thermal_stream_recording(s, false, nullptr);
     if (s->listener >= 0) close(s->listener);
     delete s;
 }
 unsigned ca_thermal_stream_port() { return public_port.load(); }
+bool ca_thermal_stream_available() { return available.load(); }
 unsigned ca_thermal_stream_fps() { return public_fps.load(); }
 bool ca_thermal_stream_enabled() { return enabled.load(); }
 void ca_thermal_stream_enable(bool value) { enabled=value; }
@@ -384,6 +393,7 @@ int ca_thermal_stream_configure(ca_thermal_stream *,const ca_config *) { return 
 int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 0; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
 unsigned ca_thermal_stream_port() { return 0; }
+bool ca_thermal_stream_available() { return false; }
 unsigned ca_thermal_stream_fps() { return 0; }
 bool ca_thermal_stream_enabled() { return false; }
 void ca_thermal_stream_enable(bool) {}

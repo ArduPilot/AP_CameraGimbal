@@ -21,6 +21,14 @@ extern "C" struct ca_support_video *test_open(unsigned port) {
     if (ca_support_video_open(&publisher, &config, 0, CA_VIDEO_H264) < 0) return NULL;
     return publisher;
 }
+extern "C" struct ca_support_video *test_open_raw(unsigned port) {
+    struct ca_support_config config = {.enabled = true, .video3_port = port};
+    strcpy(config.host, "127.0.0.1");
+    struct ca_support_video *publisher = NULL;
+    const uint8_t header[] = "matroska-header";
+    if (ca_support_video_open_matroska(&publisher, &config, header, sizeof(header)-1) < 0) return NULL;
+    return publisher;
+}
 '''
 
 
@@ -105,6 +113,47 @@ def check(library, byte_limit):
     print('PASS RTSP connection and keyframe recovery after ' + ('byte' if byte_limit else 'frame') + ' queue limit')
 
 
+def check_raw(library):
+    waiting, release = threading.Event(), threading.Event()
+    errors = []
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0)); listener.listen(); listener.settimeout(5)
+        def proxy():
+            try:
+                with listener.accept()[0] as connection:
+                    connection.settimeout(5)
+                    header = b''
+                    while not header.endswith(b'\r\n\r\n'):
+                        header += read_exact(connection, 1)
+                    assert header.startswith(b'PUT /v3.mkv HTTP/1.1')
+                    assert b'Transfer-Encoding: chunked' in header
+                    waiting.set()
+                    assert release.wait(5)
+                    connection.sendall(b'HTTP/1.1 100 Continue\r\n\r\n')
+                    for expected in (b'matroska-header', b'frame-0', b'frame-100'):
+                        line = b''
+                        while not line.endswith(b'\r\n'): line += read_exact(connection, 1)
+                        data = read_exact(connection, int(line, 16))
+                        assert read_exact(connection, 2) == b'\r\n'
+                        assert data == expected, (data, expected)
+            except BaseException as error:
+                errors.append(error); waiting.set()
+        worker = threading.Thread(target=proxy); worker.start()
+        publisher = library.test_open_raw(listener.getsockname()[1])
+        assert publisher
+        try:
+            library.ca_support_video_push(publisher, b'frame-0', 7, 0, True)
+            assert waiting.wait(5) and not errors, errors
+            for i in range(1, 101):
+                data = ('frame-%u' % i).encode()
+                library.ca_support_video_push(publisher, data, len(data), 0, True)
+            release.set(); worker.join(7)
+            assert not worker.is_alive() and not errors, errors
+        finally:
+            release.set(); library.ca_support_video_close(publisher); worker.join(7)
+    print('PASS Matroska header and latest-frame-only queue on delayed uplink')
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='support-video-queue-') as temp:
         root = Path(temp)
@@ -121,6 +170,9 @@ def main():
         library.test_open.restype = ctypes.c_void_p
         library.ca_support_video_push.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_bool]
         library.ca_support_video_close.argtypes = [ctypes.c_void_p]
+        library.test_open_raw.argtypes = [ctypes.c_uint]
+        library.test_open_raw.restype = ctypes.c_void_p
+        check_raw(library)
         check(library, False)
         check(library, True)
 

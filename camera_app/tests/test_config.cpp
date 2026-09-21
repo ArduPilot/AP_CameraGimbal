@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "camera_app/config.h"
+#include "apcam/APC_Config.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -46,6 +47,23 @@ int main(int argc, char **argv)
     assert(config.position_targeting);
     assert(config.support.video1_port == 0U);
     assert(config.support.video2_port == 0U);
+    assert(config.support.video3_port == 0U);
+    assert(!strcmp(config.support.video3_name, "Raw Thermal (16-bit)"));
+    {
+        ca_config trial = config;
+        trial.support.enabled = true;
+        strcpy(trial.support.host, "localhost");
+        trial.support.video1_port = 40001;
+        trial.support.video3_port = 40003;
+        assert(APC_Config::support_valid(&trial.support));
+        trial.support.video3_port = 40001;
+        assert(!APC_Config::support_valid(&trial.support));
+        trial.support.video3_port = 40003;
+        trial.support.video3_name[0] = 0;
+        assert(!APC_Config::support_valid(&trial.support));
+        int index = ca_config_param_find("PROXY_VID3_PORT");
+        assert(index >= 0);
+    }
     assert(config.autorecord == CA_AUTORECORD_DISABLED);
     assert(config.raw_stream_fps == 5 && config.raw_record_fps == 5);
     assert(config.mavlink_system_id == 0U);
@@ -105,7 +123,7 @@ int main(int argc, char **argv)
                   "ironbow") == 0);
     assert(strcmp(config.main_alias, "main.264") == 0 && config.sub_alias[0] == '\0');
 
-    assert(ca_config_param_count() == 36U);
+    assert(ca_config_param_count() == 37U);
     for (size_t i = 0; i < ca_config_param_count(); i++) {
         const char *name = ca_config_param_name(i);
         assert(strlen(name) > 0U && strlen(name) <= 16U);

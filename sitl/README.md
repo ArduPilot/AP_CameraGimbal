@@ -549,3 +549,15 @@ manual and automatic video recording policy, including While Armed.
 checks both rates, slow clients, recording without streaming, arm/disarm,
 live changes through both MAVLink protocols and INI reload, and exact decoded
 sensor samples. See [raw thermal details](../camera_app/RAW_THERMAL.md).
+
+### Raw thermal through SupportProxy
+
+Build SupportProxy with its Matroska relay support, then run:
+
+```sh
+python3 sitl/test_support_proxy.py --proxy ../SupportProxy --raw-thermal --reconnect
+```
+
+This checks stream 3 discovery over the proxy, all native sample bits against
+the SITL pattern, capture-time position metadata, and recovery after restarting
+the proxy alongside the two existing display streams.

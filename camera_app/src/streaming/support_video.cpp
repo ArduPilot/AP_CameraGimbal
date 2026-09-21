@@ -1,4 +1,5 @@
 #include <new>
+#include <vector>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -44,6 +45,7 @@ struct ca_support_video {
     uint16_t sequence;
     uint32_t ssrc, cseq;
     int fd;
+    std::vector<uint8_t> matroska_header;
 };
 
 static uint64_t milliseconds(void)
@@ -84,7 +86,7 @@ static int ready(struct ca_support_video *p, short events, uint64_t deadline)
 }
 
 static int transfer(struct ca_support_video *p, void *data, size_t length,
-                      bool writing, uint64_t deadline)
+                      bool writing, uint64_t deadline, bool progress_timeout = false)
 {
     uint8_t *bytes = (uint8_t*)(data);
     while (length) {
@@ -96,6 +98,7 @@ static int transfer(struct ca_support_video *p, void *data, size_t length,
         if (count <= 0) return -1;
         bytes += count;
         length -= count;
+        if (progress_timeout) deadline = milliseconds() + 3000U;
     }
     return 0;
 }
@@ -161,6 +164,19 @@ static int request(struct ca_support_video *p, const char *method,
     return 0;
 }
 
+static int send_chunk(struct ca_support_video *p, const uint8_t *data, size_t length,
+                      uint64_t deadline)
+{
+    // Allow a whole raw frame to take longer on a slow uplink; time out
+    // only when progress stops. The pending-frame queue remains bounded.
+    char size[32];
+    int n = snprintf(size, sizeof(size), "%zx\r\n", length);
+    char end[] = "\r\n";
+    return transfer(p, size, n, true, deadline) < 0 ||
+        transfer(p, const_cast<uint8_t *>(data), length, true, deadline, true) < 0 ||
+        transfer(p, end, 2, true, milliseconds()+3000U) < 0 ? -1 : 0;
+}
+
 static int connect_publisher(struct ca_support_video *p)
 {
     char port[8];
@@ -187,6 +203,26 @@ static int connect_publisher(struct ca_support_video *p)
     }
     freeaddrinfo(addresses);
     if (p->fd < 0) return -1;
+    if (!p->matroska_header.empty()) {
+        char request[1024], response[256];
+        int n = snprintf(request, sizeof(request),
+            "PUT %s HTTP/1.1\r\nHost: %s:%u\r\nContent-Type: video/x-matroska\r\n"
+            "Transfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n",
+            p->url, p->config.host, p->port);
+        uint64_t deadline = milliseconds() + 3000;
+        if (n < 0 || size_t(n) >= sizeof(request) || transfer(p, request, n, true, deadline) < 0) return -1;
+        size_t used = 0;
+        while (used+1 < sizeof(response)) {
+            if (transfer(p, response+used, 1, false, deadline) < 0) return -1;
+            used++;
+            if (used >= 4 && memcmp(response+used-4, "\r\n\r\n", 4) == 0) break;
+        }
+        response[used] = 0;
+        if (strcmp(response, "HTTP/1.1 100 Continue\r\n\r\n") != 0) { errno = EACCES; return -1; }
+        if (send_chunk(p, p->matroska_header.data(), p->matroska_header.size(), deadline) < 0) return -1;
+        ca_log("SupportProxy video3 publishing Matroska to %s:%u", p->config.host, p->port);
+        return 0;
+    }
     p->session[0] = '\0'; p->cseq = 0;
     char sdp[2048];
     snprintf(sdp, sizeof(sdp),
@@ -225,6 +261,8 @@ static int rtp(struct ca_support_video *p, const uint8_t *payload, size_t length
 
 static int send_frame(struct ca_support_video *p, const struct frame *frame)
 {
+    if (!p->matroska_header.empty())
+        return send_chunk(p, frame->data, frame->length, milliseconds() + 3000U);
     size_t offset = 0, nal, size;
     uint64_t deadline = milliseconds() + 1000U;
     while (ca_annexb_next(frame->data, frame->length, &offset, &nal, &size)) {
@@ -280,12 +318,12 @@ static void *publish(void *opaque)
         // Keep the TCP connection (and its congestion window) and recover at
         // the next keyframe instead of repeatedly starting TCP slow start.
         int result = 0;
-        const char *stage = "RTSP setup";
+        const char *stage = p->matroska_header.empty() ? "RTSP setup" : "Matroska setup";
         if (p->fd < 0) {
             result = frame->key ? connect_publisher(p) : -1;
             keepalive = milliseconds() + 15000U;
         }
-        if (result == 0 && milliseconds() >= keepalive) {
+        if (result == 0 && p->matroska_header.empty() && milliseconds() >= keepalive) {
             stage = "RTSP keepalive";
             result = request(p, "OPTIONS", p->url, "", "");
             keepalive = milliseconds() + 15000U;
@@ -322,18 +360,21 @@ static void escape_url(char *output, const char *input)
     *output = '\0';
 }
 
-int ca_support_video_open(struct ca_support_video **result,
+static int open_publisher(struct ca_support_video **result,
                            const struct ca_support_config *config,
-                           unsigned stream, enum ca_video_codec codec)
+                           unsigned stream, enum ca_video_codec codec,
+                           const uint8_t *header, size_t header_length)
 {
     *result = NULL;
     if (!config->enabled) return 0;
-    unsigned port = stream == 0 ? config->video1_port : config->video2_port;
+    unsigned port = stream == 2 ? config->video3_port :
+        (stream == 0 ? config->video1_port : config->video2_port);
     if (!port) return 0;
     struct ca_support_video *p = new (std::nothrow) ca_support_video{};
     if (!p) return -1;
     p->config = *config; p->port = port; p->stream = stream; p->codec = codec;
     p->fd = -1; p->wait_key = true;
+    if (header_length) p->matroska_header.assign(header, header+header_length);
     p->ssrc = (uint32_t)milliseconds() ^ ((uint32_t)getpid() << 12) ^ stream;
     atomic_init(&p->stop, false);
     char name[3 * 64], password[3 * 128], query[3 * 128 + 5];
@@ -342,6 +383,7 @@ int ca_support_video_open(struct ca_support_video **result,
     snprintf(query, sizeof(query), "%s%s", password[0] ? "?pw=" : "", password);
     snprintf(p->url, sizeof(p->url), "rtsp://%s:%u/%s%s", config->host, port, name, query);
     snprintf(p->track_url, sizeof(p->track_url), "rtsp://%s:%u/%s/streamid=0%s", config->host, port, name, query);
+    if (stream == 2) snprintf(p->url, sizeof(p->url), "/v3.mkv%s", query);
     int error = pthread_mutex_init(&p->lock, NULL);
     if (error) { delete p; errno = error; return -1; }
     error = pthread_cond_init(&p->changed, NULL);
@@ -355,12 +397,27 @@ int ca_support_video_open(struct ca_support_video **result,
     return 0;
 }
 
+int ca_support_video_open(struct ca_support_video **result,
+                          const struct ca_support_config *config,
+                          unsigned stream, enum ca_video_codec codec)
+{
+    return open_publisher(result, config, stream, codec, nullptr, 0);
+}
+
+int ca_support_video_open_matroska(struct ca_support_video **result,
+                                 const struct ca_support_config *config,
+                                 const uint8_t *header, size_t length)
+{
+    return open_publisher(result, config, 2, CA_VIDEO_H264, header, length);
+}
+
 void ca_support_video_push(struct ca_support_video *p, const uint8_t *data,
                             size_t length, uint32_t timestamp, bool key)
 {
     if (!p || !length) return;
     pthread_mutex_lock(&p->lock);
-    if (length > MAX_QUEUED_BYTES || p->queued_bytes + length > MAX_QUEUED_BYTES ||
+    if ((!p->matroska_header.empty() && p->first) ||
+        length > MAX_QUEUED_BYTES || p->queued_bytes + length > MAX_QUEUED_BYTES ||
         p->queued_frames == MAX_QUEUED_FRAMES) {
         p->dropped_frames += p->queued_frames;
         clear_frames(p);

@@ -71,6 +71,7 @@ void ca_config_defaults(struct ca_config *config)
     strcpy(config->sub_alias, APCAM_DEFAULT_SUB_ALIAS);
     strcpy(config->support.video1_name, "video1");
     strcpy(config->support.video2_name, "video2");
+    strcpy(config->support.video3_name, "Raw Thermal (16-bit)");
     strcpy(config->support.network_interface, "eth0");
     strcpy(config->network.interface, "eth0");
 }
