@@ -187,5 +187,7 @@ timestamps and per-frame SHA-256 checksums. Reverse it with
 `tools/thermal_to_video.py --extract INPUT.mkv OUTPUT_DIRECTORY`.
 Extraction checks every archived frame's checksum and restores its name and
 modification time. Old captures carry no vehicle/gimbal telemetry; reconstructed
-relative timing is explicitly labelled. See the
+relative timing is explicitly labelled. Add `--bin FLIGHT.bin` to reconstruct
+each frame's `apcg.telemetry.v1` pose from an ArduPilot dataflash log, matched by
+absolute UTC (needs `pymavlink`). See the
 [converter options and timing semantics](../tools/README.md#legacy-thermal-directories-to-lossless-video).
