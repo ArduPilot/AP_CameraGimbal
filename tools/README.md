@@ -81,8 +81,24 @@ filename, file modification time in nanoseconds, source SHA-256 and archive fram
 count. `capture_monotonic_us` is reconstructed elapsed time plus one microsecond,
 marked `capture_clock=reconstructed_relative` and `timestamp_source=legacy_*`;
 it is not a recovered hardware clock. Filename timezone is not assumed. Old raw
-files have no vehicle/gimbal pose, so `telemetry` is null. Display rotation is
-180 degrees by default (upright MT11); `--rotation 0` changes this metadata only.
+files have no vehicle/gimbal pose, so `telemetry` is null unless a dataflash log
+is supplied. Display rotation is 180 degrees by default (upright MT11);
+`--rotation 0` changes this metadata only.
+
+`--bin FLIGHT.bin` reconstructs each frame's `apcg.telemetry.v1` snapshot from an
+ArduPilot dataflash log. GPS week/ms give the log absolute UTC, so every record
+maps to the frames' absolute filename (or modification) time. Position (`POS`),
+NED velocity (`XKF1` lane 0), vehicle attitude and yaw rate (`ATT`, `RATE`) and
+gimbal attitude (`MNT`) are linearly interpolated between the bracketing samples,
+with yaw and heading following the shortest arc; each field's `age_ms` is the
+distance to the nearest real sample. A frame outside the log's coverage keeps its
+reconstructed UTC clock with a null pose. Gimbal backends fill `MNT` differently:
+the converter prefers each axis' reported angle, falls back to the demanded angle
+(so a held pitch command is used when the actual is not logged), and prefers
+vehicle-relative yaw, converting earth-referenced yaw with the vehicle yaw. The
+chosen source per axis is recorded in each frame's `gimbal_pose_source`. This
+needs `pymavlink`. Requires filenames or modification times that already sit on
+the same absolute UTC clock as the log; it does not resample frames.
 
 `--extract --metadata` additionally writes a matching `.json` for each `.bin`.
 Extraction also accepts recordings of the new camera stream; without original

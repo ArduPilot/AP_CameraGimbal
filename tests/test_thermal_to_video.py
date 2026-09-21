@@ -2,6 +2,7 @@
 """Round trips and failure handling for the radiometric archive converter."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -113,6 +114,71 @@ class ThermalArchiveTests(unittest.TestCase):
         for name in ('../escape.bin', '/escape.bin', 'a/b.bin', 'a\\b.bin', 'C:escape.bin', '\0.bin'):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 thermal.output_name(dict(original_filename=name, frame_id=1))
+
+
+
+class Record:
+    """A minimal stand-in for a pymavlink dataflash record."""
+    def __init__(self, TimeUS, **fields):
+        self.TimeUS = TimeUS
+        self.__dict__.update(fields)
+
+
+class ReconstructedTelemetryTests(unittest.TestCase):
+    def series(self, times, **columns):
+        angle = columns.pop('_angle', ())
+        return (list(times), {k: list(v) for k, v in columns.items()}, set(angle))
+
+    def telemetry(self, **kwargs):
+        # 1000 ms and 2000 ms samples; a query at 1500 ms interpolates midway.
+        series = {
+            'position': self.series([1000, 2000], lat_e7=[-350000000, -350002000],
+                                    lon_e7=[1490000000, 1490004000],
+                                    alt_amsl_m=[600.0, 620.0], alt_relative_m=[100.0, 120.0]),
+            'vehicle_attitude': self.series([1000, 2000], roll_rad=[0.0, 0.2],
+                                            pitch_rad=[0.0, 0.1], yaw_rad=[0.0, math.radians(10)],
+                                            _angle=('yaw_rad',)),
+            'gimbal_attitude': self.series([1000, 2000],
+                                           roll_rad=[0.0, 0.0], pitch_rad=[math.radians(-35)]*2,
+                                           yaw_rad=[math.radians(90), math.radians(90)], _angle=('yaw_rad',)),
+        }
+        return thermal.BinTelemetry(series, 'flight.bin', **kwargs)
+
+    def test_interpolation_and_ages(self):
+        snap = self.telemetry().sample(1500, pts_ms=1500)
+        self.assertEqual(snap['schema'], 'apcg.telemetry.v1')
+        self.assertEqual(snap['utc_us'], 1500000)
+        self.assertEqual(snap['position']['lat_e7'], -350001000)
+        self.assertAlmostEqual(snap['position']['alt_amsl_m'], 610.0)
+        self.assertEqual(snap['position']['age_ms'], 500)
+        self.assertAlmostEqual(snap['vehicle_attitude']['yaw_rad'], math.radians(5), places=6)
+        self.assertAlmostEqual(snap['heading_rad'], math.radians(5), places=6)
+
+    def test_out_of_range_is_null_with_clock(self):
+        snap = self.telemetry().sample(5000, pts_ms=5000)
+        self.assertEqual(snap['utc_us'], 5000000)
+        for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude', 'heading_rad'):
+            self.assertIsNone(snap[key], key)
+
+    def test_earth_yaw_is_made_vehicle_relative(self):
+        # Gimbal earth yaw 90 deg minus vehicle yaw 5 deg -> 85 deg relative.
+        snap = self.telemetry(gimbal_yaw_earth=True).sample(1500, pts_ms=1500)
+        self.assertAlmostEqual(math.degrees(snap['gimbal_attitude']['yaw_rad']), 85, places=4)
+        self.assertAlmostEqual(math.degrees(snap['gimbal_attitude']['pitch_rad']), -35, places=4)
+        # Without the flag the yaw is reported as stored.
+        snap = self.telemetry(gimbal_yaw_earth=False).sample(1500, pts_ms=1500)
+        self.assertAlmostEqual(math.degrees(snap['gimbal_attitude']['yaw_rad']), 90, places=4)
+
+    def test_gimbal_source_prefers_signal(self):
+        records = [Record(t, Roll=0.0, DRoll=0.0, Pitch=0.0, DPitch=-35.0,
+                          YawB=0.0, DYawB=0.0, YawE=y, DYawE=float('nan'))
+                   for t, y in ((1000, 10.0), (2000, 40.0))]
+        series, yaw_earth, source = thermal.build_gimbal(records, boot_ms=0, rad=math.radians)
+        self.assertTrue(yaw_earth)
+        self.assertEqual(source, dict(roll='actual', pitch='demanded', yaw='actual', yaw_frame='earth'))
+        _, columns, _ = series
+        self.assertAlmostEqual(columns['pitch_rad'][0], math.radians(-35))
+        self.assertAlmostEqual(columns['yaw_rad'][1], math.radians(40))
 
 
 if __name__ == '__main__':
