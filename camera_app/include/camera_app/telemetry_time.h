@@ -106,7 +106,8 @@ struct ca_yaw_history {
         }
         const sample *previous = &samples[(next + 128 - count) % 128];
         if (ms < previous->ms) {
-            // Feedback captured just before the first sample after a reset.
+            // Older than the whole history, e.g. feedback captured just
+            // before the first sample after a reset.
             if (previous->ms - ms > prediction_ms) return false;
             rate = previous->rate;
             yaw = remainderf(previous->yaw - rate * ((previous->ms - ms) * .001f), 2 * float(M_PI));
