@@ -558,6 +558,9 @@ Build SupportProxy with its Matroska relay support, then run:
 python3 sitl/test_support_proxy.py --proxy ../SupportProxy --raw-thermal --reconnect
 ```
 
+`--mavproxy` names a MAVProxy checkout with the raw thermal reader (default
+`../MAVProxy`); `make sitl-supportproxy-test` passes `MAVPROXY_REPO` when set.
+
 This checks stream 3 discovery over the proxy, all native sample bits against
 the SITL pattern, capture-time position metadata, and recovery after restarting
 the proxy alongside the two existing display streams. The camera runs without
