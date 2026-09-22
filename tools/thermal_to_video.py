@@ -139,8 +139,14 @@ class BinTelemetry:
         out = {}
         for column, values in columns.items():
             a, b = values[lo], values[hi]
-            out[column] = _lerp_angle(a, b, fraction) if column in angle_columns \
-                else a + (b - a) * fraction
+            # An exact hit is the sample itself, even beside a NaN neighbour.
+            if fraction <= 0:
+                out[column] = a
+            elif fraction >= 1:
+                out[column] = b
+            else:
+                out[column] = _lerp_angle(a, b, fraction) if column in angle_columns \
+                    else a + (b - a) * fraction
         return out, int(round(min(utc_ms - times[lo], times[hi] - utc_ms)))
 
     def sample(self, utc_ms, pts_ms):
@@ -164,7 +170,7 @@ class BinTelemetry:
                      'pitch_rad': round(attitude['pitch_rad'], 6),
                      'yaw_rad': round(_wrap_2pi(attitude['yaw_rad']), 6)}
             rate, _ = self._interp('vehicle_rate', utc_ms)
-            if rate is not None:
+            if rate is not None and math.isfinite(rate['yaw_rate_rad_s']):
                 entry['yaw_rate_rad_s'] = round(rate['yaw_rate_rad_s'], 6)
             entry['age_ms'] = age
             snapshot['vehicle_attitude'] = entry
@@ -230,8 +236,39 @@ def load_bin_telemetry(bin_path):
     return BinTelemetry(built, bin_path.name, gimbal_yaw_earth, gimbal_source)
 
 
+def euler_yaw_rate_series(rate_records, attitude, boot_ms):
+    """Euler yaw rate from body pitch/yaw gyro rates, as the camera computes
+    it from ATTITUDE: (q sin(roll) + r cos(roll)) / cos(pitch). Samples outside
+    the attitude coverage are dropped; near vertical pitch the rate is NaN so
+    interpolation cannot bridge the undefined interval."""
+    if attitude is None or not rate_records:
+        return None
+    att_times, att, _ = attitude
+    times, values = [], []
+    for record in sorted(rate_records, key=lambda r: r.TimeUS):
+        t = boot_ms + record.TimeUS / 1000.0
+        if t < att_times[0] or t > att_times[-1]:
+            continue
+        hi = min(bisect.bisect_right(att_times, t), len(att_times) - 1)
+        lo = max(0, hi - 1)
+        span = att_times[hi] - att_times[lo]
+        fraction = (t - att_times[lo]) / span if span else 0.0
+        roll = _lerp_angle(att['roll_rad'][lo], att['roll_rad'][hi], fraction)
+        pitch = att['pitch_rad'][lo] + (att['pitch_rad'][hi] - att['pitch_rad'][lo]) * fraction
+        cos_pitch = math.cos(pitch)
+        times.append(t)
+        values.append((math.radians(record.P) * math.sin(roll) +
+                       math.radians(record.Y) * math.cos(roll)) / cos_pitch
+                      if abs(cos_pitch) > 0.01 else math.nan)
+    return (times, {'yaw_rate_rad_s': values}, set()) if times else None
+
+
 def build_telemetry_series(rows, boot_ms):
-    """Map dataflash rows (degrees) to the telemetry series (radians, ms)."""
+    """Map dataflash rows (degrees) to the telemetry series (radians, ms).
+
+    RATE logs body gyro rates; the schema's yaw_rate_rad_s is the Euler (earth
+    frame) yaw rate the camera receives live, so it is derived from the pitch
+    and yaw gyro rates with roll and pitch interpolated from ATT."""
     def series(name, columns, angle_columns=()):
         records = rows[name]
         if not records:
@@ -251,8 +288,8 @@ def build_telemetry_series(rows, boot_ms):
         'vehicle_attitude': series('ATT', {
             'roll_rad': lambda r: rad(r.Roll), 'pitch_rad': lambda r: rad(r.Pitch),
             'yaw_rad': lambda r: rad(r.Yaw)}, angle_columns=('yaw_rad',)),
-        'vehicle_rate': series('RATE', {'yaw_rate_rad_s': lambda r: rad(r.Y)}),
     }
+    built['vehicle_rate'] = euler_yaw_rate_series(rows['RATE'], built['vehicle_attitude'], boot_ms)
     gimbal, gimbal_yaw_earth, gimbal_source = build_gimbal(rows['MNT'], boot_ms, rad)
     if gimbal is not None:
         built['gimbal_attitude'] = gimbal
