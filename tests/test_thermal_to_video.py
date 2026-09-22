@@ -170,18 +170,61 @@ class ReconstructedTelemetryTests(unittest.TestCase):
         self.assertAlmostEqual(math.degrees(snap['gimbal_attitude']['yaw_rad']), 90, places=4)
 
     def test_dataflash_degrees_become_radians(self):
-        # ATT angles and RATE.Y (ArduPilot unit 'k') are logged in degrees.
+        # ATT angles and RATE rates (ArduPilot unit 'k') are logged in degrees.
         rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
-        rows['ATT'] = [Record(1000000, Roll=0.0, Pitch=-10.0, Yaw=180.0)]
-        rows['RATE'] = [Record(1000000, Y=90.0)]
+        rows['ATT'] = [Record(1000000, Roll=0.0, Pitch=-10.0, Yaw=180.0),
+                       Record(2000000, Roll=0.0, Pitch=-10.0, Yaw=180.0)]
+        rows['RATE'] = [Record(1500000, P=0.0, Y=90.0)]
         built, _, _ = thermal.build_telemetry_series(rows, boot_ms=0)
         times, columns, _ = built['vehicle_rate']
-        self.assertEqual(times, [1000.0])
-        self.assertAlmostEqual(columns['yaw_rate_rad_s'][0], math.pi / 2)
+        self.assertEqual(times, [1500.0])
+        self.assertAlmostEqual(columns['yaw_rate_rad_s'][0], (math.pi / 2) / math.cos(math.radians(10)))
         _, columns, _ = built['vehicle_attitude']
         self.assertAlmostEqual(columns['pitch_rad'][0], math.radians(-10))
         self.assertAlmostEqual(columns['yaw_rad'][0], math.pi)
         self.assertNotIn('position', built)
+
+    def test_body_rates_become_euler_yaw_rate(self):
+        # RATE.Y is the body yaw gyro; a 60 degree bank halves its share of
+        # the Euler yaw rate and the body pitch gyro contributes sin(roll).
+        rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
+        rows['ATT'] = [Record(1000000, Roll=0.0, Pitch=0.0, Yaw=0.0),
+                       Record(3000000, Roll=60.0, Pitch=0.0, Yaw=0.0)]
+        rows['RATE'] = [Record(3000000, P=0.0, Y=90.0),        # bank 60: r cos(60)
+                        Record(2000000, P=90.0, Y=0.0),        # bank 30: q sin(30)
+                        Record(4000000, P=0.0, Y=90.0)]        # after ATT coverage
+        built, _, _ = thermal.build_telemetry_series(rows, boot_ms=0)
+        times, columns, _ = built['vehicle_rate']
+        self.assertEqual(times, [2000.0, 3000.0])
+        self.assertAlmostEqual(columns['yaw_rate_rad_s'][0], math.pi / 4)
+        self.assertAlmostEqual(columns['yaw_rate_rad_s'][1], math.pi / 4)
+        rows['RATE'] = []
+        self.assertNotIn('vehicle_rate', thermal.build_telemetry_series(rows, boot_ms=0)[0])
+
+    def test_roll_wraps_through_180(self):
+        # Roll interpolates along the shortest arc: 179 -> -179 passes 180,
+        # where cos(roll) is -1, not through 0.
+        rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
+        rows['ATT'] = [Record(1000000, Roll=179.0, Pitch=0.0, Yaw=0.0),
+                       Record(3000000, Roll=-179.0, Pitch=0.0, Yaw=0.0)]
+        rows['RATE'] = [Record(2000000, P=0.0, Y=90.0)]
+        built, _, _ = thermal.build_telemetry_series(rows, boot_ms=0)
+        self.assertAlmostEqual(built['vehicle_rate'][1]['yaw_rate_rad_s'][0], -math.pi / 2)
+
+    def test_vertical_pitch_gap_is_not_bridged(self):
+        # Vertical pitch leaves the Euler yaw rate undefined, as on the camera;
+        # snapshots touching that interval carry no yaw rate at all.
+        rows = {name: [] for name in ('POS', 'ATT', 'XKF1', 'MNT', 'RATE')}
+        rows['ATT'] = [Record(1000000, Roll=0.0, Pitch=0.0, Yaw=0.0),
+                       Record(2000000, Roll=0.0, Pitch=90.0, Yaw=0.0),
+                       Record(3000000, Roll=0.0, Pitch=0.0, Yaw=0.0)]
+        rows['RATE'] = [Record(t, P=0.0, Y=90.0) for t in (1000000, 2000000, 3000000)]
+        built, yaw_earth, source = thermal.build_telemetry_series(rows, boot_ms=0)
+        telemetry = thermal.BinTelemetry(built, 'flight.bin', yaw_earth, source)
+        for utc_ms in (1500, 2000, 2500):
+            self.assertNotIn('yaw_rate_rad_s', telemetry.sample(utc_ms, pts_ms=utc_ms)['vehicle_attitude'], utc_ms)
+        self.assertAlmostEqual(telemetry.sample(1000, pts_ms=1000)['vehicle_attitude']['yaw_rate_rad_s'], math.pi / 2, places=5)
+        self.assertAlmostEqual(telemetry.sample(3000, pts_ms=3000)['vehicle_attitude']['yaw_rate_rad_s'], math.pi / 2, places=5)
 
     def test_gimbal_source_prefers_signal(self):
         records = [Record(t, Roll=0.0, DRoll=0.0, Pitch=0.0, DPitch=-35.0,
