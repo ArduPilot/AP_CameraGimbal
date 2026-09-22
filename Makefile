@@ -241,6 +241,8 @@ sitl-supportproxy-test: sitl
 	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --case disabled
 	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --case video-only
 	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --case single-video
+	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --raw-thermal --reconnect \
+		$(if $(MAVPROXY_REPO),--mavproxy $(MAVPROXY_REPO))
 
 a8_sitl-supportproxy-test: a8_sitl
 	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --backend a8 --build $(A8_SITL_BUILD)

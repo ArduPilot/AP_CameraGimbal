@@ -276,7 +276,8 @@ def main():
     parser.add_argument('--case', choices=['signed', 'session', 'hevc', 'disabled', 'video-only', 'single-video'], default='signed')
     parser.add_argument('--reconnect', action='store_true')
     parser.add_argument('--raw-thermal', action='store_true')
-    parser.add_argument('--mavproxy', type=Path, default=Path('/home/tridge/project/UAV/MAVProxy.wt/mavcamera'))
+    parser.add_argument('--mavproxy', type=Path, default=REPO.parent / 'MAVProxy',
+                        help='MAVProxy checkout providing the raw thermal reader (--raw-thermal)')
     args = parser.parse_args()
     if args.raw_thermal and args.backend != 'mt11': parser.error('--raw-thermal requires mt11')
     args.build = args.build.resolve(); args.proxy = args.proxy.resolve()
