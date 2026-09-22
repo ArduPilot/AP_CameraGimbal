@@ -448,7 +448,7 @@ def exercise_mavproxy_camera(connection, siyi_port, capture_root,
         camera = module.cameras.get((1, CAMERA_COMPONENT))
         gimbal = module.gimbals.get((1, GIMBAL_COMPONENT))
         if (camera is not None and camera.information is not None and
-                len(camera.streams) == 2 and gimbal is not None and
+                len(camera.streams) >= 2 and gimbal is not None and
                 gimbal.information is not None):
             break
     else:
@@ -639,12 +639,18 @@ def run_transport(repo_root, camera_binary, gimbal_script, arducopter,
         assert bytes(camera_info.vendor_name).rstrip(b"\0") == b"ArduPilot"
         assert camera_info.flags & mavutil.mavlink.CAMERA_CAP_FLAGS_CAPTURE_IMAGE
         streams = request_video_stream_information(connection)
-        assert set(streams) == {1, 2}
+        # MT11 adds the lossless raw thermal stream 3 (private type 200).
+        assert set(streams) == {1, 2, 3}, streams
         assert streams[1].uri.startswith("rtsp://127.0.0.1:")
         assert streams[1].uri.endswith("/video1")
         assert streams[2].uri.startswith("rtsp://127.0.0.1:")
         assert streams[2].uri.endswith("/video2")
         assert streams[2].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
+        assert streams[3].type == 200 and streams[3].count == 3, streams[3]
+        assert streams[3].uri.startswith("http://127.0.0.1:")
+        assert streams[3].uri.endswith("/thermal.mkv")
+        assert streams[3].flags & mavutil.mavlink.VIDEO_STREAM_STATUS_FLAGS_THERMAL
+        assert (streams[3].resolution_h, streams[3].resolution_v) == (640, 512)
         gimbal_info = request_device_message(
             connection, GIMBAL_COMPONENT,
             mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION,
