@@ -11,7 +11,7 @@ git submodule update --init --recursive
 make release RELEASE_TARGETS=ZR10
 ```
 
-This creates `release/<tag>/ZR10/ZR10_UpgradeSD.bin` with installation and update
+This creates `release/<tag>/SIYI_ZR10/ZR10_UpgradeSD.bin` with installation and update
 instructions, build information and checksums. The firmware updates only the
 customer application partition; it retains the bootloader, kernel, drivers and
 gimbal firmware.

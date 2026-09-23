@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build firmware and installation guides in release/<version>/<camera>/."""
+"""Build firmware and installation guides in release/<version>/<vendor>_<camera>/."""
 import argparse
 import fcntl
 import hashlib
@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # These are packaging entry points and bootloader filenames; hardware
 # capabilities remain in include/apcam/target_*.h.
 TARGETS = {
-    'A8': ('a8_package', 'A8_PACKAGE_OUT', 'SIYI_4K_MINI_UpgradeSD.bin'),
-    'MT11': ('mt11_package', 'MT11_PACKAGE_OUT', 'MT11_FW_ArduPilot_{version}_{short_revision}.bin'),
-    'ZR10': ('zr10_firmware', 'ZR10_FIRMWARE_OUT', 'ZR10_UpgradeSD.bin'),
-    'Z1-Mini': ('z1mini_native_package', 'Z1MINI_NATIVE_PACKAGE_OUT', 'Z1Mini_AP_native_{version}_{short_revision}.gcu'),
+    'A8': ('SIYI', 'a8_package', 'A8_PACKAGE_OUT', 'SIYI_4K_MINI_UpgradeSD.bin'),
+    'MT11': ('SIYI', 'mt11_package', 'MT11_PACKAGE_OUT', 'MT11_FW_ArduPilot_{version}_{short_revision}.bin'),
+    'ZR10': ('SIYI', 'zr10_firmware', 'ZR10_FIRMWARE_OUT', 'ZR10_UpgradeSD.bin'),
+    'Z1-Mini': ('XFRobot', 'z1mini_native_package', 'Z1MINI_NATIVE_PACKAGE_OUT', 'Z1Mini_AP_native_{version}_{short_revision}.gcu'),
 }
 
 
@@ -71,12 +71,13 @@ def build_release(repo, output, version, targets, make='make'):
         version_dir = output / version
         version_dir.mkdir(exist_ok=True)
         for name in dict.fromkeys(targets):
-            target, variable, pattern = TARGETS[name]
+            vendor, target, variable, pattern = TARGETS[name]
+            directory = f'{vendor}_{name}'
             filename = pattern.format(**identity)
             template = repo / 'packaging/release' / (name + '.md')
             instructions = template.read_text().format(filename=filename, **identity)
-            with tempfile.TemporaryDirectory(prefix='.' + name + '-', dir=version_dir) as work:
-                staging = Path(work) / name
+            with tempfile.TemporaryDirectory(prefix='.' + directory + '-', dir=version_dir) as work:
+                staging = Path(work) / directory
                 staging.mkdir()
                 package = staging / filename
                 print(f'Building {name} {version} ({revision[:6]})', flush=True)
@@ -94,7 +95,7 @@ def build_release(repo, output, version, targets, make='make'):
                 (staging / 'BUILD_INFO.json').write_text(json.dumps(manifest, indent=2) + '\n')
                 (staging / 'SHA256SUMS').write_text(''.join(
                     f'{sha256(path)}  {path.name}\n' for path in sorted(staging.iterdir())))
-                destination = version_dir / name
+                destination = version_dir / directory
                 publish(staging, destination)
                 print(f'Ready: {destination / filename}', flush=True)
 

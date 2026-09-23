@@ -4,7 +4,7 @@
 replaces the vendor application partition with `camera-app`.
 
 For a package ready for end users, use `make release RELEASE_TARGETS=A8`.
-It creates `release/<tag>/A8/SIYI_4K_MINI_UpgradeSD.bin`, installation and
+It creates `release/<tag>/SIYI_A8/SIYI_4K_MINI_UpgradeSD.bin`, installation and
 update instructions in `README.md`, build information and SHA-256 checksums.
 This exact filename works both on the SD card and in the AP web updater.
 

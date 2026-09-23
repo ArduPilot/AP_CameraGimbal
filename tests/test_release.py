@@ -47,10 +47,10 @@ if Path('fail').exists():
     def test_layout_and_checksums(self):
         self.build(list(release.TARGETS))
         expected = {
-            'A8': 'SIYI_4K_MINI_UpgradeSD.bin',
-            'MT11': f'MT11_FW_ArduPilot_v1.0_{self.revision[:6]}.bin',
-            'ZR10': 'ZR10_UpgradeSD.bin',
-            'Z1-Mini': f'Z1Mini_AP_native_v1.0_{self.revision[:6]}.gcu',
+            'SIYI_A8': 'SIYI_4K_MINI_UpgradeSD.bin',
+            'SIYI_MT11': f'MT11_FW_ArduPilot_v1.0_{self.revision[:6]}.bin',
+            'SIYI_ZR10': 'ZR10_UpgradeSD.bin',
+            'XFRobot_Z1-Mini': f'Z1Mini_AP_native_v1.0_{self.revision[:6]}.gcu',
         }
         for name, firmware in expected.items():
             folder = self.output / 'v1.0' / name
@@ -69,7 +69,7 @@ if Path('fail').exists():
 
     def test_failed_rebuild_preserves_complete_package(self):
         self.build(['A8'])
-        folder = self.output / 'v1.0/A8'
+        folder = self.output / 'v1.0/SIYI_A8'
         original = {p.name: p.read_bytes() for p in folder.iterdir()}
         template = self.repo / 'packaging/release/A8.md'
         template.write_text(template.read_text() + '\nUpdated instructions\n')
@@ -77,12 +77,12 @@ if Path('fail').exists():
         with self.assertRaises(subprocess.CalledProcessError):
             self.build(['A8'])
         self.assertEqual(original, {p.name: p.read_bytes() for p in folder.iterdir()})
-        self.assertEqual([p.name for p in folder.parent.iterdir()], ['A8'])
+        self.assertEqual([p.name for p in folder.parent.iterdir()], ['SIYI_A8'])
         (self.repo / 'fail').unlink()
         self.build(['A8'])
         self.assertIn('Updated instructions', (folder / 'README.md').read_text())
         self.assertTrue(json.loads((folder / 'BUILD_INFO.json').read_text())['dirty'])
-        self.assertEqual([p.name for p in folder.parent.iterdir()], ['A8'])
+        self.assertEqual([p.name for p in folder.parent.iterdir()], ['SIYI_A8'])
 
     def test_target_aliases_and_version_validation(self):
         self.assertEqual(release.target_name('a8'), 'A8')
