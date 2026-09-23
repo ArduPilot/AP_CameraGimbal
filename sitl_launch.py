@@ -85,6 +85,7 @@ class SimulatorPanel(QtWidgets.QWidget):
         self.video = QtWidgets.QComboBox()
         self.video.addItem('Simple test patterns', 'simple')
         self.video.addItem('3D terrain and imagery', 'terrain')
+        self.video.setCurrentIndex(self.video.findData('terrain'))
         form.addRow('Camera', self.camera)
         form.addRow('Orientation', self.orientation)
         form.addRow('Video source', self.video)
