@@ -68,7 +68,8 @@ Alternatively, use the PyQt desktop launcher from the repository root:
 
 Choose **1–4 simulators** (default 1), then select **MT11 / A8 / ZR10 / Z1-Mini**,
 **Normal / Inverted**, and **Simple test patterns / 3D terrain and imagery** in
-each simulator's tab. Repeated camera types are supported. **Start all** builds
+each simulator's tab. **3D terrain and imagery** is selected by default.
+Repeated camera types are supported. **Start all** builds
 the cameras sequentially, then leaves them running together. **Stop all** or
 closing the window stops the entire group, including cameras restarted through
 the web UI. A startup failure stops the group and leaves the logs in each tab.
@@ -192,8 +193,9 @@ state and are observable through SIYI attitude queries.
 ## Optional 3D terrain video
 
 Set `CAMERA_GIMBAL_SITL_VIDEO=terrain` for satellite imagery draped over the
-same ArduPilot quantized meshes used by MAVProxy's map3d module. The default
-remains `simple`, with generated test streams. All four targets support terrain.
+same ArduPilot quantized meshes used by MAVProxy's map3d module. The GUI defaults
+to terrain; command-line launches default to `simple`, with generated test streams.
+All four targets support terrain.
 Both sources apply camera image controls before encoding live video and recordings.
 
 Simple video needs NumPy, OpenCV and PyAV, without VTK or map3d. The Windows
