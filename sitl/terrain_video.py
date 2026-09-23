@@ -318,6 +318,7 @@ class Scene:
         self.tiles = mp_tile.MPTile(service=service, tile_delay=0.02,
                                     download_threads=downloads, cache_size=2048)
         self.manager = None
+        self.below_ground = False
         self.previous = None
         self.rendered = {}
         self.last_update = 0
@@ -330,6 +331,7 @@ class Scene:
     def update(self, record):
         self.rendered = {}
         self.raw_frames = {}
+        self.below_ground = False
         pose = self.predictor.pose(record)
         self.pose = pose
         if pose is None:
@@ -393,7 +395,24 @@ class Scene:
             manager.redrape_pending = False
             manager.update(self.tc)
             self.last_redrape = now
+        # Compare the predicted camera position with the mesh actually drawn,
+        # not altitude relative to home (which is not height above terrain).
+        ground = manager.height_at(lat, lon)
+        self.below_ground = ground is not None and pos[2] < ground
         return True
+
+    @staticmethod
+    def below_ground_image(width, height):
+        import cv2
+        image = np.full((height, width, 3), (139, 90, 43), dtype=np.uint8)
+        text = 'Below Ground'
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = min(width / 500, height / 180)
+        thickness = max(1, round(scale * 2))
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        cv2.putText(image, text, ((width - tw) // 2, (height + th) // 2),
+                    font, scale, (245, 235, 220), thickness, cv2.LINE_AA)
+        return image
 
     def render(self, stream, record, valid):
         width, height = self.sizes[stream]
@@ -404,6 +423,10 @@ class Scene:
                         (12, height // 2), cv2.FONT_HERSHEY_SIMPLEX,
                         width / 1100, (230, 230, 230), 1, cv2.LINE_AA)
             return image
+        if self.below_ground:
+            # Keep the warning legible in every display/recording/still view,
+            # regardless of exposure settings or the thermal palette.
+            return self.below_ground_image(width, height)
         hfov, thermal = record['fov'][stream], record['thermal'][stream]
         if thermal:
             import cv2
@@ -424,6 +447,8 @@ class Scene:
         return image
 
     def render_sensor(self, width, height, hfov, thermal_aspect=None):
+        if self.below_ground:
+            return self.below_ground_image(width, height)
         # Keep the framebuffer allocation stable; native thermal is always
         # 640x512, then stretched for the display encodings like the MT11.
         viewport = (0, 0, width / self.window_size[0], height / self.window_size[1])
