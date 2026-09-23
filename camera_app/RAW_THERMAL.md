@@ -49,6 +49,7 @@ The `apcg.thermal.v1` JSON contains:
 | --- | --- |
 | `frame_id` | Sequence of received sensor frames; gaps are normal at reduced streaming rate |
 | `capture_monotonic_us` | Camera monotonic receive timestamp, microseconds |
+| `simulation_source` | `terrain` or `test_pattern` in SITL; empty on hardware |
 | `timestamp_source`, `simulated` | `usb_receive` on hardware; `simulation`, true in SITL |
 | `width`, `height`, `pixel_format`, `bits_per_sample` | 640, 512, gray16le, 16 |
 | `temperature_scale_k`, `temperature_offset_k` | Kelvin = raw * scale + offset; currently 1/64, 0 |
@@ -133,10 +134,20 @@ all 16 bits, metadata pairing, reconnects, multiple readers, incomplete requests
 start/stop, ordinary RTSP video, independent recording rates, arm/disarm, manual
 and automatic recording, live parameter/INI changes, lossless recorded samples,
 and optionally the wx viewer. Omit `--viewer`
-without a desktop. It stops only its own processes. SITL currently generates a
-labelled full-depth sensor test pattern (all 65536 codes every frame), independent
-of terrain rendering. Its temperatures are synthetic, not a terrain temperature
-model. This tests transport and projection metadata, not thermal scene realism.
+without a desktop. It stops only its own processes. Simple test-pattern mode
+uses all 65536 codes every frame. Add `--terrain` for an offline integration test
+using textured terrain meshes, with decoded samples checked against the renderer.
+
+In **3D terrain and imagery** mode, the raw stream and thermal display video
+share a native 640x512 rendered image and predicted camera pose. Imagery luminance
+maps to synthetic 15–45°C Kelvin×64 samples. Display gain, palettes, resizing and
+overlays apply only to the display encodings. This is a visual simulation, not a
+physical temperature model. The source frame rate follows the terrain renderer;
+recording and streaming rates remain independently limited by their parameters.
+Terrain pixels are already upright (`rotation_deg: 0`). Their metadata carries
+the rendered position and orientation, presentation time, and original telemetry
+ages in `telemetry.render_source_age_ms`, frozen with the pixels before queuing.
+If pose telemetry is missing or stale, raw frames are uniform with a null pose.
 
 The build downloads a SHA-256-pinned FFmpeg 8.0.1 source release and builds minimal
 static libavcodec/libavutil under `build/deps/thermal-codecs`. No external encoder

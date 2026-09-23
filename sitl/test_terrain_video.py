@@ -14,7 +14,7 @@ import terrain_video as video
 
 
 def record():
-    return {'pts90k': 0, 'position': {'lat_e7': -353632610, 'lon_e7': 1491652300,
+    return {'pts90k': 0, 'utc_us': 1700000000000000, 'position': {'lat_e7': -353632610, 'lon_e7': 1491652300,
                                     'alt_amsl_m': 650, 'alt_relative_m': 70},
             'vehicle_attitude': {'roll_rad': 0, 'pitch_rad': 0, 'yaw_rad': 0},
             'gimbal_attitude': {'roll_rad': 0, 'pitch_rad': -math.pi / 4, 'yaw_rad': 0},
@@ -222,9 +222,17 @@ def synthetic():
             rgb = scene.render(0, state, True)
             ir = scene.render(1, state, True)
             assert rgb.shape == (180, 320, 3) and ir.shape == (90, 160, 3)
-            assert scene.window.GetSize() == (320, 180)
+            assert scene.window.GetSize() == (640, 512)
             assert rgb.std() > 10
             np.testing.assert_array_equal(ir[:, :, 0], ir[:, :, 1])
+            raw = scene.raw_thermal(state, True).copy()
+            assert raw.shape == (512, 640) and raw.dtype == np.uint16
+            assert raw.std() > 1 and raw.min() >= round(288.15*64) and raw.max() <= round(318.15*64)
+            import cv2
+            np.testing.assert_array_equal(ir, cv2.resize(scene.controls.thermal_display(raw, {}), (160, 90)))
+            metadata = scene.thermal_metadata(state)
+            np.testing.assert_allclose(metadata['gimbal_attitude']['pitch_rad'], math.radians(scene.pose[4]))
+            assert metadata['utc_us'] == state['utc_us']
             # Controls are applied to terrain pixels as well as fixture video.
             state['image'] = {'brightness': 80, 'thermal_palette': 3}
             scene.update(state)
@@ -232,6 +240,11 @@ def synthetic():
             assert brighter.mean() > rgb.mean() + 30
             iron = scene.render(1, state, True)
             assert np.abs(iron[:, :, 0].astype(float) - iron[:, :, 2]).mean() > 10
+            np.testing.assert_array_equal(scene.raw_thermal(state, True), raw)
+            state['image'] = {'thermal_gain': 0, 'thermal_palette': 1}
+            scene.update(state)
+            scene.render(1, state, True)
+            np.testing.assert_array_equal(scene.raw_thermal(state, True), raw)
             state['image'] = {'saturation': 0}
             scene.update(state)
             gray = scene.render(0, state, True)
@@ -242,10 +255,24 @@ def synthetic():
             scene.update(state)
             after = scene.render(0, state, True)
             assert np.mean(np.abs(before.astype(float) - after)) > 1
+            assert np.mean(np.abs(scene.raw_thermal(state, True).astype(float) - raw)) > 1
+            assert metadata['gimbal_attitude']['yaw_rad'] == 0  # snapshot stays frozen
+            state['prediction_ms'] = 150
+            state['velocity'] = {'vn_m_s': 10, 've_m_s': 0, 'vd_m_s': -2, 'age_ms': 0}
+            state['vehicle_attitude']['yaw_rate_rad_s'] = 0.1
+            scene.update(state)
+            predicted = scene.thermal_metadata(state)
+            assert predicted['utc_us'] == state['utc_us'] + 150000
+            assert predicted['position']['lat_e7'] == round(scene.pose[0]*1e7)
+            assert predicted['position']['alt_amsl_m'] == scene.pose[2]
+            np.testing.assert_allclose(predicted['gimbal_attitude']['yaw_rad'] +
+                                       predicted['vehicle_attitude']['yaw_rad'], math.radians(scene.pose[5]))
             state['position'] = None
             assert not scene.update(state)
             missing = scene.render(0, state, False)
             assert np.mean(missing) < 15  # stale terrain is replaced by waiting screen
+            assert scene.thermal_metadata(state)['position'] is None
+            assert scene.raw_thermal(state, False).std() == 0
             encoder = video.Encoder((320, 180), 10)
             decoder = video.av.CodecContext.create('h264', 'r')
             frames = []

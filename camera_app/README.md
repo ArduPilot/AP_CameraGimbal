@@ -925,6 +925,9 @@ disables raw files). Lossless `.raw.mkv` files accompany ordinary video and
 follow the same manual/automatic recording policy, including while armed.
 Changes apply live. Metadata timestamps have microsecond resolution; container
 playback timestamps use millisecond ticks.
+SITL terrain mode derives raw samples and thermal display video from the same
+rendered sensor image, using synthetic 15–45°C temperatures. Simple mode keeps
+the full-depth diagnostic test pattern.
 Display RTSP streams and the legacy port-7345 raw service remain available.
 See [the raw thermal protocol, limitations and test instructions](RAW_THERMAL.md).
 Discovery uses experimental MAVLink stream type 200 pending upstream allocation.

@@ -70,15 +70,10 @@ struct ThermalClient {
     size_t offset = 0;
 };
 
-void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
-                               const timespec *captured_at, uint8_t gain, bool rotated)
+static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t now,
+                          const char *telemetry, uint8_t gain, bool rotated,
+                          const char *simulation_source, float hfov)
 {
-    if (!s || !pixels || !captured_at) return;
-    ca_metadata metadata;
-    ca_metadata_snapshot(&metadata); // freeze telemetry with pixels, never at client-read time
-    const uint64_t now = mono_us();
-    char telemetry[CA_VIDEO_METADATA_JSON_MAX];
-    if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
     unsigned minimum = UINT16_MAX, maximum = 0;
     for (unsigned i=0;i<640U*512U;i++) {
         if (pixels[i]<minimum) minimum=pixels[i];
@@ -89,7 +84,7 @@ void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
     char json[CA_VIDEO_METADATA_JSON_MAX+2048];
     int n = snprintf(json,sizeof(json),
         "{\"schema\":\"apcg.thermal.v1\",\"frame_id\":%llu,\"capture_monotonic_us\":%llu,"
-        "\"timestamp_source\":\"%s\",\"simulated\":%s,\"width\":640,\"height\":512,"
+        "\"timestamp_source\":\"%s\",\"simulated\":%s,\"simulation_source\":\"%s\",\"width\":640,\"height\":512,"
         "\"pixel_format\":\"gray16le\",\"bits_per_sample\":16,"
         "\"temperature_scale_k\":0.015625,\"temperature_offset_k\":0,\"gain\":%d,"
         "\"minimum_raw\":%u,\"maximum_raw\":%u,\"minimum_c\":%.6f,\"maximum_c\":%.6f,"
@@ -97,12 +92,34 @@ void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
         "\"altitude_datum\":\"AMSL\",\"gimbal_frame\":\"roll_pitch_level_yaw_vehicle\","
         "\"telemetry\":%s}",
         (unsigned long long)s->sequence,(unsigned long long)now,
-        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",gain==255?-1:int(gain),
+        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,gain==255?-1:int(gain),
         minimum,maximum,minimum/64.0-273.15,maximum/64.0-273.15,
-        rotated?180:0,double(APCAM_LENS3_FOV_H),telemetry);
+        rotated?180:0,double(hfov),telemetry);
     if (n<0 || size_t(n)>=sizeof(json)) return;
     memcpy(s->pixels.data(),pixels,640U*512U*sizeof(uint16_t));
     s->json.assign(json,size_t(n)); s->capture_us=now;
+}
+
+void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
+                               const timespec *captured_at, uint8_t gain, bool rotated)
+{
+    if (!s || !pixels || !captured_at) return;
+    ca_metadata metadata;
+    ca_metadata_snapshot(&metadata); // freeze telemetry with pixels, never at client-read time
+    const uint64_t now = mono_us();
+    char telemetry[CA_VIDEO_METADATA_JSON_MAX];
+    if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
+    publish_frame(s, pixels, now, telemetry, gain, rotated,
+                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H);
+}
+
+void ca_thermal_stream_publish_terrain(ca_thermal_stream *s, const uint16_t *pixels,
+                                      uint64_t capture_us, const char *telemetry, uint8_t gain, float hfov)
+{
+    if (!s || !pixels || !telemetry || !*telemetry) return;
+    // Terrain pixels are already upright. Metadata belongs to the rendered
+    // pose, not the newer vehicle state at encoding/client delivery time.
+    publish_frame(s, pixels, capture_us, telemetry, gain, false, "terrain", hfov);
 }
 
 static int write_all(int fd, const Bytes &data)
@@ -368,7 +385,7 @@ int ca_thermal_stream_open(ca_thermal_stream **result,unsigned rtsp_port,bool si
     int error=pthread_create(&s->thread,nullptr,thermal_worker,s);
     if (error) { ca_support_video_close(s->proxy); close(s->listener); delete s; errno=error; return -1; }
     s->started=true; public_port=port; available=port || s->proxy; *result=s;
-    ca_log("lossless thermal ready: HTTP port=%u FFV1 gray16 640x512 %u fps%s",port,fps,simulated?" (test pattern)":"");
+    ca_log("lossless thermal ready: HTTP port=%u FFV1 gray16 640x512 %u fps%s",port,fps,simulated?" (simulated)":"");
     return 0;
 }
 void ca_thermal_stream_close(ca_thermal_stream *s)
@@ -392,6 +409,7 @@ void ca_thermal_stream_close(ca_thermal_stream *) {}
 int ca_thermal_stream_configure(ca_thermal_stream *,const ca_config *) { return 0; }
 int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 0; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
+void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *, uint64_t, const char *, uint8_t, float) {}
 unsigned ca_thermal_stream_port() { return 0; }
 bool ca_thermal_stream_available() { return false; }
 unsigned ca_thermal_stream_fps() { return 0; }

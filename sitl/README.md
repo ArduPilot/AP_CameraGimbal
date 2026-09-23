@@ -535,8 +535,14 @@ make sitl-image-controls-test
 ## Raw thermal FFV1 stream
 
 SITL-MT11 advertises stream 3, lossless 640x512 16-bit FFV1 in Matroska, at
-RTSP port + 2 (normally `http://127.0.0.1:8556/thermal.mkv`). The source is a
-labelled full-depth sensor test pattern, with capture-time simulated telemetry.
+RTSP port + 2 (normally `http://127.0.0.1:8556/thermal.mkv`). In **3D terrain and imagery** mode, raw thermal and thermal display video use
+the same rendered 640x512 sensor image, field of view and predicted camera pose.
+Imagery brightness is mapped to synthetic 15–45°C samples; this is not a physical
+thermal model. Palette, display gain and overlays do not change the raw samples.
+Frames are upright and include the rendered pose and presentation timestamp.
+The raw source rate follows the terrain renderer frame rate.
+**Simple test patterns** mode retains the labelled full-depth diagnostic pattern
+at 25 fps, with capture-time simulated telemetry.
 Use `camera view rawthermal` in the updated MAVProxy camera module.
 See [build, viewer, automated tests and protocol details](../camera_app/RAW_THERMAL.md).
 
@@ -548,7 +554,9 @@ manual and automatic video recording policy, including While Armed.
 `python3 sitl/test_raw_thermal_stream.py --mavproxy /path/to/MAVProxy`
 checks both rates, slow clients, recording without streaming, arm/disarm,
 live changes through both MAVLink protocols and INI reload, and exact decoded
-sensor samples. See [raw thermal details](../camera_app/RAW_THERMAL.md).
+sensor samples. Add `--terrain` to test the terrain renderer through the C++
+bridge, FFV1 stream and MAVProxy reader with offline textured meshes, checking
+every decoded pixel against the renderer output. See [raw thermal details](../camera_app/RAW_THERMAL.md).
 
 ### Raw thermal through SupportProxy
 

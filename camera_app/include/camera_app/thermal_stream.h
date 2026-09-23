@@ -14,6 +14,8 @@ int ca_thermal_stream_configure(ca_thermal_stream *, const ca_config *settings);
 int ca_thermal_stream_recording(ca_thermal_stream *, bool active, const char *video_path);
 void ca_thermal_stream_publish(ca_thermal_stream *, const uint16_t *pixels,
                                const timespec *captured_at, uint8_t gain, bool rotated_180);
+void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *pixels,
+                                      uint64_t capture_us, const char *telemetry, uint8_t gain, float hfov);
 void ca_thermal_stream_close(ca_thermal_stream *);
 unsigned ca_thermal_stream_port();
 bool ca_thermal_stream_available();
