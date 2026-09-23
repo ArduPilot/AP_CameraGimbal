@@ -236,7 +236,11 @@ normal MAVProxy tile cache.
 Send the simulated vehicle's MAVLink stream to the camera. Position and AMSL
 altitude come from the selected flight controller, and the view uses the
 simulated gimbal's level-referenced roll/pitch and vehicle-relative yaw.
-Missing or stale telemetry produces a waiting screen. Gimbal controls and
+Missing or stale telemetry produces a waiting screen. When the predicted camera
+position is below the loaded terrain mesh, video and still images show a brown
+screen labelled **Below Ground**. Normal rendering resumes above the surface.
+Raw thermal carries the same warning in synthetic greyscale. This check uses
+terrain height, not altitude relative to home. Gimbal controls and
 optical/digital zoom alter the rendered view and its advertised FOV. A8's two
 streams encode the same visible scene at their configured resolutions; MT11's
 thermal view uses synthetic temperature and the selected palette with the

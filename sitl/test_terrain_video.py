@@ -267,8 +267,34 @@ def synthetic():
             assert predicted['position']['alt_amsl_m'] == scene.pose[2]
             np.testing.assert_allclose(predicted['gimbal_attitude']['yaw_rad'] +
                                        predicted['vehicle_attitude']['yaw_rad'], math.radians(scene.pose[5]))
+            state = record()
+            ground = manager.height_at(state['position']['lat_e7'] / 1e7,
+                                       state['position']['lon_e7'] / 1e7)
+            assert ground is not None
+            state['position']['alt_amsl_m'] = ground - 10
+            # Relative-to-home altitude may remain positive below the mesh.
+            state['image'] = {'brightness': 0, 'thermal_palette': 3}
+            assert scene.update(state) and scene.below_ground
+            with mock.patch.object(scene.window, 'Render', side_effect=AssertionError('rendered underground')):
+                for stream, (width, height) in enumerate(scene.sizes):
+                    underground = scene.render(stream, state, True)
+                    assert underground.shape == (height, width, 3)
+                    brown = np.all(underground == (139, 90, 43), axis=2)
+                    assert brown.mean() > 0.9
+                    assert np.any(np.all(underground > 200, axis=2))  # legible light text
+                # The raw thermal view must not show the underside either.
+                raw_below = scene.raw_thermal(state, True)
+                assert raw_below.shape == (512, 640) and raw_below.dtype == np.uint16
+                assert raw_below.std() > 1  # warning text survives conversion
+            state['position']['alt_amsl_m'] = ground + 60
+            state['position']['alt_relative_m'] = -10
+            assert scene.update(state) and not scene.below_ground
+            with mock.patch.object(manager, 'height_at', return_value=None):
+                assert scene.update(state) and not scene.below_ground
+            print('PASS below-ground warning, raw thermal, ascent recovery and terrain-height detection')
             state['position'] = None
             assert not scene.update(state)
+            assert not scene.below_ground
             missing = scene.render(0, state, False)
             assert np.mean(missing) < 15  # stale terrain is replaced by waiting screen
             assert scene.thermal_metadata(state)['position'] is None
