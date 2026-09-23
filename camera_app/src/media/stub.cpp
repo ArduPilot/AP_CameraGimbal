@@ -192,6 +192,8 @@ static int close_sitl_recording(struct APC_Media_SITL_State *media)
  * texture-upload stall without turning it into a visible pause. */
 #define TERRAIN_QUEUE_SIZE 2U
 struct terrain_frame {
+    ca_sitl_raw_thermal *raw;
+    uint8_t thermal_gain;
     uint8_t *data[CA_SITL_STREAMS];
     size_t length[CA_SITL_STREAMS];
     bool key[CA_SITL_STREAMS];
@@ -214,6 +216,7 @@ static void free_terrain_frame(struct terrain_frame *frame)
 {
     if (!frame) return;
     for (unsigned i=0; i<CA_SITL_STREAMS; i++) free(frame->data[i]);
+    free(frame->raw);
     free(frame);
 }
 
@@ -286,6 +289,11 @@ static void *render_terrain_frames(void *opaque)
         media->capture_mask = 0;
         pthread_mutex_unlock(&media->image_lock);
         image.thermal_gain = media->thermal_gain;
+        frame->thermal_gain = image.thermal_gain;
+        if (media->has_thermal && getenv("CAMERA_APP_SITL_TERRAIN")) {
+            frame->raw = static_cast<ca_sitl_raw_thermal *>(calloc(1, sizeof(*frame->raw)));
+            if (!frame->raw) { free_terrain_frame(frame); break; }
+        }
         image.thermal_palette = media->thermal_palette;
         image.defocus = media->defocus;
         uint8_t *photos[3] = {};
@@ -296,7 +304,7 @@ static void *render_terrain_frames(void *opaque)
                 (uint64_t)due.tv_sec * 1000U + (uint64_t)due.tv_nsec / 1000000U,
                 frame->fov, frame->thermal_main, media->has_thermal,
                 atomic_load(&media->sitl_recording),
-                &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure);
+                &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure, frame->raw);
         if (result==0) {
             exposure.time_us=ca_binlog_time_us();
             exposure.lens=exposure_lens;
@@ -429,6 +437,12 @@ static void *video_thread(void *opaque)
             /* Keep each frame's source/FOV with its pixels across queued zoom
              * and source changes. The deadline is on the same prediction clock. */
             while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &frame->due, NULL) == EINTR) {}
+            if (frame->raw) {
+                const uint64_t capture_us = uint64_t(frame->due.tv_sec)*1000000U + frame->due.tv_nsec/1000U;
+                ca_thermal_stream_publish_terrain(media->thermal_stream, frame->raw->pixels,
+                    capture_us, frame->raw->telemetry, frame->thermal_gain, frame->fov[1]);
+                free(frame->raw);
+            }
             free(frame); /* payload ownership moved to rendered[] */
         }
         if (media->has_thermal && thermal_main != previous_source) {
@@ -622,7 +636,7 @@ int APC_Media_SITL::init(const struct ca_media_config *config)
     media->image_settings = config->settings;
     if (media->has_thermal) {
         int error = ca_thermal_stream_open(&media->thermal_stream, config->rtsp_port, true, &config->settings);
-        if (error == 0 && media->thermal_stream) {
+        if (error == 0 && media->thermal_stream && !getenv("CAMERA_APP_SITL_TERRAIN")) {
             error = pthread_create(&media->thermal_thread, nullptr, render_raw_thermal, media);
             if (error == 0) media->thermal_thread_started = true;
             else errno = error;

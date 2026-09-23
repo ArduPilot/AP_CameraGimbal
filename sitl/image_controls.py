@@ -38,13 +38,31 @@ class ImageControls:
         self.matrix_key = None
         self.exposure = None
 
+    @staticmethod
+    def synthetic_thermal(image):
+        """Map rendered RGB luminance to 15..45 C, stored as Kelvin * 64.
+
+        This is a deterministic visual simulation, not measured terrain
+        temperature. Keep fractional luminance until uint16 quantisation.
+        """
+        luminance = image.astype(np.float32) @ np.array([.299, .587, .114], dtype=np.float32)
+        return np.rint((273.15 + 15 + luminance * (30 / 255)) * 64).astype('<u2')
+
+    def thermal_display(self, samples, settings):
+        """Apply display gain and palette to a copy of native samples."""
+        gray = np.rint(np.clip((samples.astype(np.float32) / 64 - 273.15 - 15) * (255 / 30),
+                              0, 255)).astype(np.uint8)
+        return self.thermal_palette(gray, settings)
+
+    def thermal_palette(self, gray, settings):
+        if settings.get('thermal_gain', 1) == 0:
+            gray = cv2.convertScaleAbs(gray, alpha=0.5, beta=64)
+        return cv2.applyColorMap(gray, self.luts.get(settings.get('thermal_palette', 0), self.luts[0]))
+
     def apply(self, image, settings, thermal=False):
         if thermal:
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            if settings.get('thermal_gain', 1) == 0:
-                # Low gain covers a wider temperature range, reducing contrast.
-                gray = cv2.convertScaleAbs(gray, alpha=0.5, beta=64)
-            return cv2.applyColorMap(gray, self.luts.get(settings.get('thermal_palette', 0), self.luts[0]))
+            return self.thermal_palette(gray, settings)
 
         brightness = (settings.get('brightness', 50) - 50) * 2.55
         contrast = settings.get('contrast', 50) / 50

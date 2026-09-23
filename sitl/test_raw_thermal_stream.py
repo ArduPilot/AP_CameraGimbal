@@ -142,6 +142,7 @@ def main():
     parser.add_argument('--mavproxy', type=Path, required=True)
     parser.add_argument('--build', type=Path, default=REPO/'build/sitl')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--terrain', action='store_true', help='test terrain rendering using offline textured meshes')
     parser.add_argument('--viewer', action='store_true', help='also smoke-test the wx viewer on DISPLAY')
     args = parser.parse_args()
     sys.path.insert(0, str(args.mavproxy.resolve()))
@@ -168,6 +169,8 @@ def main():
         CAMERA_APP_SITL_VIDEO1=str(args.build.resolve()/'rgb.h264'),
         CAMERA_APP_SITL_VIDEO2=str(args.build.resolve()/'thermal.h264'))
     env.pop('CAMERA_APP_SITL_TERRAIN', None)
+    if args.terrain:
+        env['CAMERA_APP_SITL_TERRAIN'] = str(REPO/'sitl/test_raw_thermal_terrain_renderer.py')
     stop = threading.Event()
     armed = threading.Event()
     camera = gimbal = link = feeder = None
@@ -207,15 +210,27 @@ def main():
             assert stream.type==200 and stream.count==3 and stream.encoding==0
             assert (stream.resolution_h,stream.resolution_v)==(640,512)
             print('PASS third-stream discovery and unchanged display stream types',flush=True)
+            if args.terrain:
+                time.sleep(2)
             samples=[]
             for connection in range(2):
                 reader=ThermalReader(stream.uri)
                 try:
+                    terrain_deadline = time.monotonic() + 15
                     for pixels,metadata in reader.frames():
-                        expected=(np.arange(640*512,dtype=np.uint32)+metadata['frame_id']*257).astype(np.uint16).reshape(512,640)
-                        assert np.array_equal(pixels,expected), 'raw bits or frame/metadata association changed'
-                        assert pixels.dtype==np.uint16 and pixels.min()==0 and pixels.max()==65535
-                        assert metadata['simulated'] and metadata['rotation_deg']==180
+                        if args.terrain:
+                            import hashlib
+                            assert metadata['simulation_source'] == 'terrain' and metadata['rotation_deg'] == 0
+                            if pixels.std() < 1 and time.monotonic() < terrain_deadline:
+                                continue  # allow asynchronous terrain/imagery uploads to settle
+                            assert pixels.dtype == np.uint16 and pixels.std() > 1, metadata
+                            assert 14.99 <= metadata['minimum_c'] <= metadata['maximum_c'] <= 45.01
+                            assert hashlib.sha256(pixels.astype('<u2').tobytes()).hexdigest() == metadata['telemetry']['test_sha256']
+                        else:
+                            expected=(np.arange(640*512,dtype=np.uint32)+metadata['frame_id']*257).astype(np.uint16).reshape(512,640)
+                            assert np.array_equal(pixels,expected), 'raw bits or frame/metadata association changed'
+                            assert pixels.dtype==np.uint16 and pixels.min()==0 and pixels.max()==65535
+                            assert metadata['simulated'] and metadata['rotation_deg']==180
                         assert projection_pose(metadata) is not None
                         assert metadata['telemetry']['position']['lat_e7']==-353632610
                         samples.append(metadata)
@@ -223,7 +238,7 @@ def main():
                 finally: reader.close()
             assert all(a['capture_monotonic_us']<b['capture_monotonic_us'] for a,b in zip(samples,samples[1:]))
             (root/'metadata.json').write_text(json.dumps(samples,indent=2))
-            print('PASS all 16 bits, exact per-frame metadata, native geometry, capture pose and reconnect',flush=True)
+            print('PASS lossless samples, exact per-frame metadata, native geometry, capture pose and reconnect',flush=True)
             for command, running in [(M.MAV_CMD_VIDEO_STOP_STREAMING,False),(M.MAV_CMD_VIDEO_START_STREAMING,True)]:
                 link.mav.command_long_send(42,100,command,0,3,0,0,0,0,0,0)
                 m=link.recv_match(type='VIDEO_STREAM_STATUS',blocking=True,timeout=3)
@@ -252,6 +267,9 @@ def main():
                 slow.close()
                 for receiver in readers: receiver.close()
             print('PASS concurrent readers and incomplete HTTP client timeout',flush=True)
+            if args.terrain:
+                print('PASS terrain renderer to C++ bridge to FFV1 to MAVProxy, bit-exact native pixels', flush=True)
+                return
             subprocess.run([sys.executable,str(REPO/'tools/raw_thermal_probe.py'),stream.uri,
                 '--mavproxy',str(args.mavproxy.resolve()),'--frames','2','--test-pattern',
                 '--output',str(root/'probe')],check=True,timeout=15)

@@ -125,7 +125,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
                           uint8_t *data[CA_SITL_STREAMS], size_t length[CA_SITL_STREAMS], bool key[CA_SITL_STREAMS],
-                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure)
+                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure, struct ca_sitl_raw_thermal *raw)
 {
     struct ca_metadata metadata;
     struct timespec utc, now;
@@ -182,7 +182,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         if (added<0 || (size_t)added>=sizeof(request)-used) { errno=EOVERFLOW; return -1; }
         used+=added;
     }
-    added=snprintf(request+used,sizeof(request)-used,"]}\n");
+    added=snprintf(request+used,sizeof(request)-used,"],\"raw_thermal\":%s}\n", raw ? "true" : "false");
     if (added<0 || (size_t)added>=sizeof(request)-used) { errno=EOVERFLOW; return -1; }
     used+=added;
     if (transfer(t->fd, request, used, true) < 0) return -1;
@@ -196,6 +196,20 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         if (!data[i] || transfer(t->fd, data[i], length[i], false) < 0) return -1;
     }
     if (transfer(t->fd, exposure, sizeof(*exposure), false) < 0) return -1;
+    if (raw) {
+        uint32_t sizes[2];
+        if (transfer(t->fd, sizes, sizeof(sizes), false) < 0) return -1;
+        const size_t pixels_size = ntohl(sizes[0]), metadata_size = ntohl(sizes[1]);
+        if (pixels_size != sizeof(raw->pixels) || metadata_size == 0 || metadata_size >= sizeof(raw->telemetry)) {
+            errno = EPROTO; return -1;
+        }
+        if (transfer(t->fd, raw->pixels, pixels_size, false) < 0 ||
+            transfer(t->fd, raw->telemetry, metadata_size, false) < 0) return -1;
+        raw->telemetry[metadata_size] = 0;
+        // Renderer wire format is gray16le, independently of host endianness.
+        const uint8_t *bytes = reinterpret_cast<const uint8_t *>(raw->pixels);
+        for (unsigned i=0; i<640U*512U; i++) raw->pixels[i] = bytes[2*i] | (uint16_t(bytes[2*i+1]) << 8);
+    }
     for (unsigned i = 0; i < 3; i++) {
         if (!(image->capture_mask & (1U << i))) continue;
         uint32_t length;

@@ -7,6 +7,12 @@
 #include "camera_app/config.h"
 #include "camera_app/exposure.h"
 
+struct ca_sitl_raw_thermal {
+    uint16_t pixels[640U*512U];
+    // Predicted pose and source ages can exceed the live-video JSON bound.
+    char telemetry[2048];
+};
+
 struct ca_sitl_image {
     struct ca_config settings;
     unsigned thermal_gain, thermal_palette;
@@ -28,7 +34,8 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *terrain, uint64_t pts, uint64_
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
                           uint8_t *data[CA_SITL_STREAMS], size_t length[CA_SITL_STREAMS], bool key[CA_SITL_STREAMS],
-                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure);
+                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure,
+                          struct ca_sitl_raw_thermal *raw = nullptr);
 void ca_sitl_terrain_interrupt(struct ca_sitl_terrain *terrain);
 void ca_sitl_terrain_close(struct ca_sitl_terrain *terrain);
 

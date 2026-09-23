@@ -285,6 +285,7 @@ class PosePredictor:
         else:
             self.filters.pop('position', None)
         vehicle = self.angles('vehicle', record['vehicle_attitude'], now, horizon)
+        self.vehicle_angles = vehicle.copy()
         gimbal = self.angles('gimbal', record['gimbal_attitude'], now, horizon)
         return (lat, lon, alt, math.degrees(gimbal[0]), math.degrees(gimbal[1]),
                 math.degrees(gimbal[2] + vehicle[2]) % 360)
@@ -302,7 +303,7 @@ class Scene:
         self.window.SetOffScreenRendering(1)
         self.window.SetMultiSamples(0)
         self.window.AddRenderer(self.ren)
-        self.window_size = (max(w for w, _ in sizes), max(h for _, h in sizes))
+        self.window_size = (max(640, max(w for w, _ in sizes)), max(512, max(h for _, h in sizes)))
         self.window.SetSize(*self.window_size)
         self.capture = vtk.vtkWindowToImageFilter()
         self.capture.SetInput(self.window)
@@ -328,7 +329,9 @@ class Scene:
 
     def update(self, record):
         self.rendered = {}
+        self.raw_frames = {}
         pose = self.predictor.pose(record)
+        self.pose = pose
         if pose is None:
             return False
         lat, lon, alt, roll, pitch, yaw = pose
@@ -402,6 +405,11 @@ class Scene:
                         width / 1100, (230, 230, 230), 1, cv2.LINE_AA)
             return image
         hfov, thermal = record['fov'][stream], record['thermal'][stream]
+        if thermal:
+            import cv2
+            samples = self.raw_thermal(record, valid, hfov)
+            display = self.controls.thermal_display(samples, record.get('image', {}))
+            return cv2.resize(display, (width, height), interpolation=cv2.INTER_LINEAR)
         cached = self.rendered.get((hfov, thermal))
         if cached is not None:
             old_width, old_height, image = cached
@@ -410,21 +418,58 @@ class Scene:
                 # a second VTK pass and framebuffer resize on every frame.
                 import cv2
                 return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-        # Keep the OpenGL framebuffer allocation stable across differently
-        # sized RGB/thermal streams. Render/read only the requested viewport.
+        image = self.render_sensor(width, height, hfov)
+        image = self.controls.apply(image, record.get('image', {}), False)
+        self.rendered[hfov, thermal] = (width, height, image)
+        return image
+
+    def render_sensor(self, width, height, hfov, thermal_aspect=None):
+        # Keep the framebuffer allocation stable; native thermal is always
+        # 640x512, then stretched for the display encodings like the MT11.
         viewport = (0, 0, width / self.window_size[0], height / self.window_size[1])
         self.ren.SetViewport(*viewport)
         self.capture.SetViewport(*viewport)
-        set_camera_fov(self.tc.cam, hfov, width / height,
-                       record.get('thermal_aspect', width / height) if thermal else None)
+        set_camera_fov(self.tc.cam, hfov, width / height, thermal_aspect)
         self.window.Render()
         self.capture.Modified()
         self.capture.Update()
         image = numpy_support.vtk_to_numpy(self.capture.GetOutput().GetPointData().GetScalars())
-        image = np.ascontiguousarray(image.reshape(height, width, 3)[::-1])
-        image = self.controls.apply(image, record.get('image', {}), thermal)
-        self.rendered[hfov, thermal] = (width, height, image)
-        return image
+        return np.ascontiguousarray(image.reshape(height, width, 3)[::-1])
+
+    def raw_thermal(self, record, valid, hfov=None):
+        hfov = record['fov'][1] if hfov is None else hfov
+        if hfov not in self.raw_frames:
+            image = (self.render_sensor(640, 512, hfov, 640/512) if valid else
+                     np.zeros((512, 640, 3), dtype=np.uint8))
+            self.raw_frames[hfov] = self.controls.synthetic_thermal(image)
+        return self.raw_frames[hfov]
+
+    def thermal_metadata(self, record):
+        # Preserve the render request's clock and source ages, with the actual
+        # virtual camera pose (including prediction) used to generate pixels.
+        import copy
+        keys = ('schema', 'pts90k', 'utc_us', 'position', 'velocity',
+                'vehicle_attitude', 'gimbal_attitude', 'heading_rad', 'zoom', 'hfov_deg')
+        result = {key: copy.deepcopy(record.get(key)) for key in keys}
+        result['schema'] = 'apcg.telemetry.v1'
+        result['utc_us'] += record.get('prediction_ms', 0) * 1000
+        result['hfov_deg'] = record['fov'][1]
+        result['render_source_age_ms'] = {key: (record.get(key) or {}).get('age_ms')
+                                         for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude')}
+        if self.pose is None:
+            for key in ('position', 'velocity', 'vehicle_attitude', 'gimbal_attitude'):
+                result[key] = None
+        else:
+            lat, lon, alt, roll, pitch, yaw = self.pose
+            position = result['position']
+            position['alt_relative_m'] += alt-position['alt_amsl_m']
+            position.update(lat_e7=round(lat*1e7), lon_e7=round(lon*1e7), alt_amsl_m=alt, age_ms=0)
+            vehicle = result['vehicle_attitude']
+            vehicle.update(zip(('roll_rad', 'pitch_rad', 'yaw_rad'), self.predictor.vehicle_angles))
+            vehicle['age_ms'] = 0
+            result['gimbal_attitude'].update(roll_rad=math.radians(roll), pitch_rad=math.radians(pitch),
+                yaw_rad=(math.radians(yaw)-vehicle['yaw_rad']+math.pi) % (2*math.pi)-math.pi, age_ms=0)
+        return result
 
     def close(self):
         if self.manager:
@@ -636,6 +681,12 @@ def main():
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
                 sock.sendall(exposure)
+                if record.get('raw_thermal'):
+                    if not terrain_mode or not record['thermal'][1]:
+                        raise ValueError('raw terrain requested without a thermal terrain renderer')
+                    raw = scene.raw_thermal(record, valid).astype('<u2', copy=False).tobytes()
+                    metadata = json.dumps(scene.thermal_metadata(record), allow_nan=False, separators=(',', ':')).encode('utf-8')
+                    sock.sendall(struct.pack('!II', len(raw), len(metadata)) + raw + metadata)
                 # Still images use the same current scene and image controls.
                 # Render each requested lens without changing the live selection.
                 for lens in range(3):
