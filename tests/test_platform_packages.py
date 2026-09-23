@@ -16,7 +16,7 @@ parser.add_argument('release', type=Path)
 args = parser.parse_args()
 for target, filename, size in [('a8', 'SIYI_4K_MINI_UpgradeSD.bin', 0x600000),
                                ('zr10', 'ZR10_UpgradeSD.bin', 0x6b0000)]:
-    image = (args.release / target.upper() / filename).read_bytes()
+    image = (args.release / ('SIYI_' + target.upper()) / filename).read_bytes()
     script = (ROOT / f'packaging/{target}/upgrade_script.txt').read_bytes()
     assert image[:0x4000] == script.ljust(0x4000, b'\xff')
     assert len(image) == 0x4000 + size + (36 if target == 'zr10' else 0)

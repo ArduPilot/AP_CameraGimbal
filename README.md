@@ -101,6 +101,8 @@ make release RELEASE_TARGETS=A8
 
 The output is `release/<version>/`, where `<version>` is the latest reachable
 `vX.y` tag (currently `v1.0`). Checkpoint tags such as `post-refactor` are ignored.
+Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10` and
+`XFRobot_Z1-Mini` (for example, `release/v1.0/SIYI_A8/`).
 
 ## Adding camera support
 
