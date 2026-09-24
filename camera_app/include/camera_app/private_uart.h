@@ -16,6 +16,8 @@ struct ca_private_frame {
     uint8_t command;
     const uint8_t *payload;
     uint16_t payload_length;
+    const uint8_t *raw;
+    size_t raw_length;
 };
 
 typedef void (*ca_private_frame_fn)(void *opaque,

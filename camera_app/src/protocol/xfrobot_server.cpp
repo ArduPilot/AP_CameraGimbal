@@ -8,6 +8,7 @@
 #endif
 #include "camera_app/xfrobot_server.h"
 #include "camera_app/log.h"
+#include "camera_app/binlog.h"
 #include "apcam/gimbal_transform.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -19,7 +20,7 @@
 #include <unistd.h>
 #define CLIENTS 4
 #define MAX_PACKET 256U
-struct client { int fd; uint8_t input[MAX_PACKET], output[73]; size_t used, sent, pending; };
+struct client { int fd; struct sockaddr_in peer; uint8_t input[MAX_PACKET], output[73]; size_t used, sent, pending; };
 struct ca_xfrobot_server {
     bool manual_control; int tcp, udp; bool inverted; struct client clients[CLIENTS]; };
 static uint16_t crc16(const uint8_t *data, size_t length)
@@ -59,10 +60,11 @@ int ca_xfrobot_server_open(struct ca_xfrobot_server **out, unsigned port, bool i
     return 0;
 }
 static bool reply(struct ca_xfrobot_server *server, struct ca_backend *backend, struct ca_media *media,
-                  const uint8_t *data, size_t length, uint8_t output[73])
+                  const uint8_t *data, size_t length, uint8_t output[73], uint8_t link, const sockaddr_in &peer)
 {
     if (length < 72 || length > MAX_PACKET || data[0] != 0xa8 || data[1] != 0xe5 ||
         get16(data + 2) != length || data[4] != 2 || crc16(data, length)) return false;
+    ca_binlog_packet(false, CA_PACKET_XFROBOT, link, ntohl(peer.sin_addr.s_addr), ntohs(peer.sin_port), data, length);
     int result = -1;
     float command[3] = {(int16_t)get16(data + 5) * 0.01f, (int16_t)get16(data + 7) * 0.01f, (int16_t)get16(data + 9) * 0.01f};
     apcam_inverse_transform(&apcam_angle_command[server->inverted], command, command, false);
@@ -117,10 +119,12 @@ void ca_xfrobot_server_update(struct ca_xfrobot_server *s, struct ca_backend *ba
     if (!s) return;
     s->manual_control=manual_control;
     if (s->tcp >= 0) {
-        int fd = accept4(s->tcp, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        sockaddr_in peer {};
+        socklen_t size=sizeof(peer);
+        int fd = accept4(s->tcp, (sockaddr *)&peer, &size, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd >= 0) {
             unsigned i;
-            for (i = 0; i < CLIENTS; i++) if (s->clients[i].fd < 0) { s->clients[i].fd = fd; break; }
+            for (i = 0; i < CLIENTS; i++) if (s->clients[i].fd < 0) { s->clients[i].fd = fd; s->clients[i].peer=peer; break; }
             if (i == CLIENTS) close(fd);
         }
     }
@@ -129,11 +133,13 @@ void ca_xfrobot_server_update(struct ca_xfrobot_server *s, struct ca_backend *ba
         struct sockaddr_in peer; socklen_t size = sizeof(peer);
         ssize_t n = recvfrom(s->udp, data, sizeof(data), 0, (struct sockaddr *)&peer, &size);
         if (n < 0) break;
-        if (reply(s, backend, media, data, (size_t)n, output)) {
+        if (reply(s, backend, media, data, (size_t)n, output, CA_PACKET_UDP, peer)) {
             /* Vendor SDK clients receive on 2338 independently of TX port.
              * Unicast to the sender avoids exposing telemetry to the subnet. */
             peer.sin_port = htons(APCAM_VENDOR_REPLY_PORT);
-            (void)sendto(s->udp, output, sizeof(output), MSG_NOSIGNAL, (struct sockaddr *)&peer, size);
+            ssize_t sent=sendto(s->udp, output, sizeof(output), MSG_NOSIGNAL, (struct sockaddr *)&peer, size);
+            ca_binlog_packet(true, CA_PACKET_XFROBOT, CA_PACKET_UDP, ntohl(peer.sin_addr.s_addr), ntohs(peer.sin_port),
+                             output, sizeof(output), sent == sizeof(output) ? 0 : sent < 0 ? -errno : -EIO);
         }
     }
     for (unsigned i = 0; i < CLIENTS; i++) {
@@ -156,9 +162,14 @@ void ca_xfrobot_server_update(struct ca_xfrobot_server *s, struct ca_backend *ba
                 memmove(c->input, c->input + 1, --c->used); continue;
             }
             if (c->used < length) break;
-            bool valid = reply(s, backend, media, c->input, length, c->output);
+            bool valid = reply(s, backend, media, c->input, length, c->output, CA_PACKET_TCP, c->peer);
             c->used -= length; memmove(c->input, c->input + length, c->used);
-            if (valid) { c->sent = 0; c->pending = sizeof(c->output); break; }
+            if (valid) {
+                c->sent = 0; c->pending = sizeof(c->output);
+                ca_binlog_packet(true, CA_PACKET_XFROBOT, CA_PACKET_TCP, ntohl(c->peer.sin_addr.s_addr), ntohs(c->peer.sin_port),
+                                 c->output, sizeof(c->output));
+                break;
+            }
         }
     }
 }

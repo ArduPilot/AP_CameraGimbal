@@ -14,7 +14,23 @@ enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_GIMB, CA_LOG_PIDP, CA_LOG_PIDY, CA_LOG_MODE, CA_LOG_CMD,
     CA_LOG_CAM, CA_LOG_VID, CA_LOG_GCMD, CA_LOG_STAT, CA_LOG_TIME, CA_LOG_ROI,
     CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE, CA_LOG_SYS,
-    CA_LOG_MAVC, CA_LOG_GMBC, CA_LOG_MAVP, CA_LOG_MAVH };
+    CA_LOG_MAVC, CA_LOG_GMBC, CA_LOG_MAVP, CA_LOG_MAVH,
+    CA_LOG_SIIN, CA_LOG_SIOU, CA_LOG_XFIN, CA_LOG_XFOU };
+enum ca_packet_protocol { CA_PACKET_SIYI=1, CA_PACKET_MT11, CA_PACKET_SIYI_MCU,
+                          CA_PACKET_XFROBOT, CA_PACKET_XFROBOT_MCU };
+enum ca_packet_link { CA_PACKET_UDP=1, CA_PACKET_TCP, CA_PACKET_UART,
+                      CA_PACKET_MCU_UART, CA_PACKET_MCU_UDP };
+struct __attribute__((packed)) ca_log_packet {
+    uint64_t time_us;
+    uint32_t packet_id;
+    uint8_t link, protocol;
+    uint32_t ip;
+    uint16_t port;
+    uint8_t source, destination;
+    uint16_t command, sequence, length, offset;
+    int32_t result;
+    uint8_t data[192];
+};
 struct __attribute__((packed)) ca_log_vendor { uint64_t time_us; uint8_t opcode; uint16_t length; char payload[64]; };
 struct __attribute__((packed)) ca_log_parm { uint64_t time_us; char name[16]; float value; };
 struct __attribute__((packed)) ca_log_msg { uint64_t time_us; char text[64]; };
@@ -87,4 +103,9 @@ void ca_binlog_parameter(const char *name, float value, bool applied);
 void ca_binlog_feedback(const struct ca_gimbal_attitude *attitude);
 void ca_binlog_stats(void);
 void ca_binlog_vendor(uint8_t opcode, const uint8_t *payload, uint16_t length);
+// Whole validated RX frames or TX attempts/queue submissions; result is 0 or
+// negative errno. IP/port use host byte order and identify the remote endpoint.
+// Chunk groups are enqueued atomically, preserving errno and complete packets.
+void ca_binlog_packet(bool outgoing, uint8_t protocol, uint8_t link,
+                     uint32_t ip, uint16_t port, const uint8_t *data, size_t length, int32_t result=0);
 #endif
