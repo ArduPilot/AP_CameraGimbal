@@ -753,6 +753,10 @@ network-capture-test:
 	$(PYTHON) tests/test_network_capture.py --no-permission
 	sudo unshare -n $(PYTHON) tests/test_network_capture.py
 
+.PHONY: mavlink-binlog-test
+mavlink-binlog-test: $(HOST_TARGET)
+	$(PYTHON) tests/test_mavlink_binlog.py ./$(HOST_TARGET) ../sitl/gimbal_sim.py
+
 system-stats-test: tests/test_system_stats tests/test_binlog_sys
 	./tests/test_system_stats
 	$(PYTHON) tests/test_binlog_sys.py ./tests/test_binlog_sys

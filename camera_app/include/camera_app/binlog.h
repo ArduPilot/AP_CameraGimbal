@@ -13,16 +13,50 @@ struct ca_gimbal_attitude;
 enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_GIMB, CA_LOG_PIDP, CA_LOG_PIDY, CA_LOG_MODE, CA_LOG_CMD,
     CA_LOG_CAM, CA_LOG_VID, CA_LOG_GCMD, CA_LOG_STAT, CA_LOG_TIME, CA_LOG_ROI,
-    CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE, CA_LOG_SYS };
+    CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE, CA_LOG_SYS,
+    CA_LOG_MAVC, CA_LOG_GMBC, CA_LOG_MAVP, CA_LOG_MAVH };
 struct __attribute__((packed)) ca_log_vendor { uint64_t time_us; uint8_t opcode; uint16_t length; char payload[64]; };
 struct __attribute__((packed)) ca_log_parm { uint64_t time_us; char name[16]; float value; };
 struct __attribute__((packed)) ca_log_msg { uint64_t time_us; char text[64]; };
-struct __attribute__((packed)) ca_log_pos { uint64_t time_us; uint32_t boot_ms; int32_t lat, lon; float alt, relalt, vn, ve, vd; };
-struct __attribute__((packed)) ca_log_att { uint64_t time_us; uint32_t boot_ms; uint8_t source; float roll,pitch,yaw,rollrate,pitchrate,yawrate; };
+struct __attribute__((packed)) ca_log_pos { uint64_t time_us; uint32_t boot_ms; int32_t lat, lon; float alt, relalt, vn, ve, vd; uint8_t source_system, source_component; };
+struct __attribute__((packed)) ca_log_att { uint64_t time_us; uint32_t boot_ms; uint8_t source; float roll,pitch,yaw,rollrate,pitchrate,yawrate; uint8_t source_system, source_component; };
 struct __attribute__((packed)) ca_log_gimb { uint64_t time_us, sample_us; float roll,pitch,yaw,rollrate,pitchrate,yawrate; };
 struct __attribute__((packed)) ca_log_pid { uint64_t time_us; float target,actual,rate,ff,error,p,i,d,output,dt,age; };
 struct __attribute__((packed)) ca_log_mode { uint64_t time_us; uint32_t flight_mode; uint8_t armed,mode,method,yawlock,recording,system; };
 struct __attribute__((packed)) ca_log_cmd { uint64_t time_us; uint16_t command; uint8_t system,component,result; float p1,p2,p3,p4,p5,p6,p7; };
+// Double X/Y preserve both COMMAND_INT integers and COMMAND_LONG float values.
+// Result 255 means ignored/no ACK; frame 255 means COMMAND_LONG has no frame.
+struct __attribute__((packed)) ca_log_mavc {
+    uint64_t time_us;
+    uint8_t target_system, target_component, source_system, source_component, frame;
+    uint16_t command;
+    float p1, p2, p3, p4;
+    double x, y;
+    float z;
+    uint8_t result, was_long;
+};
+struct __attribute__((packed)) ca_log_gmbc {
+    uint64_t time_us;
+    uint8_t target_system, target_component, source_system, source_component;
+    uint16_t flags;
+    float q[4], rates[3];
+    uint8_t result;
+};
+struct __attribute__((packed)) ca_log_mavp {
+    uint64_t time_us;
+    uint8_t target_system, target_component, source_system, source_component, type, extended;
+    char name[16];
+    float value;
+    uint8_t result;
+    // Two DataFlash 'a' fields preserve all 128 PARAM_EXT_SET value bytes.
+    uint8_t raw[128];
+};
+struct __attribute__((packed)) ca_log_mavh {
+    uint64_t time_us;
+    uint8_t source_system, source_component;
+    uint32_t custom_mode;
+    uint8_t type, autopilot, base_mode, system_status, version;
+};
 struct __attribute__((packed)) ca_log_cam { uint64_t time_us; uint8_t scope; int32_t result,lat,lon; float alt,roll,pitch,yaw; };
 struct __attribute__((packed)) ca_log_vid { uint64_t time_us; uint8_t active; int32_t result; char path[64]; };
 struct __attribute__((packed)) ca_log_gcmd { uint64_t time_us; uint8_t mode; float pitch,yaw,wirep,wirey; int32_t result; };

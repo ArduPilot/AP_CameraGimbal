@@ -43,7 +43,19 @@ struct __attribute__((packed)) fmt_record {
 #endif
     char format[16],labels[64];
 };
-#define FMT(id, type, name, format, labels) {0xa3,0x95,128,id,3+sizeof(struct type),{name[0],name[1],name[2],sizeof(name)>3 ? name[3] : 0},format,labels}
+template<size_t N, size_t F, size_t L>
+static constexpr fmt_record make_format(uint8_t id, uint8_t length,
+                                       const char (&name)[N], const char (&format)[F], const char (&labels)[L])
+{
+    // DataFlash permits all 16 format bytes/64 label bytes, without a NUL.
+    static_assert(N <= 5 && F <= 17 && L <= 65, "DataFlash FMT field too long");
+    fmt_record r = {0xa3, 0x95, 128, id, length, {}, {}, {}};
+    for (size_t i=0; i<N-1; i++) r.name[i]=name[i];
+    for (size_t i=0; i<F-1; i++) r.format[i]=format[i];
+    for (size_t i=0; i<L-1; i++) r.labels[i]=labels[i];
+    return r;
+}
+#define FMT(id, type, name, format, labels) make_format(id, 3+sizeof(struct type), name, format, labels)
 static const struct fmt_record formats[] = {
     {0xa3,0x95,128,128,89,"FMT","BBnNZ","Type,Length,Name,Format,Columns"},
     FMT(CA_LOG_SYS,ca_log_sys,"SYS","QffQQQB","TimeUS,CPUTemp,CPULoad,MemFree,MemAvail,SDFree,Valid"),
@@ -51,13 +63,17 @@ static const struct fmt_record formats[] = {
     FMT(CA_LOG_VEND,ca_log_vendor,"VEND","QBHZ","TimeUS,Opcode,Length,Payload"),
     FMT(CA_LOG_PARM,ca_log_parm,"PARM","QNf","TimeUS,Name,Value"),
     FMT(CA_LOG_MSG,ca_log_msg,"MSG","QZ","TimeUS,Message"),
-    FMT(CA_LOG_POS,ca_log_pos,"POS","QILLfffff","TimeUS,BootMS,Lat,Lng,Alt,RelAlt,VN,VE,VD"),
-    FMT(CA_LOG_ATT,ca_log_att,"ATT","QIBffffff","TimeUS,BootMS,Src,Roll,Pitch,Yaw,RollRate,PitchRate,YawRate"),
+    FMT(CA_LOG_POS,ca_log_pos,"POS","QILLfffffBB","TimeUS,BootMS,Lat,Lng,Alt,RelAlt,VN,VE,VD,SS,SC"),
+    FMT(CA_LOG_ATT,ca_log_att,"ATT","QIBffffffBB","TimeUS,TBoot,Src,Roll,Pitch,Yaw,RollRate,PitchRate,YawRate,SS,SC"),
     FMT(CA_LOG_GIMB,ca_log_gimb,"GIMB","QQffffff","TimeUS,SampleUS,Roll,Pitch,Yaw,RollRate,PitchRate,YawRate"),
     FMT(CA_LOG_PIDP,ca_log_pid,"PIDP","Qfffffffffff","TimeUS,Tar,Act,Rate,FF,Err,P,I,D,Out,DT,Age"),
     FMT(CA_LOG_PIDY,ca_log_pid,"PIDY","Qfffffffffff","TimeUS,Tar,Act,Rate,FF,Err,P,I,D,Out,DT,Age"),
     FMT(CA_LOG_MODE,ca_log_mode,"MODE","QIBBBBBB","TimeUS,FlightMode,Armed,Mode,Method,YawLock,Recording,SysId"),
     FMT(CA_LOG_CMD,ca_log_cmd,"CMD","QHBBBfffffff","TimeUS,Cmd,SysId,CompId,Result,P1,P2,P3,P4,P5,P6,P7"),
+    FMT(CA_LOG_MAVC,ca_log_mavc,"MAVC","QBBBBBHffffddfBB","TimeUS,TS,TC,SS,SC,Fr,Cmd,P1,P2,P3,P4,X,Y,Z,Res,WL"),
+    FMT(CA_LOG_GMBC,ca_log_gmbc,"GMBC","QBBBBHfffffffB","TimeUS,TS,TC,SS,SC,Flg,Q1,Q2,Q3,Q4,VX,VY,VZ,Res"),
+    FMT(CA_LOG_MAVP,ca_log_mavp,"MAVP","QBBBBBBNfBaa","TimeUS,TS,TC,SS,SC,PT,Ext,Name,Val,Res,Raw1,Raw2"),
+    FMT(CA_LOG_MAVH,ca_log_mavh,"MAVH","QBBIBBBBB","TimeUS,SS,SC,Mode,Type,AP,Base,State,Ver"),
     FMT(CA_LOG_CAM,ca_log_cam,"CAM","QBiLLffff","TimeUS,Scope,Result,Lat,Lng,Alt,Roll,Pitch,Yaw"),
     FMT(CA_LOG_VID,ca_log_vid,"VID","QBiZ","TimeUS,Active,Result,Path"),
     FMT(CA_LOG_GCMD,ca_log_gcmd,"GCMD","QBffffi","TimeUS,Mode,Pitch,Yaw,WireP,WireY,Result"),

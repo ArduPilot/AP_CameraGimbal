@@ -92,6 +92,8 @@ jobs:
           make -C web network-status-test
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
+      - name: Test MAVLink control BIN logging and sender identities
+        run: make -C camera_app mavlink-binlog-test
       - name: Test thermal conversion and MAVLink telemetry
         run: |
           make -C camera_app tests/test_thermal thermal-mavlink-test
