@@ -133,7 +133,7 @@ time.sleep(60)
         window = Launcher(repo)
         window.show()
         try:
-            assert window.video.currentData() == 'simple'
+            assert window.video.currentData() == 'terrain'
             assert not window.clear_parameters.isChecked()
             assert window.environment()[0]['CAMERA_GIMBAL_SITL_RESET_PARAMETERS'] == '0'
             window.clear_parameters.setChecked(True)
