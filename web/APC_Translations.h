@@ -305,6 +305,9 @@ enum string_id {
     S_NETWORK_SITL,
     S_P_NETWORK_INTERFACE,
     S_H_NETWORK_INTERFACE,
+    S_P_NETWORK_CAPTURE,
+    S_H_NETWORK_CAPTURE,
+    S_NETWORK_CAPTURE_FILES,
     S_P_NETWORK_ADDRESS,
     S_H_NETWORK_ADDRESS,
     S_P_NETWORK_GATEWAY,
@@ -862,6 +865,9 @@ static constexpr Translations translations = [] {
     result[S_NETWORK_SITL] = {"SITL uses the host network; address and gateway settings are saved but do not change the host network.", "SITL 使用主机网络；地址和网关设置会保存，但不会更改主机网络。", "SITL はホストのネットワークを使用します。アドレスとゲートウェイの設定は保存されますが、ホストのネットワークは変更しません。"};
     result[S_NETWORK_RECONNECT] = {"Network changes apply on camera-app restart. If the primary address changes, reconnect here after restarting:", "网络更改在相机应用重启后生效。主地址更改后，请重新连接：", "ネットワーク設定はカメラアプリの再起動後に反映されます。プライマリアドレスを変更した場合、再起動後はこちらに接続してください："};
     result[S_P_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"};
+    result[S_P_NETWORK_CAPTURE] = {"Network capture", "网络抓包", "ネットワークキャプチャ"};
+    result[S_H_NETWORK_CAPTURE] = {"Off by default. Save to start or stop capturing all network interfaces, including loopback. Keeps the latest four 16 MiB PCAP files in DCIM/network on the microSD card. Disable before downloading and open the files in Wireshark.", "默认关闭。保存后开始或停止抓取所有网络接口（包括回环）的数据包。在 microSD 卡的 DCIM/network 中保留最新的四个 16 MiB PCAP 文件。下载前请禁用，然后用 Wireshark 打开。", "初期設定は無効です。保存するとループバックを含む全インターフェースのキャプチャを開始・停止します。microSD の DCIM/network に最新の16 MiB PCAPファイルを4個保持します。ダウンロード前に無効にし、Wiresharkで開いてください。"};
+    result[S_NETWORK_CAPTURE_FILES] = {"Browse network captures", "浏览网络抓包文件", "キャプチャファイルを表示"};
     result[S_H_NETWORK_INTERFACE] = {"Interface used for camera addresses and the default gateway, independent of SupportProxy.", "用于相机地址和默认网关的接口，独立于 SupportProxy。", "カメラのアドレスとデフォルトゲートウェイのインターフェース。SupportProxy とは独立しています。"};
     result[S_P_NETWORK_ADDRESS] = {"Secondary IPv4 address/prefix", "附加 IPv4 地址/前缀", "追加 IPv4 アドレス/プレフィックス"};
     result[S_H_NETWORK_ADDRESS] = {"Optional second address, for example 192.168.20.25/24. Leave blank to remove the secondary address previously set here.", "可选次地址，例如 192.168.20.25/24。留空删除先前在此设置的次地址。", "任意のセカンダリアドレス（例：192.168.20.25/24）。空欄にすると以前ここで設定したアドレスを削除します。"};

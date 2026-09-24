@@ -130,6 +130,7 @@ struct ca_network_config {
 
 struct ca_config {
     struct ca_network_config network;
+    bool network_capture;
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;

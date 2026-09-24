@@ -71,7 +71,7 @@ jobs:
         run: |
           sudo apt-get update
           # PyQt wheels still require native GL/EGL libraries when using offscreen.
-          sudo apt-get install -y build-essential ffmpeg python3-venv iproute2 libegl1 libgl1 libopengl0 libxkbcommon0 libdbus-1-3 libxcb-cursor0
+          sudo apt-get install -y build-essential ffmpeg python3-venv iproute2 tcpdump libegl1 libgl1 libopengl0 libxkbcommon0 libdbus-1-3 libxcb-cursor0
           python3 -m venv build/terrain-venv
           build/terrain-venv/bin/pip install pymavlink numpy opencv-python-headless av pexpect defusedxml PyQt6
           # The live-control tests use MAVProxy's camera definition parser.
@@ -112,6 +112,11 @@ jobs:
         run: |
           make camera-definitions
           python3 sitl/test_camera_definition.py --targets mt11 --zoom-only
+      - name: Test network capture and A8 web download
+        run: |
+          make -C camera_app network-capture-test
+          make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
+          sudo unshare -n "$(command -v python3)" sitl/test_network_capture.py
       - name: Test bounded video fixture catch-up
         run: python3 sitl/test_video_fixture.py
       - name: Check headless Qt runtime

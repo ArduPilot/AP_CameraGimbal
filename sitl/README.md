@@ -538,6 +538,29 @@ palette/source changes, autofocus, still captures and recording) with:
 make sitl-image-controls-test
 ```
 
+## Network capture tests
+
+Network capture is available on all physical camera targets and Linux SITL.
+It starts disabled, writes four rotating 16 MiB PCAP files beneath
+`mnt/DCIM/network` in the simulator runtime, and is controlled live from
+**Parameters → Network**. Linux packet sockets require root or `CAP_NET_RAW`;
+macOS/Windows SITL reports an unsupported-operation error if enabled.
+
+These tests isolate generated loopback traffic from the host network:
+
+```sh
+make -C camera_app network-capture-test
+make a8_sitl
+make -C web CAMERA_BACKEND=a8 portable-sitl SITL_BIN_ROOT=../build/a8-sitl
+sudo unshare -n python3 sitl/test_network_capture.py
+```
+
+Install `tcpdump` for independent PCAP decoding; the tests also use `tshark`
+when available. They cover timestamps, UDP/TCP payloads, file rotation,
+disable/re-enable, missing storage, insufficient privileges, web authentication
+and CSRF checks, and the complete A8 web-to-PCAP download path. Camera firmware
+does not need either decoder installed.
+
 ## Raw thermal FFV1 stream
 
 SITL-MT11 advertises stream 3, lossless 640x512 16-bit FFV1 in Matroska, at

@@ -887,7 +887,7 @@ Include the subnet prefix on addresses, for example `192.168.144.27/24`.
 The gateway is an address without a prefix and must be reachable through one
 of the configured subnets when a primary address is specified.
 
-**Save** persists network settings without changing the running network.
+**Save** persists address settings without changing the running network.
 **Save and restart camera app** applies them. A reconnect link appears for the
 new primary address; changing subnets also requires a reachable address or
 route on your computer. You may need to log in again at the new address.
@@ -912,6 +912,35 @@ keep the correct subnet settings for your computer when changing camera IPs.
 SITL saves these fields but never modifies the host network. Address and route
 handling is tested in an isolated Linux network namespace; see the
 [SITL network test](../sitl/README.md#supportproxy-integration-tests) instructions.
+
+## Network packet capture
+
+All camera targets (SIYI A8, MT11, ZR10 and XFRobot Z1-Mini) support
+**Parameters → Network → Network capture**, disabled by default. Select Enabled
+and **Save parameters** to begin, reproduce the protocol issue, then select
+Disabled and save to finish. Capture starts and stops live without restarting
+the camera or interrupting video. The Network tab refreshes capture status and
+shows startup/storage errors. **Browse network captures** opens the Files page
+at `DCIM/network` on the microSD card; download the `.pcap` files and open them
+in Wireshark. The INI setting is `[network] capture = false`.
+
+The capture includes incoming and outgoing traffic on all network interfaces,
+including loopback, with full packet payloads (up to 262144 bytes including the
+Linux cooked header) and kernel receive timestamps at microsecond resolution.
+It uses Linux packet sockets on every target; no tcpdump installation is needed.
+Serial UART traffic is not network traffic and is not included.
+
+Capture runs in a separate worker and keeps four files of up to 16 MiB each,
+`network-0.pcap` through `network-3.pcap`. The oldest slot is replaced when the
+ring wraps; disable capture before downloading to preserve a complete snapshot.
+The files are synced every second and are readable without a final index.
+Storage or permission failures stop capture and appear in the Network tab and
+app log; disable and re-enable to retry. The app log reports packet counts and
+kernel drops when capture stops. Capture is independent of recording/armed state.
+
+Linux SITL supports the same capture with root or `CAP_NET_RAW` permission.
+Windows/macOS SITL reports it unsupported. See the
+[isolated capture tests](../sitl/README.md#network-capture-tests).
 
 ## Lossless raw thermal video
 

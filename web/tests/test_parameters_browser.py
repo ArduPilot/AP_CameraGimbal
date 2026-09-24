@@ -25,7 +25,7 @@ CHECKS = r"""
     assert(active().id === 'tab-system', 'default System tab');
     assert(panels.filter(panel => !panel.hidden).length === 1, 'one visible panel');
     const categories = {timezone: 'system', orientation: 'system', mavlink_system_id: 'system',
-      mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
+      network_capture: 'network', mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
       brightness: 'video', autorecord: 'video', main_resolution: 'video',
       proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy'};
     for (const [name, category] of Object.entries(categories)) {

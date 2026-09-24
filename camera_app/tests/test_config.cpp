@@ -35,6 +35,7 @@ int main(int argc, char **argv)
     }
     ca_config_defaults(&config);
     assert(!config.log_disarmed);
+    assert(!config.network_capture);
     assert(strcmp(config.timezone, "GMT-10") == 0);
     assert(config.photo_scope == CA_PHOTO_SCOPE_ALL);
     assert(config.orientation == CA_MOUNT_AUTO);
@@ -300,6 +301,10 @@ int main(int argc, char **argv)
     assert(strcmp(config.network.primary_address, "198.51.100.27/24") == 0);
     assert(strcmp(config.network.secondary_address, "192.0.2.25/24") == 0);
     assert(strcmp(config.network.gateway, "192.0.2.1") == 0);
+    fd = open(path, O_WRONLY | O_TRUNC);
+    write_config(fd, "[network]\ncapture=true\n");
+    assert(ca_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(config.network_capture);
     /* Legacy proxy networking migrates only when enabled, and an explicitly
      * empty new setting overrides a legacy value. */
     for (unsigned enabled = 0; enabled < 2; enabled++) {

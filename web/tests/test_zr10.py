@@ -194,6 +194,7 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
             "proxy_signing": "true", "proxy_signing_passphrase": "test<&'secret",
             "proxy_publish_password": "publish<&'secret",
             "network_secondary_address": "", "network_gateway": "192.168.144.20",
+            "network_capture": "false",
         }
         status, page = save_parameters(edited)
         assert status == 400 and b"Invalid value for Timezone" in page

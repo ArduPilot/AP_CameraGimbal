@@ -1,6 +1,7 @@
 #pragma once
 #include "apcam/target.h"
 #include "camera_app/manual_control.h"
+#include "camera_app/APC_NetworkCapture.h"
 
 struct ca_siyi_server;
 struct ca_xfrobot_server;
@@ -25,5 +26,6 @@ private:
     ca_manual_control _manual {};
     ca_backend *_backend = nullptr;
     ca_media *_media = nullptr;
+    APC_NetworkCapture _network_capture;
     bool _started = false;
 };

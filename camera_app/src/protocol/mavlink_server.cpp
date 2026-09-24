@@ -2153,6 +2153,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
             (void)ca_config_param_assign(&next, i, (float)ca_config_param_get(&desired, i));
     }
     memcpy(next.timezone, desired.timezone, sizeof(next.timezone));
+    next.network_capture = desired.network_capture;
     next.main_resolution = server->settings.main_resolution;
     next.sub_resolution = server->settings.sub_resolution;
     next.recording_resolution = server->settings.recording_resolution;
