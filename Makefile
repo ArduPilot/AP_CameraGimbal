@@ -19,7 +19,7 @@ MINIMP4_ROOT ?= $(abspath $(DEPS_ROOT)/minimp4)
 MT11_KERNEL ?= packaging/mt11/base/kernel
 MT11_ROOTFS ?= packaging/mt11/base/rootfs
 MT11_UPDATE_CONFIG ?= packaging/mt11/base/config.json
-MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/null | awk '/^v[0-9]+\.[0-9]+$$/ { print; exit }')
+MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/null | awk '/^v[0-9]+\.[0-9]+(\.[0-9]+)?$$/ { print; exit }')
 MT11_GIT_HASH ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-6)
 export MT11_VERSION MT11_GIT_HASH
 SITL_VIDEO_PYTHON ?= $(if $(wildcard $(CURDIR)/build/terrain-venv/bin/python),$(CURDIR)/build/terrain-venv/bin/python,python3)
@@ -317,8 +317,8 @@ packaging/mt11/thermal_socket: packaging/mt11/thermal_socket.cpp
 		-o $@ $<
 
 mt11_package:
-	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+$$' || { \
-		echo 'No reachable Git tag of the form vX.y; cannot name package' >&2; exit 1; \
+	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$$' || { \
+		echo 'No reachable Git tag of the form vX.y or vX.y.z; cannot name package' >&2; exit 1; \
 	}
 	@printf '%s\n' '$(MT11_GIT_HASH)' | grep -Eq '^[0-9a-f]{6}$$' || { \
 		echo 'Cannot determine the six-character Git commit hash' >&2; exit 1; \
@@ -346,8 +346,8 @@ _mt11_package: all packaging/mt11/thermal_socket \
 # partition. Needs the arm-linux- (armv7 hard-float, glibc <= 2.30) toolchain
 # on PATH and mkfs.jffs2. Platform assets are checked in separately.
 a8_package:
-	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+$$' || { \
-		echo 'No reachable Git tag of the form vX.y; cannot name package' >&2; exit 1; \
+	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$$' || { \
+		echo 'No reachable Git tag of the form vX.y or vX.y.z; cannot name package' >&2; exit 1; \
 	}
 	@'$(A8_CROSS_COMPILE)gcc' -dumpmachine >/dev/null 2>&1 || { \
 		echo '$(A8_CROSS_COMPILE)gcc not found: run python3 tools/install_build_environment.py --targets a8' >&2; \

@@ -100,7 +100,8 @@ make release RELEASE_TARGETS=A8
 ```
 
 The output is `release/<version>/`, where `<version>` is the latest reachable
-`vX.y` tag (currently `v1.0`). Checkpoint tags such as `post-refactor` are ignored.
+`vX.y` or `vX.y.z` tag (for example, `v1.0.1`). Checkpoint tags such as
+`post-refactor` are ignored.
 Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10` and
 `XFRobot_Z1-Mini` (for example, `release/v1.0/SIYI_A8/`).
 
@@ -119,7 +120,7 @@ reverse-engineering notes.
 
 ## MT11 firmware packages
 
-Create a version tag of the form `vX.y`, then run:
+Create a version tag of the form `vX.y` or `vX.y.z`, then run:
 
 ```sh
 make mt11_package

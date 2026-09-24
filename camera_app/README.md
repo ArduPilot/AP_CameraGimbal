@@ -974,9 +974,9 @@ make mt11_package
 ```
 
 The default output is
-`build/MT11_FW_ArduPilot_vX.y_abcdef.bin`: `vX.y` is the highest version tag of
-that exact form reachable from `HEAD`, and `abcdef` is the first six characters
-of the current commit hash. For example, latest reachable tag `v1.0` with
+`build/MT11_FW_ArduPilot_<version>_abcdef.bin`: `<version>` is the highest
+`vX.y` or `vX.y.z` version tag reachable from `HEAD`, and `abcdef` is the first
+six characters of the current commit hash. For example, latest reachable tag `v1.0` with
 `HEAD` at `49f5727...` produces `build/MT11_FW_ArduPilot_v1.0_49f572.bin`.
 The builder validates the reviewed kernel and rootfs inputs included under
 `packaging/mt11/base`, builds both static applications and the vendor-mode
@@ -1035,8 +1035,8 @@ testing the complete update path.
 No external vendor firmware bundle is required. Override `MT11_KERNEL`,
 `MT11_ROOTFS`, `MT11_UPDATE_CONFIG` or `MT11_PACKAGE_OUT` only for controlled
 testing. `MT11_VERSION` and `MT11_GIT_HASH` are also exposed for reproducible
-non-Git builds, but must retain the `vX.y` and six-lowercase-hex forms. A
-package name must retain the `MT11_FW_*.bin` form for the camera's update
+non-Git builds, but must use a `vX.y` or `vX.y.z` version and a six-lowercase-hex
+hash. A package name must retain the `MT11_FW_*.bin` form for the camera's update
 scanner. As with a vendor update, loss of power while kernel or rootfs is being
 erased remains a recovery risk; the builder does not install or reboot the
 camera.
