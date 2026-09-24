@@ -36,6 +36,9 @@ Features:
 - independent primary/secondary IPv4 addresses and a default gateway under
   Parameters → Network, applied on app restart with validation and reconnect
   guidance; see [Camera IP configuration](../camera_app/README.md#camera-ip-configuration);
+- off-by-default network packet capture on every camera, including A8, with
+  live start/stop, status and Wireshark PCAP downloads under Parameters → Network;
+  see [Network packet capture](../camera_app/README.md#network-packet-capture);
 - raw editing of the AP CameraGimbal configuration, with syntax validation,
   atomic saves and a backup;
 - restart of AP CameraGimbal while the web service remains available for recovery;

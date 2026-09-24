@@ -705,6 +705,7 @@ try:
         "proxy_video3_name": "Raw Thermal",
         "proxy_video2_name": "video2",
         "proxy_publish_password": "",
+        "network_capture": "false",
         "network_interface": "eth0",
         "network_primary_address": "",
         "network_secondary_address": "",

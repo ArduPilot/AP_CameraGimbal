@@ -418,6 +418,9 @@ int APC_CameraApp::run(int argc, char **argv)
     }
 #endif
     if (network_error[0]) ca_log("%s", network_error);
+    if (_network_capture.init(record_root, ready_path()) < 0)
+        ca_log("cannot initialize network capture: %s", strerror(errno));
+    _network_capture.configure(app_config.network_capture);
     if (ca_media_open(&_media, &media_config) < 0) {
         ca_log("cannot open media backend %s: %s", backend_name, strerror(errno));
         return result;
@@ -576,6 +579,7 @@ int APC_CameraApp::run(int argc, char **argv)
         }
         ca_backend_periodic(_backend);
         ca_mavlink_server_periodic(_mavlink_server);
+        _network_capture.configure(ca_media_settings(_media)->network_capture);
     }
     result = 0;
 
@@ -586,6 +590,7 @@ APC_CameraApp::~APC_CameraApp()
 {
     if (!_started) { return; }
     (void)unlink(ready_path());
+    _network_capture.close();
     ca_manual_control_close(&_manual);
     ca_mavlink_server_close(_mavlink_server);
     ca_backend_close(_backend);

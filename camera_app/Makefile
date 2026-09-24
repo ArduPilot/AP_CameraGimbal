@@ -102,6 +102,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/protocol/mavlink_server.cpp src/protocol/camera_definition.cpp src/protocol/camera_ftp.cpp \
 	src/protocol/support_mavlink.cpp \
 	src/protocol/network.cpp \
+	src/recording/network_capture.cpp \
 	src/streaming/support_video.cpp \
 	src/protocol/external_uart.cpp \
 	src/protocol/targeting.cpp \
@@ -747,6 +748,11 @@ build/tests/test_a8_exposure: tests/test_a8_exposure.cpp src/backends/a8/isp.cpp
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -o $@ $< -ldl
 
 .PHONY: system-stats-test
+.PHONY: network-capture-test
+network-capture-test:
+	$(PYTHON) tests/test_network_capture.py --no-permission
+	sudo unshare -n $(PYTHON) tests/test_network_capture.py
+
 system-stats-test: tests/test_system_stats tests/test_binlog_sys
 	./tests/test_system_stats
 	$(PYTHON) tests/test_binlog_sys.py ./tests/test_binlog_sys

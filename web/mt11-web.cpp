@@ -715,6 +715,8 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 31, 1, NULL, 0},
     {"network_gateway", "network", "gateway", S_P_NETWORK_GATEWAY, S_H_NETWORK_GATEWAY,
      PARAM_TEXT, 0, 15, 1, NULL, 0},
+    {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
 };
 
 enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_COUNT };
@@ -756,7 +758,7 @@ static const char *replacement_defaults[] = {
 #if WEB_HAVE_THERMAL
     "0", "Raw Thermal (16-bit)",
 #endif
-    "", "false", "false", "false", "eth0", "", "", "",
+    "", "false", "false", "false", "eth0", "", "", "", "false",
 };
 
 
@@ -3997,6 +3999,7 @@ static const char *file_mime_type(const char *path)
     if (strcasecmp(ext, "webm") == 0) return "video/webm";
     if (strcasecmp(ext, "mov") == 0) return "video/quicktime";
     if (strcasecmp(ext, "mkv") == 0) return "video/x-matroska";
+    if (strcasecmp(ext, "pcap") == 0) return "application/vnd.tcpdump.pcap";
     if (strcasecmp(ext, "avi") == 0) return "video/x-msvideo";
     if (strcasecmp(ext, "txt") == 0 || strcasecmp(ext, "log") == 0 ||
         strcasecmp(ext, "ini") == 0 || strcasecmp(ext, "md") == 0) {
@@ -4401,7 +4404,7 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
     page->append("<div class=help>");
     page->append_html(T(parameter->help));
     if (strcmp(parameter->section, "support_proxy") == 0 ||
-        strcmp(parameter->section, "network") == 0 ||
+        (strcmp(parameter->section, "network") == 0 && strcmp(parameter->key, "capture") != 0) ||
         strcmp(parameter->form_name, "orientation") == 0 ||
         strcmp(parameter->form_name, "uart_protocol") == 0 ||
         strcmp(parameter->form_name, "mavlink_system_id") == 0 ||
@@ -4869,6 +4872,27 @@ static char *render_users_page(const char *message, bool message_is_error,
     return page.release();
 }
 
+static bool network_capture_status(char *message, size_t capacity, bool *failed)
+{
+    char path[PATH_MAX + sizeof(".capture")];
+    snprintf(path, sizeof(path), "%s.capture", CAMERA_READY_PATH);
+    size_t length;
+    char *status = read_file(path, 512, &length);
+    char *ready = read_file(CAMERA_READY_PATH, 4096, &length);
+    const char *pid_line = ready ? strstr(ready, "\npid=") : NULL;
+    const char *text = status ? strchr(status, '\n') : NULL;
+    long pid, running;
+    unsigned error;
+    bool available = status && text && pid_line && sscanf(status, "%ld %u", &pid, &error) == 2 &&
+        sscanf(pid_line, "\npid=%ld", &running) == 1 && pid > 1 && pid == running && kill((pid_t)pid, 0) == 0;
+    *failed = available && error != 0;
+    snprintf(message, capacity, "%s", available ? text + 1 : "");
+    message[strcspn(message, "\r\n")] = 0;
+    free(status);
+    free(ready);
+    return available;
+}
+
 static char *render_parameter_page(const char *message, bool message_is_error,
                                    const APC_HTTPRequest *submitted, size_t *page_len)
 {
@@ -4912,6 +4936,21 @@ static char *render_parameter_page(const char *message, bool message_is_error,
             }
             page.append("</div>");
             if (tab == TAB_NETWORK) {
+                char capture_message[512];
+                bool failed;
+                bool available = network_capture_status(capture_message, sizeof(capture_message), &failed);
+                page.appendf("<p class=\"notice%s\" id=network-capture-status%s>",
+                             failed ? " error" : "", available ? "" : " hidden");
+                page.append_html(T(S_P_NETWORK_CAPTURE));
+                page.append(": <span>");
+                page.append_html(capture_message);
+                page.append("</span></p>");
+                page.append("<p><a id=network-capture-files href=\"/files?path=");
+                page.append_url(MEDIA_ROOT);
+                page.append_url("/DCIM/network");
+                page.append("\">");
+                page.append_html(T(S_NETWORK_CAPTURE_FILES));
+                page.append("</a></p>");
 #ifdef MT11_WEB_SITL
                 page.appendf("<p class=help>%s</p><p id=network-reconnect data-sitl=true hidden>", T(S_NETWORK_SITL));
 #else
@@ -5611,6 +5650,22 @@ static bool sb_append_js(APC_StringBuffer *sb, const char *text)
         }
     }
     return true;
+}
+
+static void send_network_capture_status(int fd)
+{
+    char message[512];
+    bool failed;
+    bool available = network_capture_status(message, sizeof(message), &failed);
+    APC_StringBuffer json;
+    json.appendf("{\"available\":%s,\"error\":%s,\"message\":\"", available ? "true" : "false", failed ? "true" : "false");
+    for (const unsigned char *p = (const unsigned char *)message; *p; p++) {
+        if (*p == '"' || *p == '\\') json.appendf("\\%c", *p);
+        else if (*p < 32) json.appendf("\\u%04x", *p);
+        else json.append_n((const char *)p, 1);
+    }
+    json.append("\"}\n");
+    send_response(fd, 200, "OK", "application/json; charset=utf-8", json.data(), json.size(), "Cache-Control: no-store\r\n");
 }
 
 struct js_string {
@@ -6951,7 +7006,7 @@ static void handle_request(int fd, const char *peer)
                    strcmp(request.path, "/language.js") == 0) {
             send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
-                   strcmp(request.path, "/upgrade-status") == 0) {
+                   (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/network-capture-status") == 0)) {
             /* Reboot polling must reach its onload handler when the cookie
              * expires. A Basic challenge can instead block on a browser auth
              * dialog. No status/token is disclosed to this unauthenticated request. */
@@ -6986,6 +7041,8 @@ static void handle_request(int fd, const char *peer)
         } else
 #endif
         send_page(fd, NULL, false);
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/network-capture-status") == 0) {
+        send_network_capture_status(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
         send_parameter_page(fd, NULL, false, NULL);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/files.js") == 0) {

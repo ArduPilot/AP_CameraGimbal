@@ -168,4 +168,24 @@
   form.noValidate = true;
   const bad = validate();
   if (attempted && bad) { reveal(bad); bad.focus(); }
+  const captureStatus = document.getElementById('network-capture-status');
+  async function refreshCapture() {
+    if (captureStatus && !document.getElementById('parameters-network').hidden && !document.hidden) {
+      try {
+        const response = await fetch('/network-capture-status', {
+          cache: 'no-store', headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(5000)
+        });
+        if (response.status === 401) { captureStatus.hidden = true; return; }
+        if (!response.ok) throw new Error('capture status unavailable');
+        const status = await response.json();
+        captureStatus.hidden = !status.available;
+        captureStatus.classList.toggle('error', status.error);
+        captureStatus.querySelector('span').textContent = status.message;
+      } catch (_) {
+        captureStatus.hidden = true;
+      }
+    }
+    if (captureStatus) setTimeout(refreshCapture, 2000);
+  }
+  refreshCapture();
 })();
