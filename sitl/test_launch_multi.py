@@ -69,6 +69,8 @@ def main():
                 for i, panel in enumerate(window.simulators):
                     panel.camera.setCurrentIndex(panel.camera.findData(backends[i]))
                     panel.orientation.setCurrentIndex(i % 2)
+                    # Exercise concurrent services without requiring terrain's VTK renderer.
+                    panel.video.setCurrentIndex(panel.video.findData('simple'))
                 window.start()
                 until(app, lambda: window.phase in ('running', 'idle'), timeout=180)
                 assert window.phase == 'running', window.status.text() + '\n' + '\n'.join(p.log.toPlainText()[-3000:] for p in window.simulators)
