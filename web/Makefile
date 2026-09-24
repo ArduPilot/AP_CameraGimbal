@@ -5,7 +5,7 @@ CXX := $(CROSS_COMPILE)g++
 HOST_CXX ?= c++
 # The installed camera filesystem need not provide a matching C++ runtime.
 CXX_RUNTIME_FLAGS := -static-libstdc++ -static-libgcc
-MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/null | awk '/^v[0-9]+\.[0-9]+$$/ { print; exit }')
+MT11_VERSION ?= $(shell git tag --merged HEAD --sort=-version:refname 2>/dev/null | awk '/^v[0-9]+\.[0-9]+(\.[0-9]+)?$$/ { print; exit }')
 MT11_GIT_HASH ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-6)
 export MT11_VERSION MT11_GIT_HASH
 VERSION_HEADER := build/version.h

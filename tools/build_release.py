@@ -57,8 +57,8 @@ def publish(staging, destination):
 
 
 def build_release(repo, output, version, targets, make='make'):
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+', version):
-        raise ValueError('Release requires a reachable version tag of the form vX.y (or MT11_VERSION=vX.y)')
+    if not re.fullmatch(r'v[0-9]+\.[0-9]+(\.[0-9]+)?', version):
+        raise ValueError('Release requires a reachable version tag of the form vX.y or vX.y.z (or an MT11_VERSION override)')
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
     dirty = subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], cwd=repo).returncode != 0
     identity = dict(version=version, revision=revision, short_revision=revision[:6], dirty=dirty)
