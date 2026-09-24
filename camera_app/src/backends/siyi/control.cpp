@@ -200,9 +200,12 @@ static int send_link(struct ca_backend *backend, uint8_t flags, uint8_t sub,
     frame[A8_LINK_HEADER + payload_length] = (uint8_t)crc;
     frame[A8_LINK_HEADER + payload_length + 1U] = (uint8_t)(crc >> 8U);
     size_t length = A8_LINK_OVERHEAD + payload_length;
-    return backend->datagram_transport
+    const int result = backend->datagram_transport
                ? write_datagram(backend->uart_fd, frame, length)
                : write_all(backend->uart_fd, frame, length);
+    ca_binlog_packet(true, CA_PACKET_SIYI_MCU, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                     0, 0, frame, length, result < 0 ? -errno : 0);
+    return result;
 }
 
 static int send_tunnel(struct ca_backend *backend, const uint8_t *packet,
@@ -427,6 +430,8 @@ static void handle_tunnel_reply(struct ca_backend *backend,
 static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
                          size_t payload_length)
 {
+    ca_binlog_packet(false, CA_PACKET_SIYI_MCU, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                     0, 0, frame, A8_LINK_OVERHEAD + payload_length);
     const uint8_t *payload = frame + A8_LINK_HEADER;
     uint8_t sub = frame[10];
 

@@ -94,6 +94,8 @@ jobs:
         run: make -C camera_app system-stats-test
       - name: Test MAVLink control BIN logging and sender identities
         run: make -C camera_app mavlink-binlog-test
+      - name: Test SIYI and XFRobot packet BIN logging on all camera targets
+        run: make -C camera_app vendor-binlog-test
       - name: Test thermal conversion and MAVLink telemetry
         run: |
           make -C camera_app tests/test_thermal thermal-mavlink-test

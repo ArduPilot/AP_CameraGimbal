@@ -393,6 +393,7 @@ int APC_CameraApp::run(int argc, char **argv)
     }
 #endif
     if (ca_binlog_init(log_root) < 0) ca_log("cannot start BIN log writer: %s", strerror(errno));
+    else if (app_config.log_disarmed) (void)ca_binlog_start(&app_config);
     unsigned rtsp_port = environment_port("CAMERA_APP_RTSP_PORT", 8554U);
     struct ca_media_config media_config = {
         .backend = backend_name,

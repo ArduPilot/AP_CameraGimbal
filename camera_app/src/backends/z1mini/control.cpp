@@ -32,7 +32,7 @@ struct ca_backend {
     struct ca_gimbal_attitude attitude;
     float pitch, yaw, roll, pitch_rate, yaw_rate;
     uint64_t last_tx, rate_time;
-    bool initialized;
+    bool initialized, datagram;
     uint8_t tx[40];
     size_t tx_pending;
 };
@@ -78,6 +78,7 @@ int ca_backend_open(struct ca_backend **out, const struct ca_backend_config *c)
     b->config = *c;
     const char *device = c->uart_device ? c->uart_device : "/dev/ttyS3";
     bool datagram = strncmp(device, "udp://", 6) == 0;
+    b->datagram = datagram;
     b->fd = datagram ? ca_open_udp_transport(device) : open(device,
                  O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     struct termios t;
@@ -113,6 +114,8 @@ int ca_backend_handle_fd(struct ca_backend *b)
             memmove(b->rx, b->rx + 1, --b->used);
         }
         if (b->used != sizeof(b->rx)) continue;
+        ca_binlog_packet(false, CA_PACKET_XFROBOT_MCU, b->datagram ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                         0, 0, b->rx, sizeof(b->rx));
         bool resync = !fresh(b);
         float pose[3] = {angle(b->rx + 12) * (180.0f / 3.14159265358979323846f),
                          angle(b->rx + 14) * (180.0f / 3.14159265358979323846f),
@@ -176,6 +179,9 @@ void ca_backend_periodic(struct ca_backend *b)
     uint16_t crc = crc16(b->tx, 38);
     b->tx[38] = crc >> 8; b->tx[39] = crc;
     b->tx_pending = sizeof(b->tx);
+    // Log submission once; retries of a partial nonblocking write are not new packets.
+    ca_binlog_packet(true, CA_PACKET_XFROBOT_MCU, b->datagram ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                     0, 0, b->tx, sizeof(b->tx));
     ssize_t n = write(b->fd, b->tx, b->tx_pending);
     if (n > 0) b->tx_pending -= (size_t)n;
 }

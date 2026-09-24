@@ -128,6 +128,8 @@ void ca_private_parser_feed(struct ca_private_parser *parser,
             frame.command = parser->data[11];
             frame.payload = parser->data + 12;
             frame.payload_length = payload_length;
+            frame.raw = parser->data;
+            frame.raw_length = total;
             if (callback != NULL) callback(opaque, &frame);
             discard_prefix(parser, total);
         }

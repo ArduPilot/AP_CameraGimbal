@@ -757,6 +757,14 @@ network-capture-test:
 mavlink-binlog-test: $(HOST_TARGET)
 	$(PYTHON) tests/test_mavlink_binlog.py ./$(HOST_TARGET) ../sitl/gimbal_sim.py
 
+.PHONY: vendor-binlog-test
+vendor-binlog-test: $(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET) build/test_packet_binlog
+	$(MAKE) CAMERA_BACKEND=z1mini HOST_TARGET=build/vendor-test-z1mini host
+	$(PYTHON) tests/test_vendor_packets.py --probe ./build/test_packet_binlog --mt11 ./$(HOST_TARGET) --a8 ./$(A8_HOST_TARGET) --zr10 ./$(ZR10_HOST_TARGET) --z1mini ./build/vendor-test-z1mini
+
+build/test_packet_binlog: tests/test_packet_binlog.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/config.cpp src/protocol/siyi.cpp src/protocol/private_uart.cpp build/binlog_version.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lpthread -lm
+
 system-stats-test: tests/test_system_stats tests/test_binlog_sys
 	./tests/test_system_stats
 	$(PYTHON) tests/test_binlog_sys.py ./tests/test_binlog_sys

@@ -173,9 +173,12 @@ static int send_private(struct ca_backend *backend, uint8_t control,
         errno = EMSGSIZE;
         return -1;
     }
-    return backend->datagram_transport
+    const int result = backend->datagram_transport
                ? write_datagram(backend->uart_fd, frame, length)
                : write_all(backend->uart_fd, frame, length);
+    ca_binlog_packet(true, CA_PACKET_MT11, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                     0, 0, frame, length, result < 0 ? -errno : 0);
+    return result;
 }
 
 static int send_startup(struct ca_backend *backend)
@@ -381,6 +384,8 @@ static int select_image_lens(struct ca_backend *backend, bool wide)
 static void handle_private(void *opaque, const struct ca_private_frame *frame)
 {
     struct ca_backend *backend = (struct ca_backend*)(opaque);
+    ca_binlog_packet(false, CA_PACKET_MT11, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+                     0, 0, frame->raw, frame->raw_length);
 
     if (frame->source != MT11_MCU || frame->destination != MT11_SOURCE ||
         frame->link != MT11_LINK) {

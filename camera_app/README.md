@@ -1271,6 +1271,48 @@ and decode the resulting BIN file with pymavlink. It checks distinct TCP/UDP
 sender identities, precise command parameters, raw extended values,
 accepted/rejected/ignored controls, recording and vehicle telemetry.
 
+### SIYI and XFRobot packet BIN logging
+
+While BIN logging is active, `SIIN`/`SIOU` record incoming/outgoing SIYI packets
+and `XFIN`/`XFOU` record incoming/outgoing XFRobot packets, relative to the
+camera. This covers the public SDK service and the private camera-to-gimbal
+link on MT11, A8, ZR10 and Z1Mini. With `LOG_DISARMED=1`, logging starts before
+the backend opens so its startup commands are included.
+
+Incoming records contain complete, CRC-valid frames, including keepalives,
+unknown commands and commands rejected by control policy. Outgoing records
+capture send attempts or queue submissions once per packet, rather than once
+per partial write. `Res=0` means received or successfully sent/queued locally;
+negative values are send errors (`-errno`), not a remote acknowledgement.
+Later failures of queued transmissions do not change the record. Corrupt or
+incomplete input is not included; use network capture for those wire bytes.
+
+| Field | Meaning |
+| --- | --- |
+| `TimeUS`, `Id` | Local monotonic time in microseconds and packet ID shared by all chunks of one packet. |
+| `Lnk` | 1 public UDP, 2 public TCP, 3 public UART, 4 private MCU UART, 5 private MCU UDP (SITL). |
+| `Proto` | 1 public SIYI, 2 MT11 private, 3 A8/ZR10 private SIYI, 4 public XFRobot, 5 Z1Mini private XFRobot. |
+| `IP`, `Port` | Public network peer, in host byte order (`127.0.0.1` is `0x7f000001`); zero for UART and private links. |
+| `Src`, `Dst` | Private SIYI source/destination IDs; zero where the protocol has no such fields. These are not MAVLink system IDs. |
+| `Cmd`, `Seq` | Wire command and sequence, or 65535 when absent. |
+| `Len`, `Ofs` | Total frame length and this chunk's byte offset. |
+| `D1`, `D2`, `D3` | Three DataFlash `a` arrays holding up to 192 raw bytes, zero padded in the final chunk. |
+
+Unlike MAVProxy's decoded SIYI `P1`/`P2` fields, these records preserve the
+entire frame, including headers, payload and CRC, without needing to know its
+command layout. For a pymavlink record `m`, recover a chunk with
+`struct.pack('<96h', *m.D1, *m.D2, *m.D3)[:min(192, m.Len-m.Ofs)]`.
+Group records by `Id` within a log and concatenate chunks in `Ofs` order;
+check offsets are contiguous and the result contains exactly `Len` bytes.
+Tunneled SDK frames are also retained inside their private transport frames.
+All chunks are queued together; overload drops a whole packet and increments
+`STAT.Dropped` by its number of chunks. An interrupted file can still end in
+an incomplete packet, which should be discarded during reconstruction.
+
+Run `make -C camera_app vendor-binlog-test` to compare reconstructed bytes
+against live TCP/UDP/UART traffic on all four simulated camera backends,
+including large packets, private frames, startup traffic and send errors.
+
 ### System health BIN logging
 
 While BIN logging is active, `SYS` records are written every five seconds by

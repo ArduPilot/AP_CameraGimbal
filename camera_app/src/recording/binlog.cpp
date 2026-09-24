@@ -31,7 +31,7 @@ static struct {
     struct entry *queue;
     char *root;
     unsigned head, count;
-    uint32_t dropped, errors;
+    uint32_t dropped, errors, packet_id;
     bool initialized, active, quit;
 } logger = { .mutex=PTHREAD_MUTEX_INITIALIZER, .wake=PTHREAD_COND_INITIALIZER };
 struct __attribute__((packed)) fmt_record {
@@ -74,6 +74,10 @@ static const struct fmt_record formats[] = {
     FMT(CA_LOG_GMBC,ca_log_gmbc,"GMBC","QBBBBHfffffffB","TimeUS,TS,TC,SS,SC,Flg,Q1,Q2,Q3,Q4,VX,VY,VZ,Res"),
     FMT(CA_LOG_MAVP,ca_log_mavp,"MAVP","QBBBBBBNfBaa","TimeUS,TS,TC,SS,SC,PT,Ext,Name,Val,Res,Raw1,Raw2"),
     FMT(CA_LOG_MAVH,ca_log_mavh,"MAVH","QBBIBBBBB","TimeUS,SS,SC,Mode,Type,AP,Base,State,Ver"),
+    FMT(CA_LOG_SIIN,ca_log_packet,"SIIN","QIBBIHBBHHHHiaaa","TimeUS,Id,Lnk,Proto,IP,Port,Src,Dst,Cmd,Seq,Len,Ofs,Res,D1,D2,D3"),
+    FMT(CA_LOG_SIOU,ca_log_packet,"SIOU","QIBBIHBBHHHHiaaa","TimeUS,Id,Lnk,Proto,IP,Port,Src,Dst,Cmd,Seq,Len,Ofs,Res,D1,D2,D3"),
+    FMT(CA_LOG_XFIN,ca_log_packet,"XFIN","QIBBIHBBHHHHiaaa","TimeUS,Id,Lnk,Proto,IP,Port,Src,Dst,Cmd,Seq,Len,Ofs,Res,D1,D2,D3"),
+    FMT(CA_LOG_XFOU,ca_log_packet,"XFOU","QIBBIHBBHHHHiaaa","TimeUS,Id,Lnk,Proto,IP,Port,Src,Dst,Cmd,Seq,Len,Ofs,Res,D1,D2,D3"),
     FMT(CA_LOG_CAM,ca_log_cam,"CAM","QBiLLffff","TimeUS,Scope,Result,Lat,Lng,Alt,Roll,Pitch,Yaw"),
     FMT(CA_LOG_VID,ca_log_vid,"VID","QBiZ","TimeUS,Active,Result,Path"),
     FMT(CA_LOG_GCMD,ca_log_gcmd,"GCMD","QBffffi","TimeUS,Mode,Pitch,Yaw,WireP,WireY,Result"),
@@ -115,6 +119,47 @@ void ca_binlog_emit(uint8_t id, const void *data, size_t size)
     }
     pthread_mutex_unlock(&logger.mutex);
 }
+void ca_binlog_packet(bool outgoing, uint8_t protocol, uint8_t link,
+                     uint32_t ip, uint16_t port, const uint8_t *data, size_t length, int32_t result)
+{
+    if (!data || !length || length > UINT16_MAX) return;
+    const int saved_errno = errno;
+    pthread_mutex_lock(&logger.mutex);
+    if (!logger.active) { pthread_mutex_unlock(&logger.mutex); return; }
+    ca_log_packet r = {.time_us=ca_binlog_time_us(), .packet_id=++logger.packet_id,
+        .link=link, .protocol=protocol, .ip=ip, .port=port, .source=0, .destination=0,
+        .command=UINT16_MAX, .sequence=UINT16_MAX, .length=(uint16_t)length, .offset=0, .result=result};
+    const auto get16 = [](const uint8_t *p) { return uint16_t(p[0] | (uint16_t(p[1]) << 8)); };
+    if (protocol == CA_PACKET_SIYI && length >= 10) {
+        r.command=data[7]; r.sequence=get16(data+5);
+    } else if (protocol == CA_PACKET_MT11 && length >= 14) {
+        r.source=data[8]; r.destination=data[9]; r.command=data[11]; r.sequence=get16(data+6);
+    } else if (protocol == CA_PACKET_SIYI_MCU && length >= 13) {
+        r.source=data[7]; r.destination=data[8]; r.command=data[10]; r.sequence=get16(data+5);
+    } else if (protocol == CA_PACKET_XFROBOT && length >= 72) {
+        r.command=data[69];
+    }
+    const size_t count = (length+sizeof(r.data)-1)/sizeof(r.data);
+    if (logger.count+count > QUEUE_SIZE-2) {
+        logger.dropped += count;
+    } else {
+        const bool siyi = protocol <= CA_PACKET_SIYI_MCU;
+        entry e = {.length=uint16_t(sizeof(r)+3), .kind=0};
+        e.data[0]=0xa3; e.data[1]=0x95;
+        e.data[2]=siyi ? (outgoing ? CA_LOG_SIOU : CA_LOG_SIIN) : (outgoing ? CA_LOG_XFOU : CA_LOG_XFIN);
+        for (size_t offset=0; offset<length; offset+=sizeof(r.data)) {
+            r.offset=offset;
+            const size_t n = length-offset < sizeof(r.data) ? length-offset : sizeof(r.data);
+            memset(r.data, 0, sizeof(r.data));
+            memcpy(r.data, data+offset, n);
+            memcpy(e.data+3, &r, sizeof(r));
+            enqueue(&e);
+        }
+    }
+    pthread_mutex_unlock(&logger.mutex);
+    errno=saved_errno;
+}
+
 void ca_binlog_message(const char *text)
 {
     struct ca_log_msg r={.time_us=ca_binlog_time_us()};

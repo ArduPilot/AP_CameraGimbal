@@ -4,6 +4,7 @@
 #include "camera_app/siyi_server.h"
 
 #include "camera_app/external_uart.h"
+#include "camera_app/binlog.h"
 #include "camera_app/log.h"
 #include "camera_app/siyi.h"
 
@@ -49,6 +50,7 @@ struct route {
 
 struct tcp_client {
     int fd;
+    struct sockaddr_in peer;
     uint32_t generation;
     uint8_t input[CA_SIYI_STREAM_BUFFER];
     size_t input_length;
@@ -281,7 +283,24 @@ static int queue_client(struct ca_siyi_server *server, unsigned slot,
     return flush_client(server, slot);
 }
 
-static int send_route(struct ca_siyi_server *server, const struct route *route,
+static void log_packet(const ca_siyi_server *server, const route *route,
+                       const uint8_t *packet, size_t length, bool outgoing, int result=0)
+{
+    const sockaddr_in *peer = nullptr;
+    uint8_t link=CA_PACKET_UART;
+    if (route->kind == ROUTE_UDP && route->address.ss_family == AF_INET) {
+        link=CA_PACKET_UDP;
+        peer=reinterpret_cast<const sockaddr_in *>(&route->address);
+    } else if (route->kind == ROUTE_TCP) {
+        link=CA_PACKET_TCP;
+        if (route->slot < CA_SIYI_TCP_CLIENTS && server->clients[route->slot].generation == route->generation)
+            peer=&server->clients[route->slot].peer;
+    }
+    ca_binlog_packet(outgoing, CA_PACKET_SIYI, link, peer ? ntohl(peer->sin_addr.s_addr) : 0,
+                     peer ? ntohs(peer->sin_port) : 0, packet, length, result);
+}
+
+static int send_route_unlogged(struct ca_siyi_server *server, const struct route *route,
                       const uint8_t *packet, size_t length)
 {
     if (!route_valid(server, route)) {
@@ -300,6 +319,14 @@ static int send_route(struct ca_siyi_server *server, const struct route *route,
         return queue_uart(server, packet, length);
     }
     return queue_client(server, route->slot, packet, length);
+}
+
+static int send_route(struct ca_siyi_server *server, const struct route *route,
+                      const uint8_t *packet, size_t length)
+{
+    const int result=send_route_unlogged(server, route, packet, length);
+    log_packet(server, route, packet, length, true, result < 0 ? -errno : 0);
+    return result;
 }
 
 static void purge_pending(struct ca_siyi_server *server, uint64_t now)
@@ -430,6 +457,7 @@ static int dispatch_packet(struct ca_siyi_server *server,
     }
     /* The vendor TCP service expects this one-byte keepalive.  It is a
      * transport heartbeat rather than a camera/MCU command. */
+    log_packet(server, route, packet, length, false);
     if (route->kind == ROUTE_TCP && parsed.opcode == 0x00U &&
         parsed.payload_length == 1U && parsed.payload[0] == 0U) {
         return 0;
@@ -606,6 +634,7 @@ static int accept_clients(struct ca_siyi_server *server)
         (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         struct tcp_client *client = &server->clients[slot];
         client->fd = fd;
+        client->peer = peer;
         if (++client->generation == 0U) client->generation = 1U;
         client->input_length = 0U;
         client->output_offset = 0U;

@@ -2324,17 +2324,19 @@ static void update_binlog(struct ca_mavlink_server *server, bool allow_stop)
     if (wanted && !ca_binlog_active() && (!server->log_retry_ms || now-server->log_retry_ms>=10000)) {
         server->log_retry_ms=now;
         started=ca_binlog_start(&server->parameters);
-        if (started) {
-            server->log_snapshot_valid=false;
-            for (size_t i=0;i<128;i++) server->logged_camera[i]=NAN;
-            server->log_status_ms=0;
-            struct ca_log_vid video={.time_us=ca_binlog_time_us(),.active=ca_media_recording(server->media)};
-            const char *path=ca_media_recording_path(server->media);
-            if (path) snprintf(video.path,sizeof(video.path),"%s",path);
-            ca_binlog_emit(CA_LOG_VID,&video,sizeof(video));
-        }
     }
     if (!ca_binlog_active()) return;
+    // Disarmed logging can start before backend initialization so startup MCU
+    // packets are retained. Take the initial media snapshot here in that case too.
+    if (started || !server->log_snapshot_valid) {
+        server->log_snapshot_valid=false;
+        for (size_t i=0;i<128;i++) server->logged_camera[i]=NAN;
+        server->log_status_ms=0;
+        struct ca_log_vid video={.time_us=ca_binlog_time_us(),.active=ca_media_recording(server->media)};
+        const char *path=ca_media_recording_path(server->media);
+        if (path) snprintf(video.path,sizeof(video.path),"%s",path);
+        ca_binlog_emit(CA_LOG_VID,&video,sizeof(video));
+    }
     if (!server->log_snapshot_valid || now-server->log_snapshot_ms>=100) {
         server->log_snapshot_ms=now;
         for (size_t i=0;i<ca_config_param_count() && i<128;i++) {
