@@ -487,13 +487,11 @@ static void broadcast_heartbeats(struct ca_mavlink_server *server)
     broadcast_message(server, &message);
 }
 
-static void send_ack(struct ca_mavlink_server *server, const struct route *route,
+static uint8_t send_ack(struct ca_mavlink_server *server, const struct route *route,
                      uint8_t component_id, uint16_t command, uint8_t result,
                      const mavlink_message_t *request)
 {
     mavlink_message_t message;
-    CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=command,.system=request->sysid,
-        .component=request->compid,.result=result);
     mavlink_command_ack_t ack = {};
     ack.command = command;
     ack.result = result;
@@ -504,6 +502,7 @@ static void send_ack(struct ca_mavlink_server *server, const struct route *route
                                                 &server->encode_status,
                                                 &message, &ack);
     (void)send_message(server, route, &message);
+    return result;
 }
 
 /* Fill a fixed-size string field; a full field carries no terminator. */
@@ -1587,12 +1586,12 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
     }
 }
 
-static void handle_command_long(struct ca_mavlink_server *server,
+static uint8_t handle_command_long(struct ca_mavlink_server *server,
                                 const struct route *route,
                                 const mavlink_message_t *message)
 {
     /* MAVLink 2 trims the trailing zero confirmation byte. */
-    if (message->len < 32U) return;
+    if (message->len < 32U) return 255;
     mavlink_command_long_t request;
     mavlink_msg_command_long_decode(message, &request);
     float params[7] = {request.param1, request.param2, request.param3,
@@ -1611,20 +1610,18 @@ static void handle_command_long(struct ca_mavlink_server *server,
             } else {
                 send_gimbal_status(server, route);
             }
-            send_ack(server, route, server->gimbal_component_id, command,
+            return send_ack(server, route, server->gimbal_component_id, command,
                      MAV_RESULT_ACCEPTED, message);
-            return;
         }
         if (target_component == server->gimbal_component_id) {
-            send_ack(server, route, server->gimbal_component_id, command,
+            return send_ack(server, route, server->gimbal_component_id, command,
                      MAV_RESULT_UNSUPPORTED, message);
-            return;
         }
     }
     if (!target_matches(server, target_system, target_component,
-                        server->camera_component_id)) return;
+                        server->camera_component_id)) return 255;
     uint8_t result = handle_camera_command(server, route, message, command, params);
-    send_ack(server, route, server->camera_component_id, command, result, message);
+    return send_ack(server, route, server->camera_component_id, command, result, message);
 }
 
 static void quaternion_to_euler(const float q[4], float *roll, float *pitch,
@@ -1696,7 +1693,8 @@ static void handle_autopilot_state_for_gimbal(
     ca_metadata_set_velocity(state.vx, state.vy, state.vz, sample_ms);
     CA_BINLOG(CA_LOG_ATT, ca_log_att, .boot_ms=(uint32_t)(state.time_boot_us/1000),
         .source=1, .roll=roll*57.295779513f,.pitch=pitch*57.295779513f,
-        .yaw=yaw*57.295779513f,.rollrate=NAN,.pitchrate=NAN,.yawrate=yaw_rate*57.295779513f);
+        .yaw=yaw*57.295779513f,.rollrate=NAN,.pitchrate=NAN,.yawrate=yaw_rate*57.295779513f,
+        .source_system=message->sysid,.source_component=message->compid);
 }
 
 static void handle_attitude(struct ca_mavlink_server *server,
@@ -1717,7 +1715,8 @@ static void handle_attitude(struct ca_mavlink_server *server,
     CA_BINLOG(CA_LOG_ATT, ca_log_att, .boot_ms=attitude.time_boot_ms, .source=2,
         .roll=attitude.roll*57.295779513f,.pitch=attitude.pitch*57.295779513f,
         .yaw=attitude.yaw*57.295779513f,.rollrate=attitude.rollspeed*57.295779513f,
-        .pitchrate=attitude.pitchspeed*57.295779513f,.yawrate=attitude.yawspeed*57.295779513f);
+        .pitchrate=attitude.pitchspeed*57.295779513f,.yawrate=attitude.yawspeed*57.295779513f,
+        .source_system=message->sysid,.source_component=message->compid);
     uint64_t sample_ms;
     bool reset;
     const uint64_t now = monotonic_ms();
@@ -1804,7 +1803,8 @@ static void handle_global_position_int(
                               position.vz * 0.01f, sample_ms);
     CA_BINLOG(CA_LOG_POS, ca_log_pos, .boot_ms=position.time_boot_ms,
         .lat=lat_e7,.lon=lon_e7,.alt=alt_mm*.001f,.relalt=relative_alt_mm*.001f,
-        .vn=position.vx*.01f,.ve=position.vy*.01f,.vd=position.vz*.01f);
+        .vn=position.vx*.01f,.ve=position.vy*.01f,.vd=position.vz*.01f,
+        .source_system=message->sysid,.source_component=message->compid);
     bool first_position = !server->have_vehicle_position;
     server->vehicle_lat_e7 = lat_e7;
     server->vehicle_lon_e7 = lon_e7;
@@ -1836,25 +1836,24 @@ static bool clear_target_location(struct ca_mavlink_server *server)
     return was_active;
 }
 
-static void handle_command_int(struct ca_mavlink_server *server,
+static uint8_t handle_command_int(struct ca_mavlink_server *server,
                                const struct route *route,
                                const mavlink_message_t *message)
 {
     /* MAVLink 2 trims all trailing zero fields, including broadcast targets
      * and the global frame.  Only the command field itself must be present. */
     mavlink_command_int_t request;
-    if (message->len < 29U) return;
+    if (message->len < 29U) return 255;
     mavlink_msg_command_int_decode(message, &request);
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) {
-        return;
+        return 255;
     }
     uint16_t command = request.command;
     uint8_t result = MAV_RESULT_UNSUPPORTED;
     if (server->manual_control && *server->manual_control &&
         (command==MAV_CMD_DO_SET_ROI_LOCATION || command==MAV_CMD_DO_SET_ROI_NONE)) {
-        send_ack(server,route,server->gimbal_component_id,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
-        return;
+        return send_ack(server,route,server->gimbal_component_id,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
     }
     if (command == MAV_CMD_DO_SET_ROI_LOCATION) {
         uint8_t frame = request.frame;
@@ -1891,25 +1890,24 @@ static void handle_command_int(struct ca_mavlink_server *server,
         result = MAV_RESULT_ACCEPTED;
         if (was_active) ca_log("MAVLink location target cleared");
     }
-    send_ack(server, route, server->gimbal_component_id, command, result, message);
+    return send_ack(server, route, server->gimbal_component_id, command, result, message);
 }
 
-static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
+static uint8_t handle_gimbal_set_attitude(struct ca_mavlink_server *server,
                                        const mavlink_message_t *message)
 {
-    if (server->manual_control && *server->manual_control) return;
     mavlink_gimbal_device_set_attitude_t request;
-    if (message->len < MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_MIN_LEN) return;
+    if (message->len < MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_MIN_LEN) return 255;
     mavlink_msg_gimbal_device_set_attitude_decode(message, &request);
     uint16_t flags = request.flags;
     if (!target_matches(server, request.target_system, request.target_component,
-                        server->gimbal_component_id)) return;
+                        server->gimbal_component_id)) return 255;
+    if (server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
     clear_target_location(server);
     if ((flags & (GIMBAL_DEVICE_FLAGS_RETRACT | GIMBAL_DEVICE_FLAGS_NEUTRAL)) !=
         0U) {
         server->yaw_lock = false;
-        (void)ca_backend_set_gimbal_neutral(server->backend);
-        return;
+        return ca_backend_set_gimbal_neutral(server->backend) == 0 ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
     }
     bool earth_yaw;
     if ((flags & GIMBAL_DEVICE_FLAGS_YAW_IN_EARTH_FRAME) != 0U) {
@@ -1923,7 +1921,7 @@ static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
     float vehicle_yaw_rate = 0.0f;
     if (earth_yaw && !current_vehicle_attitude(
             server, &vehicle_yaw, &vehicle_yaw_rate)) {
-        return;
+        return MAV_RESULT_TEMPORARILY_REJECTED;
     }
     server->yaw_lock = earth_yaw;
     float pitch_rate = request.angular_velocity_y;
@@ -1932,8 +1930,7 @@ static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
         if (!isfinite(pitch_rate)) pitch_rate = 0.0f;
         if (!isfinite(yaw_rate)) yaw_rate = 0.0f;
         if (earth_yaw) yaw_rate -= vehicle_yaw_rate;
-        (void)ca_backend_set_gimbal_rates(server->backend, pitch_rate, yaw_rate);
-        return;
+        return ca_backend_set_gimbal_rates(server->backend, pitch_rate, yaw_rate) == 0 ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
     }
     float q[4];
     for (unsigned i = 0; i < 4U; i++) q[i] = request.q[i];
@@ -1942,8 +1939,9 @@ static void handle_gimbal_set_attitude(struct ca_mavlink_server *server,
         quaternion_to_euler(q, &roll, &pitch, &yaw);
         (void)roll;
         if (earth_yaw) yaw = wrap_pi_f(yaw - vehicle_yaw);
-        (void)ca_backend_set_gimbal_angles(server->backend, pitch, yaw);
+        return ca_backend_set_gimbal_angles(server->backend, pitch, yaw) == 0 ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
     }
+    return MAV_RESULT_DENIED;
 }
 
 /* The camera component owns the shared camera/gimbal configuration. Values
@@ -2195,7 +2193,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         "All saved settings applied without restarting the camera app.");
 }
 
-static void handle_parameter(struct ca_mavlink_server *server,
+static uint8_t handle_parameter(struct ca_mavlink_server *server,
                               const mavlink_message_t *message)
 {
     uint8_t system, component;
@@ -2222,15 +2220,16 @@ static void handle_parameter(struct ca_mavlink_server *server,
         memcpy(name, set.param_id, sizeof(set.param_id));
         index = ca_config_param_find(name);
     }
-    if (!target_matches(server, system, component, server->camera_component_id)) return;
+    if (!target_matches(server, system, component, server->camera_component_id)) return 255;
     refresh_parameters(server);
     if (message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_LIST) {
         /* Pace the list in periodic() so even a UART can drain between values. */
         server->next_parameter = 0U;
         server->parameter_list_active = true;
-        return;
+        return 255;
     }
-    if (index < 0 || (size_t)index >= ca_config_param_count()) return;
+    if (index < 0 || (size_t)index >= ca_config_param_count()) return PARAM_ACK_VALUE_UNSUPPORTED;
+    uint8_t result = PARAM_ACK_ACCEPTED;
     if (message->msgid == MAVLINK_MSG_ID_PARAM_SET) {
         /* MAVProxy may send REAL32 even for an integer parameter. Validate
          * the numeric value without truncating fractional or non-finite input. */
@@ -2241,12 +2240,14 @@ static void handle_parameter(struct ca_mavlink_server *server,
                 ca_config_param_save(&server->parameters, server->config_path,
                                      (size_t)index, set.param_value)) < 0) {
             parameter_status(server, "Parameter write rejected; value unchanged");
+            result = PARAM_ACK_FAILED;
         } else if (!live_config_parameter((size_t)index)) {
             ca_binlog_parameter(ca_config_param_name((size_t)index),set.param_value,false);
             parameter_status(server, "Parameter saved; restart camera-app to apply");
         }
     }
     send_parameter(server, (size_t)index);
+    return result;
 }
 
 /* Camera definition settings use binary little-endian PARAM_EXT values,
@@ -2429,7 +2430,7 @@ static void send_ext_parameter(struct ca_mavlink_server *server,
     (void)send_message(server, route, &response);
 }
 
-static void handle_ext_parameter(struct ca_mavlink_server *server,
+static uint8_t handle_ext_parameter(struct ca_mavlink_server *server,
                                    const struct route *route, const mavlink_message_t *message)
 {
     uint8_t system, component;
@@ -2455,7 +2456,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
         memcpy(name, set.param_id, 16);
         index = ca_camera_param_find(name);
     }
-    if (!target_matches(server, system, component, server->camera_component_id)) return;
+    if (!target_matches(server, system, component, server->camera_component_id)) return 255;
     refresh_parameters(server);
     if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
         struct ext_parameter_list *list = NULL;
@@ -2474,13 +2475,13 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
             list->component = message->compid;
             list->route = *route;
         }
-        return;
+        return 255;
     }
     struct ca_camera_parameter p;
     bool found = index >= 0 && ca_camera_param_info((size_t)index, &p);
     if (message->msgid != MAVLINK_MSG_ID_PARAM_EXT_SET) {
         if (found) send_ext_parameter(server, route, (size_t)index);
-        return;
+        return 255;
     }
     mavlink_param_ext_ack_t ack {};
     ack.param_result = PARAM_ACK_VALUE_UNSUPPORTED;
@@ -2517,6 +2518,7 @@ static void handle_ext_parameter(struct ca_mavlink_server *server,
         ca_binlog_parameter(p.name,current,false);
         send_camera_settings(server, route);
     }
+    return ack.param_result;
 }
 
 static void handle_camera_ftp(struct ca_mavlink_server *server,
@@ -2548,6 +2550,67 @@ static void handle_camera_ftp(struct ca_mavlink_server *server,
     }
 }
 
+static void log_mavlink_command(const mavlink_message_t *message, uint8_t result)
+{
+    ca_log_mavc r = {.time_us=ca_binlog_time_us()};
+    r.source_system = message->sysid;
+    r.source_component = message->compid;
+    r.result = result;
+    if (message->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
+        mavlink_command_long_t c;
+        mavlink_msg_command_long_decode(message, &c);
+        r.target_system=c.target_system; r.target_component=c.target_component;
+        r.frame=255; r.command=c.command; r.was_long=1;
+        r.p1=c.param1; r.p2=c.param2; r.p3=c.param3; r.p4=c.param4;
+        r.x=c.param5; r.y=c.param6; r.z=c.param7;
+    } else {
+        mavlink_command_int_t c;
+        mavlink_msg_command_int_decode(message, &c);
+        r.target_system=c.target_system; r.target_component=c.target_component;
+        r.frame=c.frame; r.command=c.command;
+        r.p1=c.param1; r.p2=c.param2; r.p3=c.param3; r.p4=c.param4;
+        r.x=c.x; r.y=c.y; r.z=c.z;
+    }
+    ca_binlog_emit(CA_LOG_MAVC, &r, sizeof(r));
+}
+
+static void log_gimbal_setpoint(const mavlink_message_t *message, uint8_t result)
+{
+    mavlink_gimbal_device_set_attitude_t c;
+    mavlink_msg_gimbal_device_set_attitude_decode(message, &c);
+    CA_BINLOG(CA_LOG_GMBC, ca_log_gmbc,
+        .target_system=c.target_system, .target_component=c.target_component,
+        .source_system=message->sysid, .source_component=message->compid,
+        .flags=c.flags, .q={c.q[0], c.q[1], c.q[2], c.q[3]},
+        .rates={c.angular_velocity_x, c.angular_velocity_y, c.angular_velocity_z}, .result=result);
+}
+
+static void log_parameter_write(const mavlink_message_t *message, uint8_t result)
+{
+    ca_log_mavp r = {.time_us=ca_binlog_time_us()};
+    r.source_system=message->sysid; r.source_component=message->compid;
+    r.result=result;
+    if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_SET) {
+        mavlink_param_ext_set_t c;
+        mavlink_msg_param_ext_set_decode(message, &c);
+        r.target_system=c.target_system; r.target_component=c.target_component;
+        r.type=c.param_type; r.extended=1;
+        memcpy(r.name, c.param_id, sizeof(r.name));
+        memcpy(r.raw, c.param_value, sizeof(r.raw));
+        r.value=(c.param_type == MAV_PARAM_EXT_TYPE_UINT8 || c.param_type == MAV_PARAM_EXT_TYPE_INT32 ||
+                 c.param_type == MAV_PARAM_EXT_TYPE_REAL32) ? ext_decode(c.param_value, c.param_type) : NAN;
+    } else {
+        mavlink_param_set_t c;
+        mavlink_msg_param_set_decode(message, &c);
+        r.target_system=c.target_system; r.target_component=c.target_component;
+        r.type=c.param_type;
+        memcpy(r.name, c.param_id, sizeof(r.name));
+        memcpy(r.raw, &c.param_value, sizeof(c.param_value));
+        r.value=c.param_value;
+    }
+    ca_binlog_emit(CA_LOG_MAVP, &r, sizeof(r));
+}
+
 static void process_message(struct ca_mavlink_server *server,
                             const struct route *route,
                             const mavlink_message_t *message)
@@ -2567,19 +2630,6 @@ static void process_message(struct ca_mavlink_server *server,
         broadcast_heartbeats(server);
     }
     if (server->system_id == 0U) return;
-    if (message->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
-        mavlink_command_long_t c;
-        mavlink_msg_command_long_decode(message,&c);
-        CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=c.command,.system=message->sysid,
-            .component=message->compid,.result=255,.p1=c.param1,.p2=c.param2,.p3=c.param3,
-            .p4=c.param4,.p5=c.param5,.p6=c.param6,.p7=c.param7);
-    } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_INT) {
-        mavlink_command_int_t c;
-        mavlink_msg_command_int_decode(message,&c);
-        CA_BINLOG(CA_LOG_CMD,ca_log_cmd,.command=c.command,.system=message->sysid,
-            .component=message->compid,.result=255,.p1=c.param1,.p2=c.param2,.p3=c.param3,
-            .p4=c.param4,.p5=c.x*1.e-7f,.p6=c.y*1.e-7f,.p7=c.z);
-    }
     if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 7U &&
         message->sysid == server->system_id &&
         message->compid == MAV_COMP_ID_AUTOPILOT1) {
@@ -2589,6 +2639,12 @@ static void process_message(struct ca_mavlink_server *server,
         server->vehicle_armed = armed;
         server->flight_mode = mavlink_msg_heartbeat_get_custom_mode(message);
         update_binlog(server, false);
+        mavlink_heartbeat_t heartbeat;
+        mavlink_msg_heartbeat_decode(message, &heartbeat);
+        CA_BINLOG(CA_LOG_MAVH, ca_log_mavh,
+            .source_system=message->sysid, .source_component=message->compid,
+            .custom_mode=heartbeat.custom_mode, .type=heartbeat.type, .autopilot=heartbeat.autopilot,
+            .base_mode=heartbeat.base_mode, .system_status=heartbeat.system_status, .version=heartbeat.mavlink_version);
         /* Reconcile on each matching heartbeat, including the first heartbeat
          * after a restart while airborne. Link loss is not a disarm event. */
         if (server->settings.autorecord == CA_AUTORECORD_WHILE_ARMED &&
@@ -2610,13 +2666,21 @@ static void process_message(struct ca_mavlink_server *server,
     if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST ||
         message->msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ ||
         message->msgid == MAVLINK_MSG_ID_PARAM_EXT_SET) {
-        handle_ext_parameter(server, route, message);
+        uint8_t result = handle_ext_parameter(server, route, message);
+        if (message->msgid == MAVLINK_MSG_ID_PARAM_EXT_SET) {
+            update_binlog(server, false); // Include the write which enables LOG_DISARMED.
+            log_parameter_write(message, result);
+        }
         return;
     }
     if (message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_LIST ||
         message->msgid == MAVLINK_MSG_ID_PARAM_REQUEST_READ ||
         message->msgid == MAVLINK_MSG_ID_PARAM_SET) {
-        handle_parameter(server, message);
+        uint8_t result = handle_parameter(server, message);
+        if (message->msgid == MAVLINK_MSG_ID_PARAM_SET) {
+            update_binlog(server, false);
+            log_parameter_write(message, result);
+        }
         return;
     }
     // GCS heartbeats can be forwarded over the same ArduPilot NET link.  Do
@@ -2634,7 +2698,7 @@ static void process_message(struct ca_mavlink_server *server,
             server->gimbal_information_announced = true;
         }
     } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
-        handle_command_long(server, route, message);
+        log_mavlink_command(message, handle_command_long(server, route, message));
     } else if (message->msgid == MAVLINK_MSG_ID_GLOBAL_POSITION_INT) {
         handle_global_position_int(server, message);
     } else if (message->msgid == MAVLINK_MSG_ID_ATTITUDE) {
@@ -2642,12 +2706,12 @@ static void process_message(struct ca_mavlink_server *server,
     } else if (message->msgid == MAVLINK_MSG_ID_SYSTEM_TIME) {
         handle_system_time(server, message);
     } else if (message->msgid == MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE) {
-        handle_gimbal_set_attitude(server, message);
+        log_gimbal_setpoint(message, handle_gimbal_set_attitude(server, message));
     } else if (message->msgid ==
                MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE) {
         handle_autopilot_state_for_gimbal(server, message);
     } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_INT) {
-        handle_command_int(server, route, message);
+        log_mavlink_command(message, handle_command_int(server, route, message));
     }
 }
 

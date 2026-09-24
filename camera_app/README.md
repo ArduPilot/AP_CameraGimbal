@@ -1219,6 +1219,58 @@ overlays can be selected independently without changing the live image.
 The hardware/SITL raster comparison is `tests/test_overlay.py`; live encoded
 video checks are included in `make sitl-image-controls-test`.
 
+### MAVLink control BIN logging
+
+BIN logging runs while armed, or on the bench with `LOG_DISARMED=1`
+(`[logging] disarmed=true`). All incoming `COMMAND_LONG` and `COMMAND_INT`
+requests handled by the MAVLink dispatcher now produce one `MAVC` record with
+the original parameters and final command result, replacing the old separate
+`CMD` request/ACK records. Unsupported commands and requests addressed to other
+components are also recorded while logging is active.
+
+Every control request record includes `SS`/`SC` (source system/component) and
+`TS`/`TC` (target system/component). These are the IDs from the received packet,
+including broadcast targets, regardless of whether it arrived over UART, TCP,
+UDP or SupportProxy. They identify the MAVLink sender, not necessarily the
+original GCS if a flight controller generates a new command on its behalf.
+
+| Record | Contents |
+| --- | --- |
+| `MAVC` | Command number, source/target IDs, frame, seven parameters, result and `WL` (1 for LONG, 0 for INT). |
+| `GMBC` | `GIMBAL_DEVICE_SET_ATTITUDE` source/target IDs, flags, original quaternion, all three angular rates (rad/s), and local handling result. Includes angle/rate, neutral/retract, manual-control lockout and unavailable vehicle-attitude cases. |
+| `MAVP` | `PARAM_SET` / `PARAM_EXT_SET` source/target IDs, name, parameter type (`PT`), extended-protocol flag (`Ext`), requested numeric value (`Val`), raw value bytes and handling result. Includes rejected and unknown parameters. |
+| `MAVH` | Flight-controller heartbeats consumed for armed-state recording: source IDs, custom/base mode, vehicle/autopilot type, system status and MAVLink version. Written before the resulting recording change and before stopping a disarmed log. |
+
+`MAVC` follows ArduPilot's field names, with double-precision `X`/`Y` so both
+INT coordinates and LONG floating-point parameters are preserved. With `WL=0`,
+`X`/`Y` are the original unscaled integers; with `WL=1`, they are the original
+P5/P6 values, including fractions and NaNs. `Z` is P7. LONG has no coordinate
+frame, so `Fr=255`. `Res` uses `MAV_RESULT`; 255 means ignored/no command ACK.
+`GMBC.Res` uses the same result values for local disposition and does not add a
+MAVLink ACK. Acceptance describes command handling, not confirmed physical motion.
+
+`MAVP.Res` uses `PARAM_ACK` values (0 accepted, 1 unsupported, 2 failed) and 255
+for ignored requests. For ordinary `PARAM_SET` this is a local result; the wire
+protocol still replies with `PARAM_VALUE`. `Raw1` and `Raw2` are DataFlash `a`
+fields (32 little-endian int16 values each): concatenating their bytes recovers
+the entire 128-byte extended value. For ordinary writes, the first four bytes
+hold the received float and the remainder is zero. `Val` decodes the supported
+UINT8/INT32/REAL32 extended types; other types retain their raw bytes and use NaN.
+The write enabling `LOG_DISARMED` is included in the newly started log.
+
+Vehicle `ATT` and `POS` records also include `SS`/`SC`. In `ATT`, `Src` still
+identifies the telemetry type (1 autopilot gimbal state, 2 attitude), and the
+vehicle boot-time field is named `TBoot` (milliseconds, formerly `BootMS`) to
+fit the DataFlash column limit. Existing `GCMD`, `GIMB`, `CAM`, `VID`, `MODE`,
+`ROI`, `PARM` and `PRMA` records remain available for backend commands,
+feedback and resulting state, including non-MAVLink controls. Those outcome
+records do not attribute asynchronous or locally generated actions to a sender.
+
+Run `make -C camera_app mavlink-binlog-test` to exercise the live dispatcher
+and decode the resulting BIN file with pymavlink. It checks distinct TCP/UDP
+sender identities, precise command parameters, raw extended values,
+accepted/rejected/ignored controls, recording and vehicle telemetry.
+
 ### System health BIN logging
 
 While BIN logging is active, `SYS` records are written every five seconds by
