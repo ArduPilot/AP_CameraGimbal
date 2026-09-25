@@ -16,6 +16,12 @@ void ca_binlog_feedback(const struct ca_gimbal_attitude *attitude)
 {
     (void)attitude;
 }
+// This standalone framing test does not open a BIN log. Packet logging is
+// exercised separately by vendor-binlog-test with the real logger.
+void ca_binlog_packet(bool, uint8_t, uint8_t, uint32_t, uint16_t,
+                      const uint8_t *, size_t, int32_t)
+{
+}
 
 static unsigned frames;
 static uint64_t received_pts;
