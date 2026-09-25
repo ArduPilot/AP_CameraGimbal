@@ -6,6 +6,7 @@
 struct ca_siyi_server;
 struct ca_xfrobot_server;
 struct ca_media;
+struct ca_unigcs;
 
 // Owns the services and their shutdown order; driver/media workers stop before
 // the diagnostic logger closes. Partial startup follows the same cleanup path.
@@ -19,6 +20,7 @@ public:
 
 private:
     ca_siyi_server *_server = nullptr;
+    ca_unigcs *_unigcs = nullptr;
 #if APCAM_HAVE_XFROBOT
     ca_xfrobot_server *_xfrobot = nullptr;
 #endif

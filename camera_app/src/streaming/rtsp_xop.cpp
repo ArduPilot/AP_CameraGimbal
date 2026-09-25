@@ -3,6 +3,7 @@
 #include "camera_app/support_video.h"
 #include "camera_app/log.h"
 #include <cstdlib>
+#include <cstdio>
 #include <limits>
 
 #include "EventLoop.h"
@@ -40,14 +41,124 @@ extern "C" bool ca_rtsp_is_satip_client(const void *client)
     return satip_clients.find(client) != satip_clients.end();
 }
 
+// Compound RTCP sender report + SDES/CNAME. Caller supplies at least 64 bytes.
+// Values are host order; RTP octet counts exclude the RTP and TCP headers.
+extern "C" size_t ca_rtsp_sender_report(uint8_t *out, uint32_t ssrc, uint64_t ntp,
+                                        uint32_t timestamp, uint32_t packets,
+                                        uint32_t octets)
+{
+    const auto put32 = [](uint8_t *p, uint32_t value) {
+        for (unsigned i = 0; i < 4; i++) p[i] = value >> (24 - 8*i);
+    };
+    memset(out, 0, 64);
+    out[0] = 0x80; out[1] = 200; out[3] = 6;
+    put32(out+4, ssrc);
+    put32(out+8, ntp >> 32);
+    put32(out+12, ntp);
+    put32(out+16, timestamp);
+    put32(out+20, packets);
+    put32(out+24, octets);
+    char cname[24];
+    const size_t name_length = snprintf(cname, sizeof(cname), "apcam-%08x", ssrc);
+    const size_t sdes_length = (4 + 4 + 2 + name_length + 1 + 3) & ~size_t(3);
+    out[28] = 0x81; out[29] = 202; out[31] = sdes_length/4 - 1;
+    put32(out+32, ssrc);
+    out[36] = 1; out[37] = name_length;
+    memcpy(out+38, cname, name_length);
+    return 28 + sdes_length;
+}
+
+static std::string base64(const std::vector<uint8_t> &data)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    for (size_t i = 0; i < data.size(); i += 3) {
+        const unsigned n = (unsigned(data[i]) << 16) |
+            (i + 1 < data.size() ? unsigned(data[i+1]) << 8 : 0) |
+            (i + 2 < data.size() ? data[i+2] : 0);
+        result += alphabet[(n >> 18) & 63];
+        result += alphabet[(n >> 12) & 63];
+        result += i + 1 < data.size() ? alphabet[(n >> 6) & 63] : '=';
+        result += i + 2 < data.size() ? alphabet[n & 63] : '=';
+    }
+    return result;
+}
+
+// Updated before PushFrame, which skips sources when no clients are attached.
+// Aliases share the same parameters. DESCRIBE runs on the RTSP event thread.
+class CodecParameters {
+public:
+    explicit CodecParameters(ca_video_codec codec) : codec_(codec) {}
+    void update(const uint8_t *data, size_t size)
+    {
+        size_t offset = 0, nal, length;
+        std::lock_guard<std::mutex> lock(mutex_);
+        while (ca_annexb_next(data, size, &offset, &nal, &length)) {
+            // Bound the SDP size as well as cached encoder data.
+            if (length < 2 || length > 512) continue;
+            const unsigned type = codec_ == CA_VIDEO_H265 ? (data[nal] >> 1) & 63 : data[nal] & 31;
+            std::vector<uint8_t> *parameter = nullptr;
+            if (codec_ == CA_VIDEO_H265) {
+                if (type == 32) parameter = &vps_;
+                if (type == 33) parameter = &sps_;
+                if (type == 34) parameter = &pps_;
+            } else {
+                if (type == 7 && length >= 4) parameter = &sps_;
+                if (type == 8) parameter = &pps_;
+            }
+            if (parameter) parameter->assign(data + nal, data + nal + length);
+        }
+    }
+    std::string attribute()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (sps_.empty() || pps_.empty()) return "";
+        if (codec_ == CA_VIDEO_H265) {
+            if (vps_.empty()) return "";
+            return "a=rtpmap:96 H265/90000\r\na=fmtp:96 sprop-vps=" + base64(vps_) +
+                ";sprop-sps=" + base64(sps_) + ";sprop-pps=" + base64(pps_);
+        }
+        char profile[7];
+        snprintf(profile, sizeof(profile), "%02x%02x%02x", sps_[1], sps_[2], sps_[3]);
+        return std::string("a=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;profile-level-id=") +
+            profile + ";sprop-parameter-sets=" + base64(sps_) + "," + base64(pps_);
+    }
+private:
+    ca_video_codec codec_;
+    std::mutex mutex_;
+    std::vector<uint8_t> vps_, sps_, pps_;
+};
+
+// Build SDP on each DESCRIBE: xop caches its first SDP forever, including
+// missing encoder headers or the IP address of a different network interface.
+std::string ca_rtsp_sdp(xop::MediaSession *session, const std::string &ip)
+{
+    std::string sdp = "v=0\r\no=- " + std::to_string(session->GetMediaSessionId()) +
+        " 1 IN IP4 " + ip + "\r\ns=AP_CameraGimbal\r\nc=IN IP4 0.0.0.0\r\n"
+        "t=0 0\r\na=control:*\r\na=range:npt=0-\r\n";
+    for (int ch = 0; ch < xop::MAX_MEDIA_CHANNEL; ch++) {
+        auto *source = session->GetMediaSource(static_cast<xop::MediaChannelId>(ch));
+        if (!source) continue;
+        const std::string attribute = source->GetAttribute();
+        // Do not permanently advertise an incomplete decoder configuration
+        // when a client arrives before the encoder's first key frame.
+        if (attribute.empty()) return "";
+        sdp += source->GetMediaDescription(0) + "\r\n" + attribute +
+            "\r\na=control:track" + std::to_string(ch) + "\r\n";
+    }
+    return sdp;
+}
+
 /* xop's codec sources packetize one NAL and mark its final packet. Feed a
  * complete access unit here so only its final NAL carries the RTP marker. */
 class AccessUnitSource : public xop::MediaSource {
 public:
-    AccessUnitSource(enum ca_video_codec codec, unsigned frame_rate)
+    AccessUnitSource(enum ca_video_codec codec, unsigned frame_rate,
+                     std::shared_ptr<CodecParameters> parameters)
         : source_(codec == CA_VIDEO_H265
                       ? static_cast<xop::MediaSource *>(xop::H265Source::CreateNew(frame_rate))
-                      : static_cast<xop::MediaSource *>(xop::H264Source::CreateNew(frame_rate)))
+                      : static_cast<xop::MediaSource *>(xop::H264Source::CreateNew(frame_rate))),
+          parameters_(std::move(parameters))
     {
         media_type_ = source_->GetMediaType();
         payload_ = source_->GetPayloadType();
@@ -62,7 +173,7 @@ public:
     {
         return source_->GetMediaDescription(port);
     }
-    std::string GetAttribute() override { return source_->GetAttribute(); }
+    std::string GetAttribute() override { return parameters_->attribute(); }
     bool HandleFrame(xop::MediaChannelId channel, xop::AVFrame frame) override
     {
         timestamp_ = frame.timestamp;
@@ -83,6 +194,7 @@ public:
     }
 private:
     std::unique_ptr<xop::MediaSource> source_;
+    std::shared_ptr<CodecParameters> parameters_;
     bool last_nal_ = false;
     uint32_t timestamp_ = 0;
 };
@@ -90,6 +202,7 @@ private:
 struct ca_rtsp {
     struct stream {
         ca_support_video *publisher = nullptr;
+        std::shared_ptr<CodecParameters> parameters;
         xop::MediaSessionId session_id;
         std::vector<xop::MediaSessionId> aliases;
         enum ca_video_codec codec;
@@ -104,9 +217,11 @@ struct ca_rtsp {
 };
 
 static void add_stream(ca_rtsp *rtsp, xop::MediaSessionId session_id,
-                       enum ca_video_codec codec, unsigned frame_rate)
+                       enum ca_video_codec codec, unsigned frame_rate,
+                       std::shared_ptr<CodecParameters> parameters)
 {
     ca_rtsp::stream stream;
+    stream.parameters = std::move(parameters);
     stream.session_id = session_id;
     stream.codec = codec;
     stream.frame_rate = frame_rate;
@@ -130,10 +245,11 @@ extern "C" int ca_rtsp_open(struct ca_rtsp **result, unsigned port,
     if (!rtsp->server || !rtsp->server->Start("0.0.0.0", port)) return -1;
     xop::MediaSession *session = xop::MediaSession::CreateNew(path);
     if (session == nullptr) return -1;
-    session->AddSource(xop::channel_0, new AccessUnitSource(codec, frame_rate));
+    auto parameters = std::make_shared<CodecParameters>(codec);
+    session->AddSource(xop::channel_0, new AccessUnitSource(codec, frame_rate, parameters));
     xop::MediaSessionId session_id = rtsp->server->AddSession(session);
     if (session_id == 0) return -1;
-    add_stream(rtsp.get(), session_id, codec, frame_rate);
+    add_stream(rtsp.get(), session_id, codec, frame_rate, parameters);
     *result = rtsp.release();
     return 0;
 }
@@ -147,11 +263,12 @@ extern "C" int ca_rtsp_add_video(struct ca_rtsp *rtsp, const char *path,
     std::lock_guard<std::mutex> lock(rtsp->mutex);
     xop::MediaSession *session = xop::MediaSession::CreateNew(path);
     if (session == nullptr) return -1;
-    session->AddSource(xop::channel_0, new AccessUnitSource(codec, frame_rate));
+    auto parameters = std::make_shared<CodecParameters>(codec);
+    session->AddSource(xop::channel_0, new AccessUnitSource(codec, frame_rate, parameters));
     xop::MediaSessionId session_id = rtsp->server->AddSession(session);
     if (session_id == 0) return -1;
     *stream_id = static_cast<unsigned>(rtsp->streams.size());
-    add_stream(rtsp, session_id, codec, frame_rate);
+    add_stream(rtsp, session_id, codec, frame_rate, parameters);
     return 0;
 }
 
@@ -165,7 +282,7 @@ extern "C" int ca_rtsp_add_alias(struct ca_rtsp *rtsp, unsigned stream_id,
     ca_rtsp::stream &stream = rtsp->streams[stream_id];
     xop::MediaSession *session = xop::MediaSession::CreateNew(alias);
     if (session == nullptr) return -1;
-    session->AddSource(xop::channel_0, new AccessUnitSource(stream.codec, stream.frame_rate));
+    session->AddSource(xop::channel_0, new AccessUnitSource(stream.codec, stream.frame_rate, stream.parameters));
     xop::MediaSessionId session_id = rtsp->server->AddSession(session);
     if (session_id == 0) return -1;
     stream.aliases.push_back(session_id);
@@ -191,6 +308,7 @@ static int push_video(struct ca_rtsp *rtsp, unsigned stream_id,
     std::lock_guard<std::mutex> lock(rtsp->mutex);
     if (stream_id >= rtsp->streams.size()) return -1;
     ca_rtsp::stream &stream = rtsp->streams[stream_id];
+    stream.parameters->update(data, length);
     if (timed) stream.next_timestamp = timestamp;
     uint8_t *annotated = nullptr;
     size_t annotated_length = 0;

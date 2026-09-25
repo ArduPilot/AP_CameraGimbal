@@ -40,6 +40,11 @@ log()
     printf '%s\n' "app_init: $*" >&2
 }
 
+# The retained A8 Ethernet driver drops UniGCS 224.0.0.1 discovery packets
+# with only the normal multicast group filter installed. ALLMULTI restores
+# reception; the kernel still delivers packets only to matching sockets.
+ifconfig eth0 allmulti || log "warning: could not enable Ethernet multicast reception"
+
 sd_mounted()
 {
     grep -qs "^$SD_DEVICE $SD_MOUNT " /proc/mounts

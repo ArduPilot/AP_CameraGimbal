@@ -109,7 +109,51 @@ def terminate(process):
         process.wait(timeout=3)
 
 
-def verify_rtsp_video(port, path, expected_size):
+def verify_rtsp_sdp(port, path, codec='h264', host='127.0.0.1'):
+    """Strict decoder setup before PLAY, including codec headers for aliases."""
+    uri = f'rtsp://{host}:{port}/{path}'
+    deadline = time.monotonic() + 5
+    while True:
+        with socket.create_connection((host, port), timeout=2) as sock:
+            sock.sendall(f'DESCRIBE {uri} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n'.encode())
+            response = b''
+            while b'\r\n\r\n' not in response:
+                part = sock.recv(4096)
+                assert part, 'closed during DESCRIBE'
+                response += part
+            header, body = response.split(b'\r\n\r\n', 1)
+            # The encoder may not have produced its first parameter sets yet.
+            if not header.startswith(b'RTSP/1.0 200 '):
+                assert time.monotonic() < deadline, response
+                time.sleep(.05)
+                continue
+            length = int(re.search(rb'Content-Length: (\d+)', header, re.I)[1])
+            while len(body) < length:
+                part = sock.recv(4096)
+                assert part, 'closed during SDP'
+                body += part
+        break
+    sdp = body[:length].decode()
+    assert f'IN IP4 {host}\r\n' in sdp, sdp
+    assert '\r\ns=AP_CameraGimbal\r\n' in sdp, sdp
+    assert '\r\nc=IN IP4 0.0.0.0\r\n' in sdp, sdp
+    assert f'a=rtpmap:96 {codec.upper()}/90000\r\n' in sdp, sdp
+    fmtp = re.search(r'a=fmtp:96 ([^\r\n]+)', sdp)[1]
+    params = dict(item.split('=', 1) for item in fmtp.split(';'))
+    if codec == 'h264':
+        assert params['packetization-mode'] == '1'
+        sps, pps = [base64.b64decode(value, validate=True) for value in params['sprop-parameter-sets'].split(',')]
+        assert sps[0] & 31 == 7 and pps[0] & 31 == 8
+        assert params['profile-level-id'] == sps[1:4].hex()
+    else:
+        for name, nal in [('vps', 32), ('sps', 33), ('pps', 34)]:
+            parameter = base64.b64decode(params[f'sprop-{name}'], validate=True)
+            assert (parameter[0] >> 1) & 63 == nal
+    return sdp
+
+
+def verify_rtsp_video(port, path, expected_size, codec='h264'):
+    verify_rtsp_sdp(port, path, codec)
     uri = f"rtsp://127.0.0.1:{port}/{path}"
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-rtsp_transport", "tcp",
@@ -122,6 +166,58 @@ def verify_rtsp_video(port, path, expected_size):
     assert len(streams) == 1, (uri, streams)
     actual_size = (streams[0].get("width"), streams[0].get("height"))
     assert actual_size == expected_size, (uri, actual_size, expected_size)
+
+
+def verify_rtsp_rtcp(port, path):
+    """Check initial and periodic SRs against the RTP actually received."""
+    uri = f'rtsp://127.0.0.1:{port}/{path}'
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        stream = sock.makefile('rb')
+        def request(method, url, cseq, headers=''):
+            sock.sendall(f'{method} {url} RTSP/1.0\r\nCSeq: {cseq}\r\n{headers}\r\n'.encode())
+            status = stream.readline()
+            assert status.startswith(b'RTSP/1.0 200 '), status
+            response = {}
+            while True:
+                line = stream.readline()
+                if line == b'\r\n': break
+                assert line
+                name, value = line.decode().split(':', 1)
+                response[name.lower()] = value.strip()
+            stream.read(int(response.get('content-length', 0)))
+            return response
+        request('DESCRIBE', uri, 1, 'Accept: application/sdp\r\n')
+        setup = request('SETUP', uri+'/track0', 2,
+                        'Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n')
+        session = setup['session'].split(';')[0]
+        request('PLAY', uri, 3, f'Session: {session}\r\nRange: 0-\r\n')
+        packets = octets = reports = 0
+        previous_sequence = None
+        deadline = time.monotonic() + 10
+        while reports < 2 and time.monotonic() < deadline:
+            header = stream.read(4)
+            assert len(header) == 4 and header[0] == 36, header
+            payload = stream.read(struct.unpack_from('!H', header, 2)[0])
+            if header[1] == 0:
+                assert payload[0] == 0x80 and payload[1] & 127 == 96
+                seq, timestamp, ssrc = struct.unpack_from('!HII', payload, 2)
+                if previous_sequence is not None:
+                    assert seq == (previous_sequence+1) & 65535
+                previous_sequence = seq
+                packets += 1
+                octets += len(payload)-12
+            else:
+                assert header[1] == 1 and payload[:4] == b'\x80\xc8\x00\x06'
+                sender, seconds, fraction, rtp_time, count, size = struct.unpack_from('!6I', payload, 4)
+                assert (sender, rtp_time, count, size) == (ssrc, timestamp, packets, octets)
+                assert abs(seconds-2208988800+fraction/2**32-time.time()) < 5
+                assert payload[28:30] == b'\x81\xca'  # SDES, one CNAME chunk
+                assert struct.unpack_from('!I', payload, 32)[0] == ssrc
+                assert payload[36] == 1 and payload[37] > 0
+                name_end = 38 + payload[37]
+                assert payload[name_end:] == bytes(len(payload)-name_end)
+                reports += 1
+        assert reports == 2, 'missing initial or periodic RTCP sender report'
 
 
 def main():

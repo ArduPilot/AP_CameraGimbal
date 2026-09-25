@@ -43,7 +43,8 @@ def crc8(data):
     return value
 
 
-def mt11_private_frame(control, sequence, command, payload=b""):
+def mt11_private_frame(control, sequence, command, payload=b"", *,
+                       source=GIMBAL_MCU, destination=MT11_CAMERA_CPU, link=PRIVATE_LINK):
     header = bytearray(12)
     header[0] = 0xAA
     header[1] = control
@@ -51,9 +52,9 @@ def mt11_private_frame(control, sequence, command, payload=b""):
     struct.pack_into("<H", header, 3, len(payload))
     header[5] = crc8(header[:5])
     struct.pack_into("<H", header, 6, sequence)
-    header[8] = GIMBAL_MCU
-    header[9] = MT11_CAMERA_CPU
-    header[10] = PRIVATE_LINK
+    header[8] = source
+    header[9] = destination
+    header[10] = link
     header[11] = command
     result = bytes(header) + payload
     return result + struct.pack("<H", crc16(result))
@@ -69,12 +70,13 @@ def parse_mt11_private(data):
     return data[1], sequence, data[8], data[9], data[10], data[11], data[12:-2]
 
 
-def a8_private_frame(control, sequence, command, payload=b""):
+def a8_private_frame(control, sequence, command, payload=b"", *,
+                     source=GIMBAL_MCU, destination=A8_CAMERA_CPU, link=PRIVATE_LINK):
     if len(payload) > 255:
         raise ValueError("A8 private payload is too large")
     header = bytearray((
         0xAA, control, 0x02, len(payload), 0, sequence & 0xFF,
-        sequence >> 8, GIMBAL_MCU, A8_CAMERA_CPU, PRIVATE_LINK, command,
+        sequence >> 8, source, destination, link, command,
     ))
     header[4] = crc8(header[:4])
     result = bytes(header) + payload
@@ -129,6 +131,7 @@ class Gimbal:
         self.target = None
         self.mode = 0
         self.zoom = 1.0
+        self.zoom_rate = 0.0
         self.sequence = 1
         self.last_update = time.monotonic()
         self.started = self.last_update
@@ -137,6 +140,7 @@ class Gimbal:
         now = time.monotonic()
         elapsed = min(now - self.last_update, 0.25)
         self.last_update = now
+        self.zoom = clamp(self.zoom + self.zoom_rate * elapsed, 1, self.properties['zoom_max'])
         if self.target is not None:
             target_yaw, target_pitch = self.target
             maximum_step = self.properties["gimbal_rate_max"] * elapsed
@@ -304,14 +308,53 @@ class Gimbal:
             parsed = parse_mt11_private(data)
             camera_cpu = MT11_CAMERA_CPU
         _control, _sequence, source, destination, link, command, payload = parsed
+        if destination == GIMBAL_MCU and link == 0x11:
+            if _control not in (0x08, 0x09):
+                return None
+            # Native commands share the stock MCU's SDK motion handlers.
+            # See docs/unigcs.md for capture and firmware evidence.
+            reply = None
+            if command == 0xA0 and not payload:
+                reply = bytes.fromhex("0600018a000000000601008a00000000000001") if self.backend == 'mt11' else (
+                    bytes((9, 4, 0, 0, 0, 0, 0, 0, 9, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1)))
+            elif command == 0xB4 and not payload:
+                reply = bytes((self.mounting_direction,))
+            elif command == 0xC2 and not payload:
+                reply = b"\x00"  # observed stock startup response; meaning unconfirmed
+            elif command == 0x9A and len(payload) == 2:
+                if all(-100 <= value <= 100 for value in struct.unpack('<bb', payload)):
+                    self.handle_siyi(siyi_frame(0, _sequence, 0x07, payload))
+                    reply = b"\x01"
+            elif command == 0x9B and len(payload) == 1:
+                if 1 <= payload[0] <= 4:
+                    self.update()
+                    # 1: centre both; 2: centre yaw and look down;
+                    # 3: centre yaw only; 4: look down, preserving yaw.
+                    yaw = self.yaw if payload[0] == 4 else 0.0
+                    pitch = self.pitch if payload[0] == 3 else (
+                        -90.0 if payload[0] in (2, 4) else 0.0)
+                    self.target = (yaw, clamp(pitch, self.properties['gimbal_pitch_min'],
+                                              self.properties['gimbal_pitch_max']))
+                    self.commanded_rates = (0.0, 0.0)
+                    reply = b"\x01"
+                else:
+                    reply = b"\x00"
+            if reply is None or not _control & 1:
+                return None
+            self.sequence = (self.sequence + 1) & 0xFFFF
+            build = mt11_private_frame if self.backend == 'mt11' else a8_private_frame
+            return build(0x0A, self.sequence, command, reply, destination=source, link=link)
         if source != camera_cpu or destination != GIMBAL_MCU or link != PRIVATE_LINK:
             return None
         reply = None
         if self.backend == "zr10" and command in (0x04, 0x05, 0x06, 0x07, 0x37):
             if command == 0x37 and len(payload) == 2:
+                self.update()
+                self.zoom_rate = 0.0
                 self.zoom = clamp(payload[0] + payload[1] * .1, 1, 30)
             elif command == 0x04 and len(payload) == 1:
-                self.zoom = clamp(self.zoom + signed_byte(payload[0]), 1, 30)
+                self.update()
+                self.zoom_rate = clamp(signed_byte(payload[0]), -1, 1)
             elif command in (0x06, 0x07):
                 self.handle_siyi(siyi_frame(1, _sequence, {0x06: 0x07, 0x07: 0x08}[command], payload))
             return None

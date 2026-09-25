@@ -69,9 +69,49 @@ static void discard_prefix(struct ca_private_parser *parser, size_t count)
     parser->length -= count;
 }
 
-void ca_private_parser_feed(struct ca_private_parser *parser,
+static uint32_t get_u32_le(const uint8_t *p)
+{
+    return uint32_t(p[0]) | uint32_t(p[1])<<8 | uint32_t(p[2])<<16 | uint32_t(p[3])<<24;
+}
+
+static void put_u32_le(uint8_t *p, uint32_t v)
+{
+    for (unsigned i=0; i<4; i++) p[i]=v>>(8*i);
+}
+
+// SIYI CRC32: polynomial 04C11DB7, initial zero, MSB first, no final XOR.
+static uint32_t long_crc(const uint8_t *p, size_t n)
+{
+    uint32_t crc=0;
+    while (n--) {
+        crc ^= uint32_t(*p++)<<24;
+        for (unsigned bit=0; bit<8; bit++)
+            crc=(crc<<1)^((crc&0x80000000U) ? 0x04c11db7U : 0);
+    }
+    return crc;
+}
+
+size_t ca_long_build(uint8_t *output, size_t capacity, uint8_t control,
+                    uint16_t sequence, uint8_t command,
+                    const uint8_t *payload, uint16_t payload_length)
+{
+    size_t total=size_t(payload_length)+20;
+    if (!output || capacity<total || payload_length>CA_PRIVATE_MAX_PAYLOAD ||
+        (payload_length && !payload) || control>3) return 0;
+    memcpy(output,"\x55\x66\xaa\xbb",4);
+    output[4]=control;
+    put_u32_le(output+5,payload_length);
+    put_u16_le(output+9,sequence);
+    output[11]=command;
+    put_u32_le(output+12,long_crc(output,12));
+    if (payload_length) memcpy(output+16,payload,payload_length);
+    put_u32_le(output+total-4,long_crc(output,total-4));
+    return total;
+}
+
+static void parser_feed(struct ca_private_parser *parser,
                             const uint8_t *data, size_t length,
-                            ca_private_frame_fn callback, void *opaque)
+                            ca_private_frame_fn callback, void *opaque, bool network)
 {
     size_t copy;
 
@@ -95,10 +135,45 @@ void ca_private_parser_feed(struct ca_private_parser *parser,
             uint16_t received_crc;
             struct ca_private_frame frame;
 
-            while (sync < parser->length && parser->data[sync] != 0xaaU) sync++;
+            while (sync < parser->length && parser->data[sync] != 0xaaU &&
+                   !(network && parser->data[sync]==0x55)) sync++;
             if (sync != 0U) {
                 parser->discarded += (unsigned)sync;
                 discard_prefix(parser, sync);
+            }
+            if (network && parser->length && parser->data[0]==0x55) {
+                const size_t check=parser->length<4 ? parser->length : 4;
+                if (memcmp(parser->data,"\x55\x66\xaa\xbb",check)) {
+                    parser->discarded++;
+                    discard_prefix(parser,1);
+                    continue;
+                }
+                if (parser->length<16) break;
+                const uint32_t size=get_u32_le(parser->data+5);
+                if (size>CA_PRIVATE_MAX_PAYLOAD || parser->data[4]>3 ||
+                    get_u32_le(parser->data+12)!=long_crc(parser->data,12)) {
+                    parser->bad_header_crc++;
+                    discard_prefix(parser,1);
+                    continue;
+                }
+                total=size+20;
+                if (parser->length<total) break;
+                if (get_u32_le(parser->data+total-4)!=long_crc(parser->data,total-4)) {
+                    parser->bad_frame_crc++;
+                    discard_prefix(parser,1);
+                    continue;
+                }
+                frame.control=0x08 | parser->data[4];
+                frame.sequence=get_u16_le(parser->data+9);
+                // The old network format has no routing IDs. Route it to
+                // the shared camera endpoint; UniGCS maps gimbal opcodes.
+                frame.source=0xd0; frame.destination=0x34; frame.link=0x16;
+                frame.command=parser->data[11];
+                frame.payload=parser->data+16; frame.payload_length=size;
+                frame.raw=parser->data; frame.raw_length=total;
+                if (callback) callback(opaque,&frame);
+                discard_prefix(parser,total);
+                continue;
             }
             if (parser->length < 6U) break;
             payload_length = get_u16_le(parser->data + 3);
@@ -107,13 +182,13 @@ void ca_private_parser_feed(struct ca_private_parser *parser,
                 discard_prefix(parser, 1);
                 continue;
             }
-            total = (size_t)payload_length + 14U;
-            if (parser->length < total) break;
             if (parser->data[5] != ca_crc8_maxim(parser->data, 5)) {
                 parser->bad_header_crc++;
                 discard_prefix(parser, 1);
                 continue;
             }
+            total = (size_t)payload_length + 14U;
+            if (parser->length < total) break;
             received_crc = get_u16_le(parser->data + total - 2U);
             if (received_crc != ca_crc16(parser->data, total - 2U)) {
                 parser->bad_frame_crc++;
@@ -134,4 +209,18 @@ void ca_private_parser_feed(struct ca_private_parser *parser,
             discard_prefix(parser, total);
         }
     }
+}
+
+void ca_private_parser_feed(struct ca_private_parser *parser,
+                            const uint8_t *data, size_t length,
+                            ca_private_frame_fn callback, void *opaque)
+{
+    parser_feed(parser,data,length,callback,opaque,false);
+}
+
+void ca_private_network_parser_feed(struct ca_private_parser *parser,
+                                    const uint8_t *data, size_t length,
+                                    ca_private_frame_fn callback, void *opaque)
+{
+    parser_feed(parser,data,length,callback,opaque,true);
 }

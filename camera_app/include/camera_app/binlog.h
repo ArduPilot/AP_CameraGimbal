@@ -17,7 +17,7 @@ enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_MAVC, CA_LOG_GMBC, CA_LOG_MAVP, CA_LOG_MAVH,
     CA_LOG_SIIN, CA_LOG_SIOU, CA_LOG_XFIN, CA_LOG_XFOU };
 enum ca_packet_protocol { CA_PACKET_SIYI=1, CA_PACKET_MT11, CA_PACKET_SIYI_MCU,
-                          CA_PACKET_XFROBOT, CA_PACKET_XFROBOT_MCU };
+                          CA_PACKET_XFROBOT, CA_PACKET_XFROBOT_MCU, CA_PACKET_SIYI_LONG };
 enum ca_packet_link { CA_PACKET_UDP=1, CA_PACKET_TCP, CA_PACKET_UART,
                       CA_PACKET_MCU_UART, CA_PACKET_MCU_UDP };
 struct __attribute__((packed)) ca_log_packet {

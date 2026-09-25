@@ -44,6 +44,8 @@ struct ca_backend {
     struct ca_private_parser parser;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    ca_private_emit_fn private_emit;
+    void *private_opaque;
     ca_recording_set_fn recording_set;
     ca_recording_get_fn recording_get;
     void *recording_opaque;
@@ -387,6 +389,10 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
     ca_binlog_packet(false, CA_PACKET_MT11, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
                      0, 0, frame->raw, frame->raw_length);
 
+    if (frame->source == MT11_MCU && frame->link == 0x11U && backend->private_emit) {
+        backend->private_emit(backend->private_opaque, frame);
+        return;
+    }
     if (frame->source != MT11_MCU || frame->destination != MT11_SOURCE ||
         frame->link != MT11_LINK) {
         return;
@@ -512,6 +518,8 @@ int ca_backend_open(struct ca_backend **result,
     backend->gimbal_mode = 0;
     backend->emit = config->emit;
     backend->emit_opaque = config->emit_opaque;
+    backend->private_emit = config->private_emit;
+    backend->private_opaque = config->private_opaque;
     backend->recording_set = config->recording_set;
     backend->recording_get = config->recording_get;
     backend->recording_opaque = config->recording_opaque;
@@ -873,6 +881,25 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode, packet.payload, packet.payload_length);
     return send_private(backend, 0x08, MT11_TUNNEL, packet_data,
                         (uint16_t)length);
+}
+
+int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *frame)
+{
+    if (!backend || !frame || frame->destination != MT11_MCU || frame->link != 0x11 ||
+        !frame->raw || frame->raw_length > CA_PRIVATE_MAX_FRAME) {
+        errno = EINVAL;
+        return -1;
+    }
+    // Private gimbal commands may change the target without passing through
+    // the public SDK; do not retain an absolute-angle de-duplication cache.
+    backend->angle_target.valid = false;
+    const int result = backend->datagram_transport
+        ? write_datagram(backend->uart_fd, frame->raw, frame->raw_length)
+        : write_all(backend->uart_fd, frame->raw, frame->raw_length);
+    ca_binlog_packet(true, CA_PACKET_MT11,
+        backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+        0, 0, frame->raw, frame->raw_length, result < 0 ? -errno : 0);
+    return result;
 }
 
 void ca_backend_periodic(struct ca_backend *backend)

@@ -26,6 +26,10 @@ int main(int argc, char **argv)
     n=ca_private_build(frame,sizeof(frame),8,65535,0x2e,0x34,0x6b,0xee,payload,sizeof(payload));
     assert(n == CA_PRIVATE_MAX_FRAME);
     ca_binlog_packet(false, CA_PACKET_MT11, CA_PACKET_MCU_UART, 0, 0, frame, n);
+    const uint8_t old_query[]={0x55,0x66,0xaa,0xbb,1,0,0,0,0,0,0,0x80,
+                              0x2d,0x97,0x7a,0x34,0xb7,0xad,0x40,0xeb};
+    ca_binlog_packet(false, CA_PACKET_SIYI_LONG, CA_PACKET_TCP, 0x7f000001, 4000,
+                     old_query, sizeof(old_query));
     ca_binlog_stop();
     ca_binlog_packet(false, CA_PACKET_MT11, CA_PACKET_MCU_UART, 0, 0, frame, n);
     assert(ca_binlog_start(&config));

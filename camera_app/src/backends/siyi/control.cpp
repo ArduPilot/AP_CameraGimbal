@@ -80,6 +80,8 @@ struct ca_backend {
     size_t rx_length;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    ca_private_emit_fn private_emit;
+    void *private_opaque;
     ca_recording_set_fn recording_set;
     ca_recording_get_fn recording_get;
     void *recording_opaque;
@@ -435,6 +437,18 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
     const uint8_t *payload = frame + A8_LINK_HEADER;
     uint8_t sub = frame[10];
 
+    if (frame[7] == A8_LINK_GIMBAL && frame[9] == 0x11 && backend->private_emit) {
+        ca_private_frame parsed {};
+        parsed.control = frame[1];
+        parsed.sequence = frame[5] | (uint16_t(frame[6]) << 8);
+        parsed.source = frame[7]; parsed.destination = frame[8];
+        parsed.link = frame[9]; parsed.command = sub;
+        parsed.payload = payload; parsed.payload_length = payload_length;
+        parsed.raw = frame; parsed.raw_length = A8_LINK_OVERHEAD + payload_length;
+        backend->private_emit(backend->private_opaque, &parsed);
+        return;
+    }
+
     if (frame[7] != A8_LINK_GIMBAL || frame[9] != A8_LINK_CMD) return;
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     if (frame[8] != A8_LINK_CAMERA || (frame[1] & 0x1cU) != 8U) return;
@@ -529,6 +543,8 @@ int ca_backend_open(struct ca_backend **result,
     backend = (struct ca_backend*)(calloc(1, sizeof(*backend)));
     if (backend == NULL) return -1;
     backend->manual_control=config->manual_control;
+    backend->private_emit=config->private_emit;
+    backend->private_opaque=config->private_opaque;
     backend->manual_command=config->manual_command;
     backend->datagram_transport = strncmp(device, "udp://", 6U) == 0;
     backend->uart_fd = backend->datagram_transport
@@ -587,6 +603,34 @@ int ca_backend_open(struct ca_backend **result,
            backend->datagram_transport ? "" : " at 230400 8N1");
     *result = backend;
     return 0;
+}
+
+int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *request)
+{
+    if (!backend || !request || request->destination != A8_LINK_GIMBAL ||
+        request->link != 0x11 || request->payload_length > A8_LINK_MAX_PAYLOAD) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint8_t frame[A8_LINK_MAX_FRAME];
+    frame[0] = 0xaa; frame[1] = request->control; frame[2] = 2;
+    frame[3] = request->payload_length;
+    frame[4] = ca_crc8_maxim(frame, 4);
+    frame[5] = request->sequence; frame[6] = request->sequence >> 8;
+    frame[7] = request->source; frame[8] = request->destination;
+    frame[9] = request->link; frame[10] = request->command;
+    if (request->payload_length) memcpy(frame + A8_LINK_HEADER, request->payload, request->payload_length);
+    const size_t length = A8_LINK_OVERHEAD + request->payload_length;
+    const uint16_t crc = ca_crc16(frame, length - 2);
+    frame[length-2] = crc; frame[length-1] = crc >> 8;
+    backend->angle_target.valid = false;
+    const int result = backend->datagram_transport
+        ? write_datagram(backend->uart_fd, frame, length)
+        : write_all(backend->uart_fd, frame, length);
+    ca_binlog_packet(true, CA_PACKET_SIYI_MCU,
+        backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
+        0, 0, frame, length, result < 0 ? -errno : 0);
+    return result;
 }
 
 int ca_backend_fd(const struct ca_backend *backend)

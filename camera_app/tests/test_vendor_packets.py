@@ -52,10 +52,12 @@ def probe(binary):
         payload = bytes(range(256))*16
         large = siyi(1, 0x1234, 0x7f, payload[:2038])
         native = private(8, 65535, 0x2e, 0x34, 0xee, payload)
-        assert [p for _, p in packets] == [large, large, native, b'\xb5\x9a\x01\x02']
-        assert [m.Res for m, _ in packets] == [0, -errno.EPIPE, 0, 0]
-        assert [(m.Src,m.Dst) for m, _ in packets] == [(0,0),(0,0),(0x2e,0x34),(0,0)]
-        assert [(m.Cmd,m.Seq) for m,_ in packets] == [(0x7f,0x1234),(0x7f,0x1234),(0xee,65535),(65535,65535)]
+        old_query=bytes.fromhex('5566aabb01000000000000802d977a34b7ad40eb')
+        assert [p for _, p in packets] == [large, large, native, old_query, b'\xb5\x9a\x01\x02']
+        assert [m.Res for m, _ in packets] == [0, -errno.EPIPE, 0, 0, 0]
+        assert [(m.Src,m.Dst) for m, _ in packets] == [(0,0),(0,0),(0x2e,0x34),(0,0),(0,0)]
+        assert [(m.Cmd,m.Seq) for m,_ in packets] == [(0x7f,0x1234),(0x7f,0x1234),(0xee,65535),(0x80,0),(65535,65535)]
+        assert packets[3][0].get_type()=='SIIN' and packets[3][0].Proto==6
         print('PASS maximum SIYI/private frame chunking, raw bytes, errno, failure metadata and log sessions')
 
 
