@@ -7,7 +7,7 @@
   const progress = document.getElementById('firmware-progress');
   const status = document.getElementById('firmware-status');
   if (!input || !button || !progress || !status) return;
-  const waitTimeout = 60000;
+  const waitTimeout = 120000;
   const pollDelay = 1000;
   const waitForRestart = () => {
     const started = Date.now();

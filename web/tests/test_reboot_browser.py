@@ -64,7 +64,7 @@ function run(events, expected) {
       assert.equal(timers.length, 1);
       const timer = timers.shift();
       assert.equal(timer.delay, 1000);
-      now += expected === 'timeout' ? 60000 : timer.delay;
+      now += expected === 'timeout' ? 120000 : timer.delay;
       timer.fn();
     }
   }
@@ -80,6 +80,8 @@ run([[200, fixture.token], [503, 'busy'], 'error', 'timeout',
 // Cookie sessions expire on reboot; Basic authentication sees the new token.
 run([[200, fixture.token], 'error', [401, 'login required']], 'login');
 run([[200, changed]], 'back'); // A quick restart need not produce a failed poll.
+// A firmware flash taking 90 seconds must still recover automatically.
+run([...Array(90).fill([200, fixture.token]), [200, changed]], 'back');
 run(['timeout'], 'timeout');
 run([[200, fixture.token]], 'timeout'); // No reboot occurred (e.g. SITL).
 '''
