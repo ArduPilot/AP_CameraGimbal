@@ -56,6 +56,10 @@ export TMP=/run
 
 /sbin/ifconfig eth0:1 192.168.1.25 up
 
+# Keep UniGCS discovery reachable on retained vendor Ethernet drivers, which
+# can drop multicast despite a successful IP_ADD_MEMBERSHIP (observed on A8).
+/sbin/ifconfig eth0 allmulti || log "warning: could not enable Ethernet multicast reception"
+
 # Firmware overlays carry only an initial camera-app configuration. Preserve
 # parameters already selected through the web UI across subsequent upgrades.
 if [ ! -e /app/camera.ini ] && [ -r /app/camera.ini.default ]; then

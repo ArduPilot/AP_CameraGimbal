@@ -30,8 +30,10 @@ The inspected `cardv` SHA256 is
 Real A8 testing also found an Ethernet receive-filter issue: unicast discovery
 worked, but multicast discovery failed despite the correct `224.0.0.1`
 membership and `01:00:5e:00:00:01` MAC entry. Enabling `ALLMULTI` immediately
-restored multicast replies. The A8 startup script now enables it on `eth0`;
-SITL does not need this hardware workaround.
+restored multicast replies. Startup scripts for all three SIYI cameras now
+enable it on `eth0` so discovery does not depend on vendor multicast filters.
+The receive-filter failure and fix are hardware-verified on A8; MT11 and
+ZR10 still need that hardware check. SITL does not change host interface flags.
 
 MT11 and A8 SITL H.265 display have been confirmed in the UniGCS GUI.
 Discovery, connection and H.265 display are also confirmed on the real A8
