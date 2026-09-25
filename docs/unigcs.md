@@ -34,6 +34,10 @@ restored multicast replies. Startup scripts for all three SIYI cameras now
 enable it on `eth0` so discovery does not depend on vendor multicast filters.
 The receive-filter failure and fix are hardware-verified on A8; MT11 and
 ZR10 still need that hardware check. SITL does not change host interface flags.
+The service retries multicast membership every five seconds to handle interfaces
+that become ready after startup or are recreated. Discovery uses the interface
+MAC on Linux, Cygwin and BSD; SITL adapters without one use a stable locally
+administered address derived from their IPv4 address.
 
 MT11 and A8 SITL H.265 display have been confirmed in the UniGCS GUI.
 Discovery, connection and H.265 display are also confirmed on the real A8
@@ -79,7 +83,11 @@ Add `--video-codec h264` or `--video-codec h265` to include live video tests.
 These validate decoder parameters in SDP before PLAY, RTSP aliases, replies
 on two local addresses, FFmpeg decoding, and initial and periodic RTCP sender
 reports against the received RTP timestamps, SSRC and counters. CI runs both
-codecs.
+codecs. The encoder is initially paused to check that DESCRIBE and PLAY succeed
+before any parameter sets exist, and that the first frame carries those sets.
+Run `sudo unshare -n python3 sitl/test_unigcs.py build/a8-sitl/camera-app --backend a8 --late-interface`
+to check discovery on an interface created after startup and then replaced.
+This test creates interfaces only inside the isolated network namespace.
 
 The protocol test also restarts the UDP gimbal simulator while the camera is
 running and verifies that native commands work again after it returns. SITL
@@ -90,6 +98,9 @@ RTSP descriptions include H.264 SPS/PPS and packetization mode 1, or H.265
 VPS/SPS/PPS, taken from the encoder. Parameter sets are collected even without
 viewers, and aliases share them. SDP is regenerated for each DESCRIBE, avoiding
 stale codec headers or an address cached from another interface.
+Before the encoder supplies its first parameter sets, DESCRIBE returns the
+basic codec description and clients obtain headers from the stream. Later
+DESCRIBEs include the complete decoder configuration.
 
 The server sends compound RTCP sender reports and SDES/CNAME on the negotiated
 TCP channel or UDP port, initially and every five seconds while streaming.
@@ -117,6 +128,9 @@ If UDP 37258 is occupied, the application leaves discovery to the existing
 owner and logs this. On physical stock-derived MT11 systems, `product_upgrade`
 usually owns that socket. Our application still provides TCP 37256. Kernel,
 updater and gimbal firmware are not replaced by this change.
+TCP 37256 must be available: a bind failure stops camera-app with an error,
+as it does for the public SIYI listener. This prevents a competing process from
+silently owning private controls while our application serves the camera.
 
 ## Confirmed transport
 

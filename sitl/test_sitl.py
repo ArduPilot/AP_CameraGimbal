@@ -109,31 +109,35 @@ def terminate(process):
         process.wait(timeout=3)
 
 
-def verify_rtsp_sdp(port, path, codec='h264', host='127.0.0.1'):
-    """Strict decoder setup before PLAY, including codec headers for aliases."""
+def read_rtsp_sdp(port, path, host='127.0.0.1'):
+    """A single DESCRIBE must succeed, including before the first video frame."""
     uri = f'rtsp://{host}:{port}/{path}'
+    with socket.create_connection((host, port), timeout=2) as sock:
+        sock.sendall(f'DESCRIBE {uri} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n'.encode())
+        response = b''
+        while b'\r\n\r\n' not in response:
+            part = sock.recv(4096)
+            assert part, 'closed during DESCRIBE'
+            response += part
+        header, body = response.split(b'\r\n\r\n', 1)
+        assert header.startswith(b'RTSP/1.0 200 '), response
+        length = int(re.search(rb'Content-Length: (\d+)', header, re.I)[1])
+        while len(body) < length:
+            part = sock.recv(4096)
+            assert part, 'closed during SDP'
+            body += part
+    return body[:length].decode()
+
+
+def verify_rtsp_sdp(port, path, codec='h264', host='127.0.0.1'):
+    """Parameter sets appear in fresh SDP once the encoder has produced them."""
     deadline = time.monotonic() + 5
     while True:
-        with socket.create_connection((host, port), timeout=2) as sock:
-            sock.sendall(f'DESCRIBE {uri} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n'.encode())
-            response = b''
-            while b'\r\n\r\n' not in response:
-                part = sock.recv(4096)
-                assert part, 'closed during DESCRIBE'
-                response += part
-            header, body = response.split(b'\r\n\r\n', 1)
-            # The encoder may not have produced its first parameter sets yet.
-            if not header.startswith(b'RTSP/1.0 200 '):
-                assert time.monotonic() < deadline, response
-                time.sleep(.05)
-                continue
-            length = int(re.search(rb'Content-Length: (\d+)', header, re.I)[1])
-            while len(body) < length:
-                part = sock.recv(4096)
-                assert part, 'closed during SDP'
-                body += part
-        break
-    sdp = body[:length].decode()
+        sdp = read_rtsp_sdp(port, path, host)
+        if 'sprop-' in sdp:
+            break
+        assert time.monotonic() < deadline, sdp
+        time.sleep(.05)
     assert f'IN IP4 {host}\r\n' in sdp, sdp
     assert '\r\ns=AP_CameraGimbal\r\n' in sdp, sdp
     assert '\r\nc=IN IP4 0.0.0.0\r\n' in sdp, sdp
