@@ -6,6 +6,14 @@ backends; the MT11 is the first supported backend.
 
 Current milestone:
 
+- initial MT11, A8 mini and ZR10 UniGCS support: multicast discovery on UDP 37258, private
+  control on TCP 37256, shared camera controls and private gimbal forwarding.
+  RTSP supplies encoder parameters in SDP and periodic RTCP sender reports;
+  H.265 video display has been confirmed in UniGCS against MT11 and A8 SITL.
+  The service accepts MT11 v3 and A8 legacy CRC32 network framing.
+  SITL emulates native gimbal rate and centre/look-down preset commands.
+  See [UniGCS protocol coverage](../docs/unigcs.md) for implemented commands,
+  SITL tests and remaining compatibility work;
 - SIYI External SDK UDP and TCP service on port 37260, including CRC-16
   validation, fragmented/concatenated TCP framing and simultaneous clients;
 - transport-aware response routing: immediate replies return to the requesting
@@ -1291,7 +1299,7 @@ incomplete input is not included; use network capture for those wire bytes.
 | --- | --- |
 | `TimeUS`, `Id` | Local monotonic time in microseconds and packet ID shared by all chunks of one packet. |
 | `Lnk` | 1 public UDP, 2 public TCP, 3 public UART, 4 private MCU UART, 5 private MCU UDP (SITL). |
-| `Proto` | 1 public SIYI, 2 MT11 private, 3 A8/ZR10 private SIYI, 4 public XFRobot, 5 Z1Mini private XFRobot. |
+| `Proto` | 1 public SIYI, 2 MT11 private, 3 A8/ZR10 private SIYI, 4 public XFRobot, 5 Z1Mini private XFRobot, 6 legacy SIYI network (CRC32). |
 | `IP`, `Port` | Public network peer, in host byte order (`127.0.0.1` is `0x7f000001`); zero for UART and private links. |
 | `Src`, `Dst` | Private SIYI source/destination IDs; zero where the protocol has no such fields. These are not MAVLink system IDs. |
 | `Cmd`, `Seq` | Wire command and sequence, or 65535 when absent. |

@@ -30,6 +30,8 @@ typedef int (*ca_thermal_palette_set_fn)(void *opaque, uint8_t palette);
 typedef int (*ca_inverted_set_fn)(void *opaque, bool inverted);
 
 struct ca_backend;
+struct ca_private_frame;
+typedef void (*ca_private_emit_fn)(void *opaque, const ca_private_frame *frame);
 
 struct ca_gimbal_attitude {
     float roll_rad;
@@ -47,6 +49,8 @@ struct ca_backend_config {
     const char *uart_device;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    ca_private_emit_fn private_emit;
+    void *private_opaque;
     ca_recording_set_fn recording_set;
     ca_recording_get_fn recording_get;
     void *recording_opaque;
@@ -94,6 +98,8 @@ int ca_backend_fd(const struct ca_backend *backend);
 int ca_backend_handle_fd(struct ca_backend *backend);
 int ca_backend_handle_siyi(struct ca_backend *backend,
                            const uint8_t *packet, size_t length);
+/* SIYI private network-to-MCU route; A8/ZR10 convert v3 fields to v2 UART. */
+int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *frame);
 void ca_backend_periodic(struct ca_backend *backend);
 int ca_backend_request_gimbal_attitude(struct ca_backend *backend);
 bool ca_backend_gimbal_attitude(const struct ca_backend *backend,

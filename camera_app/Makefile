@@ -108,6 +108,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/protocol/targeting.cpp \
 	src/protocol/siyi.cpp \
 	src/protocol/siyi_server.cpp \
+	$(if $(filter mt11 a8 zr10,$(CAMERA_BACKEND)),src/protocol/unigcs.cpp) \
 	src/protocol/private_uart.cpp \
 	src/recording/recorder_state.cpp \
 	src/recording/raw_thermal.cpp src/streaming/thermal_stream.cpp \
@@ -232,7 +233,7 @@ build/$(CAMERA_BACKEND)/c/%.o: %.cpp $(MINIMP4_HEADER)
 
 build/$(CAMERA_BACKEND)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
@@ -381,7 +382,7 @@ build/mp4_minimp4.o: src/recording/mp4_minimp4.cpp $(MINIMP4_HEADER)
 
 build/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p build
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
@@ -469,7 +470,7 @@ $(SITL_OBJDIR)/c/%.o: %.cpp $(MINIMP4_HEADER)
 
 $(SITL_OBJDIR)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p $(dir $@)
-	$(HOST_CXX) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
+	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
 		-I$(RTSP_ROOT)/xop -O2 -pipe -Wall -Wextra -Werror -Wno-error \
 		-Wno-error=unused-parameter -Wno-error=missing-field-initializers \
 		-std=c++11 -c $< -o $@
@@ -633,7 +634,7 @@ clean:
 		tests/test.ffprobe.err tests/test.fragmented.ffprobe.err
 	rm -rf build
 
--include $(OBJECTS:.o=.d) $(SITL_APP_OBJECTS:.o=.d)
+-include $(OBJECTS:.o=.d) $(SITL_APP_OBJECTS:.o=.d) $(SITL_RTSP_OBJECTS:.o=.d)
 
 # Backend wrapper includes the common SIYI control implementation.
 src/backends/a8/control.o src/backends/zr10/control.o: src/backends/siyi/control.cpp

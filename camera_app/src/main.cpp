@@ -22,6 +22,7 @@
 
 #include "camera_app/siyi.h"
 #include "camera_app/siyi_server.h"
+#include "camera_app/unigcs.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -34,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -427,6 +429,21 @@ int APC_CameraApp::run(int argc, char **argv)
         return result;
     }
     config.manual_control=&_manual.active;
+#if APCAM_HAVE_SIYI
+    // UniGCS assumes fixed ports and cannot distinguish several cameras at
+    // one host IP. Secondary SITL instances retain their public SDK service;
+    // isolated tests may explicitly allocate the two private service ports.
+    if (port == 37260U || getenv("CAMERA_APP_UNIGCS_PORT")) {
+        if (ca_unigcs_open(&_unigcs, _media,
+                          environment_port("CAMERA_APP_UNIGCS_PORT", 37256U),
+                          environment_port("CAMERA_APP_DISCOVERY_PORT", 37258U)) < 0) {
+            ca_log("cannot open UniGCS service: %s", strerror(errno));
+            return result;
+        }
+    }
+    config.private_emit = ca_unigcs_emit;
+    config.private_opaque = _unigcs;
+#endif
     config.manual_command=&_manual.executing;
     config.name = backend_name;
     config.uart_device = uart_device;
@@ -550,6 +567,23 @@ int APC_CameraApp::run(int argc, char **argv)
             return result;
         }
         ca_manual_control_update(&_manual);
+#ifdef CAMERA_APP_SITL
+        // A restarted UDP MCU simulator briefly has no listening socket.
+        // Consume its asynchronous ICMP error without terminating video and
+        // the camera services; periodic MCU requests reconnect naturally.
+        if (items[1].revents & POLLERR) {
+            int type = 0, error = 0;
+            socklen_t length = sizeof(type);
+            if (getsockopt(items[1].fd, SOL_SOCKET, SO_TYPE, &type, &length) == 0 &&
+                type == SOCK_DGRAM) {
+                length = sizeof(error);
+                if (getsockopt(items[1].fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 &&
+                    (error == 0 || error == ECONNREFUSED)) {
+                    items[1].revents &= ~POLLERR;
+                }
+            }
+        }
+#endif
         if ((items[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
             ca_log("backend descriptor failed");
             return result;
@@ -580,6 +614,9 @@ int APC_CameraApp::run(int argc, char **argv)
         }
         ca_backend_periodic(_backend);
         ca_mavlink_server_periodic(_mavlink_server);
+#if APCAM_HAVE_SIYI
+        ca_unigcs_update(_unigcs, _backend, _manual.active);
+#endif
         _network_capture.configure(ca_media_settings(_media)->network_capture);
     }
     result = 0;
@@ -594,6 +631,9 @@ APC_CameraApp::~APC_CameraApp()
     _network_capture.close();
     ca_manual_control_close(&_manual);
     ca_mavlink_server_close(_mavlink_server);
+#if APCAM_HAVE_SIYI
+    ca_unigcs_close(_unigcs);
+#endif
     ca_backend_close(_backend);
     ca_media_close(_media);
     ca_binlog_close();

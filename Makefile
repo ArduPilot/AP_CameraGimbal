@@ -163,6 +163,8 @@ sitl-test: sitl
 	python3 sitl/test_sitl.py $(SITL_BUILD)/camera-app \
 		$(SITL_BUILD)/mt11-web sitl/gimbal_sim.py \
 		$(abspath $(SITL_BUILD)/runtime) --backend mt11 --orientation upright
+	python3 sitl/test_unigcs.py $(SITL_BUILD)/camera-app --video-codec h264
+	python3 sitl/test_unigcs.py $(SITL_BUILD)/camera-app --video-codec h265
 	python3 sitl/test_sitl.py $(SITL_BUILD)/camera-app \
 		$(SITL_BUILD)/mt11-web sitl/gimbal_sim.py \
 		$(abspath $(SITL_BUILD)/runtime) --backend mt11 --orientation inverted
@@ -288,6 +290,7 @@ a8_sitl-run: a8_sitl
 		CAMERA_GIMBAL_SITL_BUILD=$(abspath $(A8_SITL_BUILD)) sh sitl/run.sh
 
 a8_sitl-test: a8_sitl
+	python3 sitl/test_unigcs.py $(A8_SITL_BUILD)/camera-app --backend a8 --video-codec h265
 	python3 sitl/test_sitl.py $(A8_SITL_BUILD)/camera-app \
 		$(A8_SITL_BUILD)/a8-web sitl/gimbal_sim.py \
 		$(abspath $(A8_SITL_BUILD)/runtime) --backend a8 --orientation upright
@@ -428,6 +431,7 @@ zr10_sitl-run: zr10_sitl
 		CAMERA_GIMBAL_SITL_BUILD=$(abspath $(ZR10_SITL_BUILD)) sh sitl/run.sh
 .PHONY: zr10_sitl-test
 zr10_sitl-test: zr10_sitl
+	python3 sitl/test_unigcs.py $(ZR10_SITL_BUILD)/camera-app --backend zr10 --video-codec h265
 	python3 sitl/test_sitl.py $(ZR10_SITL_BUILD)/camera-app \
 		$(ZR10_SITL_BUILD)/zr10-web sitl/gimbal_sim.py \
 		$(abspath $(ZR10_SITL_BUILD)/runtime) --backend zr10 --orientation upright

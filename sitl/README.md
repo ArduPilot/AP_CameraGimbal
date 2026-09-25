@@ -110,6 +110,15 @@ build directory cannot delete another slot. **Clear parameters on launch** appli
 that tab. The launcher number seeds port and component defaults when creating
 or explicitly resetting a configuration, so web changes remain effective.
 
+When a separate MAVProxy instance connects to a vehicle serial port and serves
+UniGCS on UDP 14550, start `sim_vehicle.py` with `--no-extra-ports`. Otherwise
+its default `--out 127.0.0.1:14550` can feed that second MAVProxy, which learns
+the localhost sender as another client and sends traffic back through the
+vehicle. This can circulate identical camera packets thousands of times per
+second and stall UniGCS parameter fetching before it will scan for cameras.
+For an existing session, run `output remove 127.0.0.1:14550` in the MAVProxy
+started by sim_vehicle; retain the separate instance's UniGCS output.
+
 Windows users can run the standalone installer or portable ZIP without installing
 Python, Cygwin or FFmpeg. See [Windows packaging and usage](../windows/README.md).
 
@@ -164,6 +173,12 @@ The default endpoints are:
 - web UI: `http://127.0.0.1:8081/` (login page; username `admin`, password
   `ardupilot`; English, Simplified Chinese or Japanese);
 - public SIYI API: UDP and TCP port 37260; and
+- initial MT11, A8 mini and ZR10 UniGCS discovery on UDP 37258 and private control on TCP 37256
+  for the first instance; see [protocol coverage and tests](../docs/unigcs.md).
+  Select H.265 for the main stream when testing UniGCS; H.264 display is not
+  working in the tested client.
+  Native private pan/tilt rates and centre/look-down presets share the public
+  SDK/MAVLink gimbal simulation; native modes and subscriptions remain pending;
 - H.264 RTSP test streams: `rtsp://127.0.0.1:8554/video1` and `/video2`;
 - MAVLink 2 camera/gimbal service: UDP and TCP port 14550; and
 - simulated private gimbal link: an automatically selected free UDP port,

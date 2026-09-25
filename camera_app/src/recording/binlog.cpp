@@ -136,6 +136,8 @@ void ca_binlog_packet(bool outgoing, uint8_t protocol, uint8_t link,
         r.source=data[8]; r.destination=data[9]; r.command=data[11]; r.sequence=get16(data+6);
     } else if (protocol == CA_PACKET_SIYI_MCU && length >= 13) {
         r.source=data[7]; r.destination=data[8]; r.command=data[10]; r.sequence=get16(data+5);
+    } else if (protocol == CA_PACKET_SIYI_LONG && length >= 20) {
+        r.command=data[11]; r.sequence=get16(data+9);
     } else if (protocol == CA_PACKET_XFROBOT && length >= 72) {
         r.command=data[69];
     }
@@ -143,7 +145,7 @@ void ca_binlog_packet(bool outgoing, uint8_t protocol, uint8_t link,
     if (logger.count+count > QUEUE_SIZE-2) {
         logger.dropped += count;
     } else {
-        const bool siyi = protocol <= CA_PACKET_SIYI_MCU;
+        const bool siyi = protocol <= CA_PACKET_SIYI_MCU || protocol == CA_PACKET_SIYI_LONG;
         entry e = {.length=uint16_t(sizeof(r)+3), .kind=0};
         e.data[0]=0xa3; e.data[1]=0x95;
         e.data[2]=siyi ? (outgoing ? CA_LOG_SIOU : CA_LOG_SIIN) : (outgoing ? CA_LOG_XFOU : CA_LOG_XFIN);

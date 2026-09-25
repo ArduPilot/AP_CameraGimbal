@@ -48,6 +48,11 @@ If startup fails or the camera app exits, the web service remains available for
 logs, parameter changes and restart. It never starts cardv as a fallback.
 The SD watcher remains active independently of camera restarts.
 
+Startup enables `ALLMULTI` on `eth0` for the retained vendor Ethernet driver.
+On the tested A8, joining `224.0.0.1` installed the expected multicast group
+and MAC entry but discovery packets were still dropped; enabling `ALLMULTI`
+restored UniGCS discovery. This does not enable promiscuous reception.
+
 ## Building
 
 Run `python3 tools/install_build_environment.py --targets a8` on x86_64
