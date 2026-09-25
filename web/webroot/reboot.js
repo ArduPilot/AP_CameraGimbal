@@ -5,7 +5,7 @@
   if (!script || !status || !heading) return;
   const started = Date.now();
   const poll = () => {
-    if (Date.now() - started >= 60000) {
+    if (Date.now() - started >= 120000) {
       status.textContent = status.dataset.timeout;
       return;
     }

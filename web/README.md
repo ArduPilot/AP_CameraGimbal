@@ -209,7 +209,7 @@ packages and concurrent uploads are refused. Once publication completes, the
 browser continues the progress display while polling the camera. A temporary
 network loss is treated as the expected reboot, and a new web-server process
 token confirms that the upgraded camera has returned. The wait times out after
-60 seconds with a power/network diagnostic rather than claiming success.
+120 seconds with a power/network diagnostic rather than claiming success.
 The stock updater scans `/mnt` approximately every five seconds. Uploading
 firmware can erase the kernel and rootfs, so stable power is mandatory.
 

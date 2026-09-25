@@ -869,7 +869,7 @@ try:
     assert b"id=select-firmware type=button" in body
     assert b"class=danger type=submit>Upgrade Firmware" not in body
     status, body, headers = request("GET", "/upgrade.js", "initial-password")
-    assert status == 200 and b"waitTimeout = 60000" in body
+    assert status == 200 and b"waitTimeout = 120000" in body
     assert b"check.status === 401" in body and b"/login" in body
     assert b"automatic firmware upgrade" in body
     assert b"/upgrade-status" in body and b"progress.value = 100" in body
