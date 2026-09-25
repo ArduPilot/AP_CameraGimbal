@@ -11,13 +11,13 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#ifdef __linux__
-#include <netpacket/packet.h>
-#else
+#if __has_include(<net/if_dl.h>)
 #include <net/if_dl.h>
+#define CA_HAVE_IF_DL 1
 #endif
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -56,6 +56,7 @@ struct ca_unigcs {
     uint8_t output[CA_LONG_MAX_FRAME*8] {};
     size_t used=0, sent=0;
     uint64_t heartbeat=0, recording_since=0, zoom_tick=0, last_request=0;
+    uint64_t multicast_join=0;
     int zoom_direction=0;
     bool zoom_reply=true;
     bool focusing=false;
@@ -406,21 +407,43 @@ static bool identity(in_addr local,uint8_t *out)
         auto *mask=reinterpret_cast<sockaddr_in *>(i->ifa_netmask);
         uint32_t broadcast=local.s_addr | ~mask->sin_addr.s_addr;
         memcpy(out+1,&local.s_addr,4); memcpy(out+5,&mask->sin_addr.s_addr,4); memcpy(out+9,&broadcast,4);
+        bool have_mac=false;
+#ifdef SIOCGIFHWADDR
+        // Linux and Cygwin expose the interface MAC through this ioctl.
+        // Cygwin has neither sockaddr_ll nor BSD's sockaddr_dl.
+        int fd=socket(AF_INET,SOCK_DGRAM,0);
+        if(fd>=0) {
+            ifreq request {};
+            strncpy(request.ifr_name,i->ifa_name,sizeof(request.ifr_name)-1);
+            if(ioctl(fd,SIOCGIFHWADDR,&request)==0) {
+                memcpy(out+13,request.ifr_hwaddr.sa_data,6);
+                have_mac=true;
+            }
+            close(fd);
+        }
+#elif defined(CA_HAVE_IF_DL)
         for(auto *m=interfaces;m;m=m->ifa_next) {
             if(!m->ifa_addr || strcmp(i->ifa_name,m->ifa_name)) continue;
-#ifdef __linux__
-            if(m->ifa_addr->sa_family==AF_PACKET) {
-                auto *link=reinterpret_cast<sockaddr_ll *>(m->ifa_addr);
-                if(link->sll_halen==6) memcpy(out+13,link->sll_addr,6);
-            }
-#else
             if(m->ifa_addr->sa_family==AF_LINK) {
                 auto *link=reinterpret_cast<sockaddr_dl *>(m->ifa_addr);
-                if(link->sdl_alen==6) memcpy(out+13,LLADDR(link),6);
+                if(link->sdl_alen==6) {
+                    memcpy(out+13,LLADDR(link),6);
+                    have_mac=true;
+                }
             }
-#endif
         }
-        found=true; break;
+#endif
+#ifdef CAMERA_APP_SITL
+        // Loopback and virtual adapters may have no Ethernet address. Give
+        // SITL a stable locally administered identity instead of all zeros.
+        static const uint8_t zero_mac[6] {};
+        if(!have_mac || !memcmp(out+13,zero_mac,6)) {
+            out[13]=0x02; out[14]=0;
+            memcpy(out+15,&local.s_addr,4);
+            have_mac=true;
+        }
+#endif
+        found=have_mac; break;
     }
     freeifaddrs(interfaces); return found;
 }
@@ -480,6 +503,21 @@ static void discover(ca_unigcs *s)
     }
 }
 
+static void join_multicast(ca_unigcs *s)
+{
+    s->multicast_join=now_ms();
+    ifaddrs *interfaces=nullptr;
+    if(getifaddrs(&interfaces)!=0) return;
+    for(auto *i=interfaces;i;i=i->ifa_next) {
+        if(!i->ifa_addr || i->ifa_addr->sa_family!=AF_INET || !(i->ifa_flags&IFF_UP) || !(i->ifa_flags&IFF_MULTICAST)) continue;
+        ip_mreq group {}; inet_pton(AF_INET,"224.0.0.1",&group.imr_multiaddr);
+        group.imr_interface=reinterpret_cast<sockaddr_in *>(i->ifa_addr)->sin_addr;
+        if(setsockopt(s->discovery,IPPROTO_IP,IP_ADD_MEMBERSHIP,&group,sizeof(group))<0 && errno!=EADDRINUSE)
+            ca_log("UniGCS multicast join %s: %s",i->ifa_name,strerror(errno));
+    }
+    freeifaddrs(interfaces);
+}
+
 int ca_unigcs_open(ca_unigcs **out,ca_media *media,unsigned tcp_port,unsigned discovery_port)
 {
     if(!out || !media || !tcp_port || tcp_port>65535 || !discovery_port || discovery_port>65535) { errno=EINVAL; return -1; }
@@ -498,17 +536,7 @@ int ca_unigcs_open(ca_unigcs **out,ca_media *media,unsigned tcp_port,unsigned di
             int error=errno; ca_unigcs_close(s); errno=error; return -1;
         }
 #endif
-        ifaddrs *interfaces=nullptr;
-        if(getifaddrs(&interfaces)==0) {
-            for(auto *i=interfaces;i;i=i->ifa_next) {
-                if(!i->ifa_addr || i->ifa_addr->sa_family!=AF_INET || !(i->ifa_flags&IFF_UP) || !(i->ifa_flags&IFF_MULTICAST)) continue;
-                ip_mreq group {}; inet_pton(AF_INET,"224.0.0.1",&group.imr_multiaddr);
-                group.imr_interface=reinterpret_cast<sockaddr_in *>(i->ifa_addr)->sin_addr;
-                if(setsockopt(s->discovery,IPPROTO_IP,IP_ADD_MEMBERSHIP,&group,sizeof(group))<0 && errno!=EADDRINUSE)
-                    ca_log("UniGCS multicast join %s: %s",i->ifa_name,strerror(errno));
-            }
-            freeifaddrs(interfaces);
-        }
+        join_multicast(s);
     }
     ca_log("UniGCS private TCP %u discovery UDP %u",tcp_port,discovery_port);
     *out=s; return 0;
@@ -520,7 +548,13 @@ void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual)
     s->backend=backend; s->manual=manual;
     bool recording=ca_media_recording(s->media);
     if(recording!=s->recording) { s->recording_since=recording ? now_ms() : 0; s->recording=recording; }
-    if(s->discovery>=0) discover(s);
+    if(s->discovery>=0) {
+        // Ethernet/DHCP can become ready after camera-app starts. Rejoining
+        // existing memberships is harmless (EADDRINUSE); also recover after
+        // an interface is removed and recreated.
+        if(now_ms()-s->multicast_join>=5000) join_multicast(s);
+        discover(s);
+    }
     sockaddr_in peer {}; socklen_t len=sizeof(peer);
     int fd=accept(s->listener,reinterpret_cast<sockaddr *>(&peer),&len);
     if(fd>=0) {

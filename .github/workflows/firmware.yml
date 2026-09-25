@@ -126,6 +126,7 @@ jobs:
           make -C camera_app sitl CAMERA_BACKEND=zr10 SITL_OBJDIR=build/zr10-sitl SITL_TARGET=../build/zr10-sitl/camera-app
           python3 sitl/test_unigcs.py build/a8-sitl/camera-app --backend a8 --video-codec h265
           python3 sitl/test_unigcs.py build/zr10-sitl/camera-app --backend zr10 --video-codec h265
+          sudo unshare -n "$(command -v python3)" sitl/test_unigcs.py build/a8-sitl/camera-app --backend a8 --late-interface
       - name: Test network capture and A8 web download
         run: |
           make -C camera_app network-capture-test

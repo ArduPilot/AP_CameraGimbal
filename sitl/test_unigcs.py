@@ -12,7 +12,7 @@ import time
 from unittest.mock import patch
 
 from gimbal_sim import Gimbal, mt11_private_frame, parse_mt11_private, a8_private_frame, parse_a8_private
-from test_sitl import reserve_port, terminate, verify_rtsp_sdp, verify_rtsp_video, verify_rtsp_rtcp, request as public_request
+from test_sitl import reserve_port, terminate, read_rtsp_sdp, verify_rtsp_sdp, verify_rtsp_video, verify_rtsp_rtcp, request as public_request
 
 
 CAMERA_ADDRESS = 0x34
@@ -140,12 +140,55 @@ def verify_native_gimbal(backend):
             assert gimbal.target is None and gimbal.commanded_rates == (0, 0)
 
 
+def verify_late_interface(port, product_id):
+    """Check the socket joins a NIC created after startup, and after replacement."""
+    address = '192.0.2.1'
+    for _ in range(2):
+        subprocess.run(['ip', 'link', 'add', 'ugcs-test', 'type', 'dummy'], check=True)
+        try:
+            subprocess.run(['ip', 'address', 'add', address+'/24', 'dev', 'ugcs-test'], check=True)
+            subprocess.run(['ip', 'link', 'set', 'ugcs-test', 'multicast', 'on', 'up'], check=True)
+            deadline = time.monotonic()+8
+            while True:
+                # Linux automatically joins all-hosts once. Require a second
+                # membership from our socket, not just the kernel's default.
+                interface = None
+                joined = False
+                for line in Path('/proc/net/igmp').read_text().splitlines()[1:]:
+                    fields = line.split()
+                    if not line[0].isspace():
+                        interface = fields[1]
+                    elif interface == 'ugcs-test' and fields[0] == '010000E0':
+                        joined = int(fields[1]) >= 2
+                if joined:
+                    break
+                assert time.monotonic() < deadline, 'no multicast membership on late interface: '+Path('/proc/net/igmp').read_text()
+                time.sleep(.05)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                udp.bind((address, 0))
+                udp.settimeout(2)
+                udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(address))
+                udp.sendto(bytes.fromhex('aa09030000f90000d034f00199a4'), ('224.0.0.1', port))
+                raw, peer = udp.recvfrom(256)
+                payload = parse_mt11_private(raw)[-1]
+                assert peer[0] == address
+                assert payload[:5] == bytes((product_id,))+socket.inet_aton(address)
+                assert payload[13:19] != bytes(6)
+        finally:
+            subprocess.run(['ip', 'link', 'delete', 'ugcs-test'], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('camera', type=Path)
     parser.add_argument('--backend', choices=('mt11','a8','zr10'), default='mt11')
     parser.add_argument('--video-codec', choices=('h264', 'h265'))
+    parser.add_argument('--late-interface', action='store_true',
+                        help='test delayed NIC discovery; run with sudo unshare -n')
     args = parser.parse_args()
+    if args.late_interface:
+        assert os.geteuid() == 0 and {n for _, n in socket.if_nameindex()} == {'lo'}, 'Use sudo unshare -n'
+        subprocess.run(['ip', 'link', 'set', 'lo', 'up'], check=True)
     product_id = {'mt11':0x89, 'a8':0x72, 'zr10':0x6b}[args.backend]
     thermal = args.backend == 'mt11'
     verify_native_gimbal(args.backend)
@@ -169,7 +212,7 @@ def main():
                    CAMERA_APP_CAPTURE_ROOT=str(root/'capture'), CAMERA_APP_LOG_ROOT=str(root/'logs'),
                    CAMERA_APP_RECORD_STATE=str(root/'record.state'), CAMERA_APP_MAVLINK_TCP_PORT='0',
                    CAMERA_APP_MAVLINK_UDP_PORT='0')
-        for key in ('CAMERA_APP_SITL_VIDEO1','CAMERA_APP_SITL_VIDEO2','CAMERA_APP_SITL_TERRAIN'):
+        for key in ('CAMERA_APP_SITL_VIDEO1','CAMERA_APP_SITL_VIDEO2','CAMERA_APP_SITL_TERRAIN','CAMERA_APP_SITL_RENDERER'):
             env.pop(key, None)
         if args.video_codec:
             video = root/'fixture.h264'
@@ -177,6 +220,23 @@ def main():
                 'testsrc2=size=320x180:rate=5','-t','1','-c:v','libx264',
                 '-threads','1','-preset','ultrafast','-f','h264',str(video)], check=True)
             env['CAMERA_APP_SITL_VIDEO1'] = str(video)
+            # Hold the first encoded frame until a client has completed PLAY.
+            # This makes the early-DESCRIBE regression deterministic.
+            release_encoder = root/'release-encoder'
+            renderer = root/'gated-renderer.py'
+            renderer.write_text(
+                "import sys, time\nfrom pathlib import Path\n"
+                f"sys.path.insert(0, {str(script.parent)!r})\n"
+                "import terrain_video\n"
+                "original = terrain_video.Encoder.encode\n"
+                "def gated(self, *args, **kwargs):\n"
+                "    deadline = time.monotonic() + 10\n"
+                f"    while not Path({str(release_encoder)!r}).exists():\n"
+                "        assert time.monotonic() < deadline, 'encoder not released'\n"
+                "        time.sleep(.01)\n"
+                "    return original(self, *args, **kwargs)\n"
+                "terrain_video.Encoder.encode = gated\nterrain_video.main()\n")
+            env['CAMERA_APP_SITL_RENDERER'] = str(renderer)
         processes = []
         with (root/'run.log').open('w') as log:
             try:
@@ -194,12 +254,27 @@ def main():
                     time.sleep(.02)
                 assert ready.exists(), 'camera not ready'
                 if args.video_codec:
+                    from test_video_telemetry import RTSP
                     rtsp = int(env['CAMERA_APP_RTSP_PORT'])
+                    sdp = read_rtsp_sdp(rtsp, 'video1')
+                    assert f'a=rtpmap:96 {args.video_codec.upper()}/90000' in sdp, sdp
+                    assert 'sprop-' not in sdp, sdp
+                    early = RTSP(rtsp, 'video1')
+                    try:
+                        release_encoder.touch()
+                        frame, _ = next(early.frames(1, args.video_codec))
+                        kinds = {(nal[0] & 31) if args.video_codec == 'h264' else ((nal[0] >> 1) & 63)
+                                 for nal in frame}
+                        assert ({7, 8} if args.video_codec == 'h264' else {32, 33, 34}) <= kinds, kinds
+                    finally:
+                        early.close()
                     verify_rtsp_video(rtsp, 'video1', (1280, 720) if args.backend == 'zr10' else (1920, 1080), args.video_codec)
                     verify_rtsp_sdp(rtsp, 'main.264' if thermal else 'video1', args.video_codec)
                     # A second interface must not inherit the first DESCRIBE's IP.
                     verify_rtsp_sdp(rtsp, 'video1', args.video_codec, '127.0.0.2')
                     verify_rtsp_rtcp(rtsp, 'video1')
+                if args.late_interface:
+                    verify_late_interface(ports['discovery'], product_id)
                 with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:
                     udp.settimeout(2)
                     # Exact discovery request from the stock capture.
@@ -210,6 +285,7 @@ def main():
                     # A8/ZR10 UART identity, not the discovery/TCP endpoint.
                     assert (src,dst,link,cmd,len(p)) == (0x34,0xd0,0xf0,1,19)
                     assert p[:5] == bytes((product_id,127,0,0,1))
+                    assert p[13:19] != bytes(6), 'missing discovery MAC address'
                     udp.setsockopt(socket.IPPROTO_IP,socket.IP_MULTICAST_IF,socket.inet_aton('127.0.0.1'))
                     udp.sendto(bytes.fromhex('aa09030000f90000d034f00199a4'),('224.0.0.1',ports['discovery']))
                     raw,peer = udp.recvfrom(256)

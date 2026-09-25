@@ -140,8 +140,6 @@ std::string ca_rtsp_sdp(xop::MediaSession *session, const std::string &ip)
         auto *source = session->GetMediaSource(static_cast<xop::MediaChannelId>(ch));
         if (!source) continue;
         const std::string attribute = source->GetAttribute();
-        // Do not permanently advertise an incomplete decoder configuration
-        // when a client arrives before the encoder's first key frame.
         if (attribute.empty()) return "";
         sdp += source->GetMediaDescription(0) + "\r\n" + attribute +
             "\r\na=control:track" + std::to_string(ch) + "\r\n";
@@ -173,7 +171,14 @@ public:
     {
         return source_->GetMediaDescription(port);
     }
-    std::string GetAttribute() override { return parameters_->attribute(); }
+    std::string GetAttribute() override
+    {
+        const std::string attribute = parameters_->attribute();
+        // A client can DESCRIBE before the first encoded key frame. Keep
+        // that session usable with the codec's basic SDP and in-band headers;
+        // later DESCRIBEs include parameter sets once the encoder supplies them.
+        return attribute.empty() ? source_->GetAttribute() : attribute;
+    }
     bool HandleFrame(xop::MediaChannelId channel, xop::AVFrame frame) override
     {
         timestamp_ = frame.timestamp;
