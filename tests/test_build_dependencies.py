@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -164,6 +165,76 @@ class CachedRTSPSourcesTest(unittest.TestCase):
         self.bootstrap()
         for name in self.files:
             self.assertTrue((source / name).is_file())
+
+    def download_with_failures(self, stage, failures):
+        """Use real local Git with injected transport errors; never use the network."""
+        upstream = self.root / 'upstream'
+        self.mpp.rename(upstream)
+        # The remote's tip is deliberately newer than the pinned revision.
+        subprocess.run(['git', '-C', str(upstream), '-c', 'user.name=Test',
+                        '-c', 'user.email=test@example.com', 'commit', '-qm',
+                        'New upstream tip', '--allow-empty'], check=True)
+        script = self.script.read_text()
+        script = re.sub(r'^mpp_url=.*$', 'mpp_url=' + str(upstream), script, flags=re.M)
+        self.script.write_text(script)
+        wrappers = self.root / 'bin'
+        wrappers.mkdir()
+        self.attempts = self.root / 'attempts'
+        wrapper = wrappers / 'git'
+        wrapper.write_text(f'''#!{sys.executable}
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+if {stage!r} in args:
+    counter = Path({str(self.attempts)!r})
+    count = int(counter.read_text()) + 1 if counter.exists() else 1
+    counter.write_text(str(count))
+    if count <= {failures}:
+        if {stage!r} == 'clone':
+            # Leave debris as a failed or interrupted download might do.
+            (Path(args[-1]) / '.git').mkdir(parents=True)
+        print('simulated connection reset', file=sys.stderr)
+        sys.exit(128)
+os.execv({shutil.which('git')!r}, ['git'] + args)
+''')
+        wrapper.chmod(0o755)
+        # Do not spend wall-clock time on the production retry delay.
+        delay = wrappers / 'sleep'
+        delay.write_text('#!/bin/sh\nexit 0\n')
+        delay.chmod(0o755)
+        return dict(os.environ, PATH=str(wrappers) + os.pathsep + os.environ['PATH'])
+
+    def run_download(self, env):
+        return subprocess.run(['sh', str(self.script), str(self.root / 'deps')],
+                              env=env, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=10)
+
+    def test_transient_clone_failure_retries_without_publishing_partial_cache(self):
+        result = self.run_download(self.download_with_failures('clone', 1))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.attempts.read_text(), '2')
+        self.assertFalse(list((self.root / 'deps').glob('.ss928-mpp.*')))
+        self.bootstrap()  # The completed checkout is reusable at its pinned revision.
+
+    def test_checkout_blob_fetch_failure_is_retried(self):
+        result = self.run_download(self.download_with_failures('checkout', 1))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.attempts.read_text(), '2')
+        self.bootstrap()
+
+    def test_permanent_failure_is_bounded_and_leaves_no_cache(self):
+        env = self.download_with_failures('checkout', 3)
+        result = self.run_download(env)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('after 3 attempts', result.stdout)
+        self.assertEqual(self.attempts.read_text(), '3')
+        self.assertFalse(self.mpp.exists())
+        self.assertFalse(list((self.root / 'deps').glob('.ss928-mpp.*')))
+        # A subsequent invocation can recover when the network comes back.
+        recovered = self.run_download(env)
+        self.assertEqual(recovered.returncode, 0, recovered.stdout)
+        self.bootstrap()
 
 
 if __name__ == '__main__':
