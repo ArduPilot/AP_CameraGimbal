@@ -304,10 +304,10 @@ unigcs-time-test: build/test_unigcs_time
 
 build/test_unigcs_time: tests/test_unigcs_time.cpp src/protocol/unigcs.cpp \
                        src/protocol/private_uart.cpp src/protocol/siyi.cpp include/camera_app/private_uart.h \
-                       include/camera_app/unigcs.h $(APCAM_HEADERS)
+                       include/camera_app/unigcs.h src/config.cpp $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
-		-Wl,--gc-sections -o $@ $< src/protocol/private_uart.cpp src/protocol/siyi.cpp -lm
+		-Wl,--gc-sections -o $@ $< src/protocol/private_uart.cpp src/protocol/siyi.cpp src/config.cpp -lm
 
 tests/test_telemetry_time: tests/test_telemetry_time.cpp src/protocol/mavlink_server.cpp \
                           include/camera_app/telemetry_time.h src/protocol/targeting.cpp src/protocol/mavlink.cpp $(MAVLINK_DEPS)
