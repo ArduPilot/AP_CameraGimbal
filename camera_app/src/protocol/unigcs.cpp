@@ -163,11 +163,13 @@ static void receive_time(ca_unigcs *s,const ca_private_frame *f)
     tm calendar {};
     calendar.tm_year=year-1900; calendar.tm_mon=p[2]-1; calendar.tm_mday=p[3];
     calendar.tm_hour=p[4]; calendar.tm_min=p[5]; calendar.tm_sec=p[6];
-    // The protocol supplies UTC. The configured timezone only affects local
-    // filenames/display; do not apply that offset to the received UTC date.
-    const time_t epoch=timegm(&calendar);
+    // UniGCS sends local wall time despite the vendor handler's UTC name.
+    // Match stock firmware's mktime conversion using the configured camera
+    // timezone, which must match the GCS. Let libc determine daylight saving.
+    calendar.tm_isdst=-1;
+    const time_t epoch=mktime(&calendar);
     tm checked {};
-    if(epoch<1788220800 || !gmtime_r(&epoch,&checked) ||
+    if(epoch<1788220800 || !localtime_r(&epoch,&checked) ||
        checked.tm_year!=int(year)-1900 || checked.tm_mon!=p[2]-1 || checked.tm_mday!=p[3] ||
        checked.tm_hour!=p[4] || checked.tm_min!=p[5] || checked.tm_sec!=p[6]) return;
     s->last_request=now_ms();
