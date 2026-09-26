@@ -71,3 +71,9 @@ source versions and each set has a checked SHA256SUMS. They contain required
 kernel modules, ISP tuning and network defaults, with no vendor camera app,
 Boa, sound or graphical assets. The kernel modules and tuning retain their
 respective component licensing; they are separate from AP application code.
+
+The built-in timezone name/rule table in `include/apcam/timezones.h` is derived
+from the public-domain IANA tzdata 2026d release. Its source archive SHA-256 is
+`0cb2aa8e333c3dc049badc42a0c61f21987b8cd44e107fa900bad764aacc7767`.
+See `timezones/LICENSE` and `timezones/README.md` for the source, regeneration
+procedure and current-rule coverage. No IANA implementation code is included.

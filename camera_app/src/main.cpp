@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "apcam/target.h"
+#include "apcam/APC_Timezone.h"
 #include "camera_app/APC_CameraApp.h"
 #include "apcam/APC_Resource.h"
 #if APCAM_HAVE_XFROBOT
@@ -338,12 +339,11 @@ int APC_CameraApp::run(int argc, char **argv)
                config_error[0] != '\0' ? config_error : strerror(errno));
         return 2;
     }
-    if (setenv("TZ", app_config.timezone, 1) < 0) {
+    if (APC_Timezone::apply(app_config.timezone) < 0) {
         ca_log("cannot apply timezone %s: %s", app_config.timezone,
                strerror(errno));
         return 2;
     }
-    tzset();
     mavlink_tcp_port = environment_optional_port(
         "CAMERA_APP_MAVLINK_TCP_PORT", app_config.mavlink_tcp_port);
     mavlink_udp_port = environment_optional_port(

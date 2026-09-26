@@ -33,3 +33,5 @@ __pycache__/
 /web/tests/test_string_buffer
 
 /web/tests/test_webroot
+
+/camera_app/tests/test_timezone

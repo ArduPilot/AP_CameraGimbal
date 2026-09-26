@@ -85,7 +85,7 @@ jobs:
           web/tests/test_string_buffer
       - name: Test configuration migration, IP addresses, routes and rollback
         run: |
-          make -C camera_app tests/test_config host
+          make -C camera_app timezone-test tests/test_config host
           camera_app/tests/test_config camera_app/camera.ini
           python3 sitl/test_network.py --sudo
           python3 camera_app/tests/test_network_status.py camera_app/tests/camera-app-host

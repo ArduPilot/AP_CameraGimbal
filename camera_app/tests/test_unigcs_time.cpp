@@ -4,6 +4,7 @@
 #include "../src/protocol/unigcs.cpp"
 #undef clock_gettime
 #undef clock_settime
+#include "apcam/APC_Timezone.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -155,11 +156,12 @@ int main()
     const struct { const char *zone; time_t september, february; } cases[]={
         {"UTC0",1790491430,1835440496},
         {"GMT-10",1790455430,1835404496},
+        {"Australia/Sydney",1790455430,1835400896},
         {"GMT+8",1790520230,1835469296},
         {"AEST-10AEDT,M10.1.0,M4.1.0/3",1790455430,1835400896},
     };
     for(const auto &c:cases) {
-        assert(setenv("TZ",c.zone,1)==0); tzset();
+        assert(APC_Timezone::apply(c.zone)==0);
         test_exchange(false,c.september,c.february);
         test_exchange(true,c.september,c.february);
     }

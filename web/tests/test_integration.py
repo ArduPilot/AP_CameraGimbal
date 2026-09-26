@@ -658,8 +658,12 @@ try:
     assert b'value="true" selected' in body
     assert b'name="uart_protocol"' in body and b'>None</option>' in body
     assert b'<option value="while_armed">While Armed</option>' in body
+    assert b'<select required name="timezone" id="timezone">' in body
+    assert b'<option selected value="GMT-10">GMT-10</option>' in body
+    for zone in (b"GMT", b"Europe/London", b"America/New_York", b"Australia/Sydney", b"Asia/Kathmandu"):
+        assert b'<option value="' + zone + b'">' + zone + b'</option>' in body
     replacement_parameters = {
-        "timezone": "GMT-10",
+        "timezone": "Asia/Kathmandu",
         "photo_scope": "all",
         "orientation": "auto",
         "uart_protocol": "mavlink",
@@ -741,6 +745,16 @@ try:
     assert b'<h2>SupportProxy</h2>' in body
     assert b'name="proxy_publish_password" id="proxy_publish_password" type=password' in body
     assert b'<input required name="proxy_publish_password"' not in body
+    assert 'timezone = "Asia/Kathmandu"' in (root / "app/camera.ini").read_text()
+    status, timezone_page, _ = request("GET", "/parameters", "initial-password")
+    assert status == 200 and b'<option value="Asia/Kathmandu" selected>' in timezone_page
+    status, timezone_status, _ = request("GET", "/", "initial-password")
+    assert status == 200 and b"(UTC+0545)" in timezone_status
+    status, _, _ = form("/parameters", "initial-password", csrf,
+                        dict(replacement_parameters, timezone="Asia/Typo"))
+    assert status == 400
+    assert 'timezone = "Asia/Kathmandu"' in (root / "app/camera.ini").read_text()
+
     valid_proxy = dict(replacement_parameters, proxy_enabled="true", proxy_host="localhost",
                        proxy_signing="true", proxy_signing_passphrase=" a signing phrase ",
                        proxy_publish_password="publish&?=secret", proxy_video1_name="Front Camera",
