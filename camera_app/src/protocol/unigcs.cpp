@@ -57,6 +57,8 @@ struct ca_unigcs {
     size_t used=0, sent=0;
     uint64_t heartbeat=0, recording_since=0, zoom_tick=0, last_request=0;
     uint64_t multicast_join=0;
+    uint64_t time_request_ms=0;
+    bool time_pending=false;
     int zoom_direction=0;
     bool zoom_reply=true;
     bool focusing=false;
@@ -82,6 +84,7 @@ static void disconnect(ca_unigcs *s)
     s->focusing=false; s->zoom_direction=0;
     if(s->client>=0) close(s->client);
     s->client=-1; s->source=0; s->used=s->sent=0; s->long_format=false;
+    s->time_pending=false; s->time_request_ms=0;
     memset(s->gimbal_requested,0,sizeof(s->gimbal_requested));
     ca_private_parser_init(&s->parser);
 }
@@ -117,6 +120,65 @@ static void reply(ca_unigcs *s,uint8_t cmd,const uint8_t *p,size_t n)
     size_t len=s->long_format ? ca_long_build(raw,sizeof(raw),2,s->sequence++,cmd,p,n) :
         ca_private_build(raw,sizeof(raw),0x0a,s->sequence++,camera_address,s->source,0x16,cmd,p,n);
     if(len) queue(s,raw,len);
+}
+
+static bool time_needed()
+{
+    // Same validity threshold as MAVLink SYSTEM_TIME. Do not step a clock
+    // already set by the flight controller or the public SIYI SDK.
+    timespec now {};
+    return clock_gettime(CLOCK_REALTIME,&now)==0 && now.tv_sec<1788220800;
+}
+
+static void request_time(ca_unigcs *s)
+{
+    if(s->client<0 || !s->source) return;
+    if(!time_needed()) { s->time_pending=false; return; }
+    const uint64_t now=now_ms();
+    if(s->time_pending && now-s->time_request_ms<1000) return;
+    const uint8_t wanted=1;
+    uint8_t raw[CA_LONG_MAX_FRAME];
+    // This is a camera-originated request, not an unsolicited ACK. Wait for
+    // the client's first command to establish its framing and routing ID.
+    const size_t len=s->long_format ? ca_long_build(raw,sizeof(raw),1,s->sequence++,0x91,&wanted,1) :
+        ca_private_build(raw,sizeof(raw),0x09,s->sequence++,camera_address,s->source,0x16,0x91,&wanted,1);
+    s->time_pending=true; s->time_request_ms=now;
+    if(len) queue(s,raw,len);
+}
+
+static void receive_time(ca_unigcs *s,const ca_private_frame *f)
+{
+    const bool long_format=f->raw_length>=20 && f->raw[0]==0x55;
+    if(s->client<0 || !s->source || !s->time_pending || f->source!=s->source ||
+       long_format!=s->long_format || f->destination!=camera_address || f->link!=0x16 ||
+       f->command!=0x91 || (f->control!=0x08 && f->control!=0x09 && f->control!=0x0a)) return;
+    if(!time_needed()) { s->time_pending=false; return; }
+    // Stock stores a uint16 year and five calendar bytes in an eight-byte
+    // struct. Accept its padded form and the packed seven-byte form.
+    const uint8_t *p=f->payload;
+    if(f->payload_length!=7 && f->payload_length!=8) return;
+    const unsigned year=u16(p);
+    if(year<2026 || year>2099 || p[2]<1 || p[2]>12 || p[3]<1 || p[3]>31 ||
+       p[4]>23 || p[5]>59 || p[6]>59) return;
+    tm calendar {};
+    calendar.tm_year=year-1900; calendar.tm_mon=p[2]-1; calendar.tm_mday=p[3];
+    calendar.tm_hour=p[4]; calendar.tm_min=p[5]; calendar.tm_sec=p[6];
+    // The protocol supplies UTC. The configured timezone only affects local
+    // filenames/display; do not apply that offset to the received UTC date.
+    const time_t epoch=timegm(&calendar);
+    tm checked {};
+    if(epoch<1788220800 || !gmtime_r(&epoch,&checked) ||
+       checked.tm_year!=int(year)-1900 || checked.tm_mon!=p[2]-1 || checked.tm_mday!=p[3] ||
+       checked.tm_hour!=p[4] || checked.tm_min!=p[5] || checked.tm_sec!=p[6]) return;
+    s->last_request=now_ms();
+    const timespec wanted {epoch,0};
+    if(clock_settime(CLOCK_REALTIME,&wanted)==0) {
+        s->time_pending=false;
+        ca_log("system time set from UniGCS command=0x91 source=0x%02x peer=%s epoch=%lld",
+               f->source,inet_ntoa(s->peer.sin_addr),static_cast<long long>(epoch));
+    } else {
+        ca_log("system time setting from UniGCS failed: %s",strerror(errno));
+    }
 }
 
 static void image_slots(ca_unigcs *s,uint8_t *p)
@@ -330,12 +392,19 @@ static void request(void *opaque,const ca_private_frame *f)
     const bool long_format=f->raw_length>=20 && f->raw[0]==0x55;
     ca_binlog_packet(false,long_format ? CA_PACKET_SIYI_LONG : CA_PACKET_MT11,CA_PACKET_TCP,ntohl(s->peer.sin_addr.s_addr),
                      ntohs(s->peer.sin_port),f->raw,f->raw_length);
-    if((f->control!=0x09 && f->control!=0x08) ||
-       f->source==0 || f->source==camera_address || f->source==0x2e) return;
+    if(f->source==0 || f->source==camera_address || f->source==0x2e) return;
     if(s->source && long_format!=s->long_format) return;
     if(s->source && f->source!=s->source) return;
     if(!((f->destination==camera_address && f->link==0x16) ||
          (f->destination==0x2e && f->link==0x11))) return;
+    // Only a solicited time reply may use response framing. Other response
+    // packets must never be dispatched as camera/gimbal commands.
+    if(f->destination==camera_address && f->command==0x91 && s->source &&
+       (f->control==0x08 || f->control==0x09 || f->control==0x0a)) {
+        receive_time(s,f);
+        return;
+    }
+    if(f->control!=0x09 && f->control!=0x08) return;
     s->source=f->source;
     s->long_format=long_format;
     s->last_request=now_ms();
@@ -573,6 +642,7 @@ void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual)
         break;
     }
     if(s->client>=0 && now_ms()-s->last_request>=5000) disconnect(s);
+    request_time(s);
     if(s->client>=0 && s->zoom_direction && now_ms()-s->zoom_tick>=50) {
         s->zoom_tick=now_ms();
         // MT11/A8 have absolute zoom only. Match the public SDK's 0.1x steps

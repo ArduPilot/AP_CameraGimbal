@@ -120,6 +120,7 @@ jobs:
         run: |
           make -C camera_app sitl tests/test_protocol
           camera_app/tests/test_protocol
+          make -C camera_app unigcs-time-test
           python3 sitl/test_unigcs.py build/sitl/camera-app --video-codec h264
           python3 sitl/test_unigcs.py build/sitl/camera-app --video-codec h265
           make -C camera_app sitl CAMERA_BACKEND=a8 SITL_OBJDIR=build/a8-sitl SITL_TARGET=../build/a8-sitl/camera-app

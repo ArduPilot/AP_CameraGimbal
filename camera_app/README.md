@@ -191,6 +191,13 @@ selected flight controller and uses it to correct any camera date earlier than
 ignored, allowing it to acquire valid GPS time after startup. A camera clock
 already at or after that date is left unchanged.
 
+MT11, A8 and ZR10 also request UTC time from a connected UniGCS client using
+private command `0x91` once per second while the camera clock is invalid.
+Validated calendar replies set the system clock; the configured timezone is
+applied only when formatting local dates. Requests stop once any supported
+time source sets a valid date. This works with both private TCP wire formats
+and does not rename or retimestamp files created before time was available.
+
 Automatic Recording offers **Disabled**, **Enabled**, and **While Armed**.
 The INI values are `false`, `true`, and `while_armed`; existing boolean
 settings retain their meaning. Enabled starts recording at app startup.
