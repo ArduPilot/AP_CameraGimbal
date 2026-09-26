@@ -146,8 +146,11 @@ and address the camera's time command while a request is outstanding.
 
 The service accepts packed seven-byte or padded eight-byte calendar payloads,
 with response, request or no-ACK control flags, without replying to the time
-reply. Dates are interpreted as UTC independently of the configured display
-timezone. Invalid dates, dates before the validity threshold, years after
+reply. UniGCS supplies local wall time, so the camera's configured timezone
+must match the GCS timezone. The service converts it with `mktime`, matching
+stock firmware, and lets libc determine daylight saving. MAVLink `SYSTEM_TIME`
+and public SDK `30` still supply epoch timestamps independent of timezone.
+Invalid dates, dates before the validity threshold, years after
 2099 and dates the platform's `time_t` cannot represent are rejected. Clock
 setting errors are logged and retried. Once the clock is valid, including if
 MAVLink or public SDK `30` sets it first, private requests stop and delayed
@@ -161,10 +164,52 @@ the received data and calls `update_utc_time` at `0x5f2100`, which calls
 to wrapper `0x65575`. Calendar fields are little-endian uint16 year followed
 by month, day, hour, minute and second bytes. A8 copies eight payload bytes,
 but uses only the first seven for the calendar. The eighth byte is ignored.
-The implementation is tested with both wire formats and simulated clocks;
-a real UniGCS exchange still needs capture confirmation, including UTC semantics.
+An A8 test on 2026-09-27 confirmed the local-time interpretation: UniGCS
+`.69` supplied `06:43:50` with the camera configured as `GMT-10` (UTC+10).
+Treating that value as UTC set epoch `1790491430` and displayed `16:43:50`,
+ten hours ahead. Local-time conversion instead yields epoch `1790455430` and
+displays the original `06:43:50`. The vendor handler's UTC name is misleading.
+
+Timezone investigation used the actual A8 log `00000519.BIN`: outgoing
+`SIOU` Id 1223 requests time, and incoming `SIIN` Id 1224 at boot time
+118.793202 seconds contains this complete legacy frame from `192.168.144.69`:
+
+```text
+55 66 aa bb 00 07 00 00 00 02 00 91 ee d1 df cc
+ea 07 09 1b 06 2b 32 bb a9 3a 56
+```
+
+The declared payload length is **seven**, and the payload is
+`ea 07 09 1b 06 2b 32`: year 2026, month 9, day 27, hour 6, minute 43,
+second 50. The last four bytes are the frame checksum, not time metadata.
+There is no UTC offset or DST indicator in this reply. The optional eighth
+byte accepted for stock struct compatibility is not used by either stock
+calendar conversion; its meaning in other client versions is unverified.
+The regression test replays this exact frame, including its checksums.
+
+Other possible timezone sources were checked separately:
+
+- MT11 private `16/f0` feeds `update_local` at `0x5f2480`, storing a
+  two-character uppercase `local:geo_code` and a three-character lowercase
+  `local:alpha_code`. These are locale codes, not an explicit timezone or
+  numeric UTC offset, and this handler does not set `TZ`.
+- The stock A8 web CGI has a separate `setTimeZone` function which writes
+  `timezone <value>` to `/tmp/cardv_fifo` and saves `Camera.Menu.TimeZone`.
+  The executable also contains a `setenv("TZ", ...); tzset()` path.
+  This establishes a separate web configuration facility, not evidence of
+  a private UniGCS timezone message.
+- The A8 log contains no incoming `f0` locale reply or identified timezone
+  command. The inspected MT11 private dispatch table has no named timezone
+  setter. Public SDK `30` is documented as Unix epoch microseconds, with no
+  separate timezone field.
+
+These findings establish the observed exchange, not every possible firmware
+or UniGCS version. Do not infer a timezone from a country/language code:
+countries can span multiple timezones. Configure the camera timezone to match
+the client when using this local-calendar time source.
+
 Run `make -C camera_app unigcs-time-test` to check the handshake, malformed
-dates, leap years, non-UTC camera timezones, retries and existing clock protection
+dates, leap years, positive/negative timezone offsets, daylight saving, retries and existing clock protection
 without altering the host clock.
 
 The stock MT11 capture in `analysis/MT11/unigcs-20260925/stock-camera.pcap0`
@@ -272,7 +317,7 @@ named handler. These mappings alone do not establish complete payload layouts.
 | `f0/07` | `shell_action` | Not implemented |
 | `16/f0` | `get_local_info_action` | Heartbeat; client location payload accepted but not used |
 | `16/94` | `get_camera_ver_action` | Compatibility version / MT11 identification |
-| `16/91` | `get_utc_time_info_action` | Receives validated UTC calendar time following camera's `91/01` request |
+| `16/91` | `get_utc_time_info_action` | Receives validated local calendar time following camera's `91/01` request |
 | `16/74` | `get_ip_action` | Pending payload/backend implementation |
 | `16/75` | `set_ip_action` | Pending payload/backend implementation |
 | `16/eb` | `zoom_switch_mode_action` | Pending payload/backend implementation |

@@ -72,13 +72,13 @@ static void send_time(ca_unigcs &s,const uint8_t *date,size_t n,uint8_t control=
     ca_private_network_parser_feed(&parser,wire+5,size-5,deliver,&s);
     assert(parser.length==0);
 }
-static void test_exchange(bool old)
+static void test_exchange(bool old,time_t expected,time_t expected_leap)
 {
     int sockets[2]; assert(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0);
     ca_unigcs s;
     s.client=sockets[0]; s.long_format=old;
     realtime=0; set_calls=0; fail_set=false;
-    const uint8_t valid[]={0xea,0x07,9,25,0,45,31,0}; // 2026-09-25T00:45:31Z
+    const uint8_t valid[]={0xea,0x07,9,27,6,43,50,0}; // Reported A8/UniGCS local time
     request_time(&s); read_request(s,sockets[1],false); // Wait for a known peer/format.
     s.source=0xd0;
     send_time(s,valid,8); assert(set_calls==0); // No unsolicited clock changes.
@@ -103,7 +103,7 @@ static void test_exchange(bool old)
         {0xea,7,9,0,0,45,31,0}, {0xea,7,9,31,0,45,31,0},
         {0xeb,7,2,29,0,45,31,0}, {0xea,7,9,25,24,45,31,0},
         {0xea,7,9,25,0,60,31,0}, {0xea,7,9,25,0,45,60,0},
-        {0xb2,7,1,1,0,0,0,0}, {0xea,7,8,31,23,59,59,0},
+        {0xb2,7,1,1,0,0,0,0}, {0xea,7,8,30,23,59,59,0},
         {0xff,0xff,9,25,0,45,31,0}};
     for(const auto &bad:invalid) send_time(s,bad,sizeof(bad));
     assert(set_calls==0 && s.time_pending);
@@ -111,7 +111,11 @@ static void test_exchange(bool old)
     assert(set_calls==1 && realtime==0 && s.time_pending);
     monotonic+=1000; request_time(&s); read_request(s,sockets[1],true);
     fail_set=false; send_time(s,valid,8);
-    assert(set_calls==2 && realtime==1790297131 && !s.time_pending);
+    assert(set_calls==2 && realtime==expected && !s.time_pending);
+    tm shown {}; assert(localtime_r(&realtime,&shown));
+    char text[32];
+    assert(strftime(text,sizeof(text),"%Y-%m-%d %H:%M:%S",&shown));
+    assert(!strcmp(text,"2026-09-27 06:43:50")); // UTC+10 must not display 16:43:50.
     monotonic+=1000; request_time(&s); read_request(s,sockets[1],false);
     send_time(s,valid,8); assert(set_calls==2);
     // MAVLink/public SDK may set the clock while a request is outstanding.
@@ -121,22 +125,43 @@ static void test_exchange(bool old)
     // Also accept a packed reply sent using request/no-ACK framing.
     for(uint8_t control: {uint8_t(0x08),uint8_t(0x09)}) {
         realtime=0; request_time(&s); read_request(s,sockets[1],true);
-        send_time(s,valid,7,control); assert(realtime==1790297131);
+        send_time(s,valid,7,control); assert(realtime==expected);
+    }
+    if(old) {
+        // Actual UniGCS reply from 192.168.144.69, A8 log 00000519.BIN,
+        // SIIN Id=1224. Seven calendar bytes, no timezone/DST byte.
+        const uint8_t captured[]={
+            0x55,0x66,0xaa,0xbb,0x00,0x07,0x00,0x00,0x00,0x02,0x00,0x91,
+            0xee,0xd1,0xdf,0xcc,0xea,0x07,0x09,0x1b,0x06,0x2b,0x32,
+            0xbb,0xa9,0x3a,0x56};
+        realtime=0; request_time(&s); read_request(s,sockets[1],true);
+        ca_private_parser parser {};
+        const unsigned before=set_calls;
+        ca_private_network_parser_feed(&parser,captured,sizeof(captured),deliver,&s);
+        assert(parser.length==0 && set_calls==before+1 && realtime==expected);
     }
     // A real leap day is valid, including when a reserved byte is nonzero.
     const uint8_t leap[]={0xec,7,2,29,12,34,56,0xa5};
     realtime=0; request_time(&s); read_request(s,sockets[1],true);
-    send_time(s,leap,8); assert(realtime==1835440496);
+    send_time(s,leap,8); assert(realtime==expected_leap);
     realtime=0; request_time(&s); read_request(s,sockets[1],true);
     disconnect(&s); assert(!s.time_pending && s.time_request_ms==0 && s.source==0);
     close(sockets[1]);
 }
 int main()
 {
-    // A configured camera timezone must not shift received UTC calendar data.
-    for(const char *zone: {"UTC0","GMT-10","GMT+8"}) {
-        assert(setenv("TZ",zone,1)==0); tzset();
-        test_exchange(false); test_exchange(true);
+    // Known epoch values, independent of the conversion being tested. In the
+    // DST zone September is standard time, while February is summer time.
+    const struct { const char *zone; time_t september, february; } cases[]={
+        {"UTC0",1790491430,1835440496},
+        {"GMT-10",1790455430,1835404496},
+        {"GMT+8",1790520230,1835469296},
+        {"AEST-10AEDT,M10.1.0,M4.1.0/3",1790455430,1835400896},
+    };
+    for(const auto &c:cases) {
+        assert(setenv("TZ",c.zone,1)==0); tzset();
+        test_exchange(false,c.september,c.february);
+        test_exchange(true,c.september,c.february);
     }
-    puts("PASS UniGCS time: v3/legacy framing, peer checks, UTC dates, retries and existing clock preservation");
+    puts("PASS UniGCS time: v3/legacy framing, local dates, timezone/DST, retries and existing clock preservation");
 }
