@@ -132,6 +132,51 @@ TCP 37256 must be available: a bind failure stops camera-app with an error,
 as it does for the public SIYI listener. This prevents a competing process from
 silently owning private controls while our application serves the camera.
 
+## Time synchronisation
+
+Stock firmware requests time from its connected TCP client using command `91`
+with one-byte payload `01`, while its time-initialised flag is clear. On MT11
+this is camera link `16`. The misleadingly named `get_utc_time_info_action`
+receives calendar time and sets the system clock; it is not a query of the
+camera's current time. Our private service requests time once per second after
+the first valid client command establishes its routing ID and wire format,
+while the camera date is earlier than 1 September 2026 UTC. It supports both
+MT11 v3 and A8/ZR10 legacy TCP framing. Replies must come from the same client
+and address the camera's time command while a request is outstanding.
+
+The service accepts packed seven-byte or padded eight-byte calendar payloads,
+with response, request or no-ACK control flags, without replying to the time
+reply. Dates are interpreted as UTC independently of the configured display
+timezone. Invalid dates, dates before the validity threshold, years after
+2099 and dates the platform's `time_t` cannot represent are rejected. Clock
+setting errors are logged and retried. Once the clock is valid, including if
+MAVLink or public SDK `30` sets it first, private requests stop and delayed
+replies cannot step the clock. Existing files are not renamed or retimestamped.
+
+This is confirmed by stock executable analysis: MT11 V1.0.5
+`get_utc_time_ontick` at `0x5f21f0` sends the request; handler `0x63d680` copies
+the received data and calls `update_utc_time` at `0x5f2100`, which calls
+`mktime` and `settimeofday`. A8 `cardv` v0.3.7 has the same sequence at
+`0x52408` and `0x522b4`; its TCP dispatch table at `0xe39d0` maps command `91`
+to wrapper `0x65575`. Calendar fields are little-endian uint16 year followed
+by month, day, hour, minute and second bytes. A8 copies eight payload bytes,
+but uses only the first seven for the calendar. The eighth byte is ignored.
+The implementation is tested with both wire formats and simulated clocks;
+a real UniGCS exchange still needs capture confirmation, including UTC semantics.
+Run `make -C camera_app unigcs-time-test` to check the handshake, malformed
+dates, leap years, non-UTC camera timezones, retries and existing clock protection
+without altering the host clock.
+
+The stock MT11 capture in `analysis/MT11/unigcs-20260925/stock-camera.pcap0`
+does not contain that private exchange: packet 1691 already sets its clock
+through public SDK UDP 37260, command `30`, from `192.168.144.15:35136`.
+Its payload `81f79408445c0600` is epoch microseconds `1790297131775873`
+(`2026-09-25 00:45:31.775873 UTC`). Packet 1692 contains the success reply
+`30/01` and has corrected capture time `2026-09-25 00:45:31.001678 UTC`.
+UniGCS on `.69` connects about two minutes later, after time was initialised.
+Our A8/MT11 firmware also supports public SDK `30` and MAVLink `SYSTEM_TIME`;
+the private request/response provides a clock source when using UniGCS alone.
+
 ## Confirmed transport
 
 Captured using stock MT11 V1.0.5 on 2026-09-25:
@@ -227,7 +272,7 @@ named handler. These mappings alone do not establish complete payload layouts.
 | `f0/07` | `shell_action` | Not implemented |
 | `16/f0` | `get_local_info_action` | Heartbeat; client location payload accepted but not used |
 | `16/94` | `get_camera_ver_action` | Compatibility version / MT11 identification |
-| `16/91` | `get_utc_time_info_action` | Pending payload/backend implementation |
+| `16/91` | `get_utc_time_info_action` | Receives validated UTC calendar time following camera's `91/01` request |
 | `16/74` | `get_ip_action` | Pending payload/backend implementation |
 | `16/75` | `set_ip_action` | Pending payload/backend implementation |
 | `16/eb` | `zoom_switch_mode_action` | Pending payload/backend implementation |
