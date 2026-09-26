@@ -7,11 +7,14 @@
 #include "apcam/APC_Timezone.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 static time_t realtime;
 static uint64_t monotonic=10000;
 static unsigned set_calls;
 static bool fail_set;
+static unsigned failure_logs, forwarded;
+static char success_log[256];
 
 int test_clock_gettime(clockid_t clock,timespec *value)
 {
@@ -28,10 +31,43 @@ int test_clock_settime(clockid_t clock,const timespec *value)
     realtime=value->tv_sec;
     return 0;
 }
-void ca_log(const char *,...) {}
+void ca_log(const char *format,...)
+{
+    if (strstr(format,"system time setting from UniGCS failed")) ++failure_logs;
+    if (strstr(format,"system time set from UniGCS command")) {
+        va_list ap; va_start(ap,format);
+        vsnprintf(success_log,sizeof(success_log),format,ap); va_end(ap);
+    }
+}
 void ca_binlog_packet(bool,uint8_t,uint8_t,uint32_t,uint16_t,const uint8_t *,size_t,int32_t) {}
 int ca_backend_set_zoom_rate(ca_backend *,float) { return 0; }
-int ca_media_manual_focus(ca_media *,int) { return 0; }
+int ca_media_manual_focus(ca_media *,int) { abort(); }
+// Keep the real dispatcher and camera command switch linked. Unexpected
+// media actions must fail the test rather than hide a routing regression.
+const ca_config *ca_media_settings(const ca_media *) { static ca_config cfg {}; return &cfg; }
+bool ca_media_recording(const ca_media *) { return false; }
+int ca_media_configure(ca_media *,const ca_config *) { abort(); }
+int ca_media_set_recording(ca_media *,bool) { abort(); }
+int ca_media_get_thermal_palette(ca_media *,uint8_t *) { abort(); }
+int ca_media_set_thermal_palette(ca_media *,uint8_t) { abort(); }
+int ca_media_get_thermal_gain(ca_media *,uint8_t *) { abort(); }
+int ca_media_set_thermal_gain(ca_media *,uint8_t) { abort(); }
+bool ca_media_thermal_main(const ca_media *) { abort(); }
+int ca_media_set_thermal_main(ca_media *,bool) { abort(); }
+enum ca_media_lens ca_media_lens(const ca_media *) { abort(); }
+int ca_media_set_lens(ca_media *,enum ca_media_lens) { abort(); }
+unsigned ca_media_frame_rate(const ca_media *,bool) { abort(); }
+int ca_media_autofocus(ca_media *,uint16_t,uint16_t) { abort(); }
+float ca_media_zoom(const ca_media *) { abort(); }
+int ca_media_capture_photo(ca_media *,ca_photo_scope) { abort(); }
+int ca_backend_set_zoom(ca_backend *,float) { abort(); }
+int ca_backend_handle_private(ca_backend *,const ca_private_frame *f)
+{
+    assert(f->destination==0x2e && f->link==0x11);
+    assert(f->control==0x08 || f->control==0x09);
+    ++forwarded;
+    return 0;
+}
 
 static unsigned requests;
 static void check_request(void *opaque,const ca_private_frame *f)
@@ -55,10 +91,6 @@ static void read_request(ca_unigcs &s,int peer,bool expected)
     ca_private_network_parser_feed(&parser,wire,n,check_request,&s);
     assert(requests==before+1 && parser.length==0);
 }
-static void deliver(void *opaque,const ca_private_frame *f)
-{
-    receive_time(static_cast<ca_unigcs *>(opaque),f);
-}
 static void send_time(ca_unigcs &s,const uint8_t *date,size_t n,uint8_t control=0x0a,
                       uint8_t source=0xd0,uint8_t dest=0x34,uint8_t link=0x16,bool wrong_format=false)
 {
@@ -69,8 +101,8 @@ static void send_time(ca_unigcs &s,const uint8_t *date,size_t n,uint8_t control=
     assert(size);
     ca_private_parser parser {};
     // Include stream fragmentation rather than bypassing the CRC parser.
-    ca_private_network_parser_feed(&parser,wire,5,deliver,&s);
-    ca_private_network_parser_feed(&parser,wire+5,size-5,deliver,&s);
+    ca_private_network_parser_feed(&parser,wire,5,request,&s);
+    ca_private_network_parser_feed(&parser,wire+5,size-5,request,&s);
     assert(parser.length==0);
 }
 static void test_exchange(bool old,time_t expected,time_t expected_leap)
@@ -81,7 +113,13 @@ static void test_exchange(bool old,time_t expected,time_t expected_leap)
     realtime=0; set_calls=0; fail_set=false;
     const uint8_t valid[]={0xea,0x07,9,27,6,43,50,0}; // Reported A8/UniGCS local time
     request_time(&s); read_request(s,sockets[1],false); // Wait for a known peer/format.
-    s.source=0xd0;
+    // Establish the session through a normal no-ACK client command.
+    uint8_t hello[64], locale[6] {};
+    const size_t hello_size=old ? ca_long_build(hello,sizeof(hello),0,1,0xf0,locale,6) :
+        ca_private_build(hello,sizeof(hello),0x08,1,0xd0,0x34,0x16,0xf0,locale,6);
+    ca_private_parser hello_parser {};
+    ca_private_network_parser_feed(&hello_parser,hello,hello_size,request,&s);
+    assert(s.source==0xd0 && s.long_format==old && s.last_request==monotonic);
     send_time(s,valid,8); assert(set_calls==0); // No unsolicited clock changes.
     request_time(&s); read_request(s,sockets[1],true);
     assert(s.time_pending);
@@ -94,6 +132,14 @@ static void test_exchange(bool old,time_t expected,time_t expected_leap)
         send_time(s,valid,8,0x0a,0xd0,0x2e);
         send_time(s,valid,8,0x0a,0xd0,0x34,0x11);
         send_time(s,valid,8,0x0b);
+        // Response-framed time packets must never become gimbal commands.
+        const unsigned before=forwarded;
+        send_time(s,valid,8,0x0a,0xd0,0x2e,0x11);
+        assert(forwarded==before);
+        // Ordinary no-ACK/ACK gimbal commands retain their routing.
+        send_time(s,valid,8,0x08,0xd0,0x2e,0x11);
+        send_time(s,valid,8,0x09,0xd0,0x2e,0x11);
+        assert(forwarded==before+2 && s.gimbal_requested[0x91]);
         assert(set_calls==0);
     }
     for(size_t n: {size_t(0),size_t(1),size_t(6),size_t(9)}) {
@@ -105,14 +151,20 @@ static void test_exchange(bool old,time_t expected,time_t expected_leap)
         {0xeb,7,2,29,0,45,31,0}, {0xea,7,9,25,24,45,31,0},
         {0xea,7,9,25,0,60,31,0}, {0xea,7,9,25,0,45,60,0},
         {0xb2,7,1,1,0,0,0,0}, {0xea,7,8,30,23,59,59,0},
+        {0x34,0x08,1,1,0,0,0,0}, // 2100: first rejected year
+        {0x88,0x13,1,1,0,0,0,0}, // 5000: catches a weakened 9999 bound
         {0xff,0xff,9,25,0,45,31,0}};
     for(const auto &bad:invalid) send_time(s,bad,sizeof(bad));
     assert(set_calls==0 && s.time_pending);
+    const uint64_t idle=s.last_request;
+    monotonic+=10;
     fail_set=true; send_time(s,valid,8);
-    assert(set_calls==1 && realtime==0 && s.time_pending);
+    assert(set_calls==1 && realtime==0 && s.time_pending && s.last_request==idle);
     monotonic+=1000; request_time(&s); read_request(s,sockets[1],true);
     fail_set=false; send_time(s,valid,8);
     assert(set_calls==2 && realtime==expected && !s.time_pending);
+    assert(s.last_request==monotonic);
+    assert(strstr(success_log,"source=0xd0") && strstr(success_log,"timezone="));
     tm shown {}; assert(localtime_r(&realtime,&shown));
     char text[32];
     assert(strftime(text,sizeof(text),"%Y-%m-%d %H:%M:%S",&shown));
@@ -138,7 +190,7 @@ static void test_exchange(bool old,time_t expected,time_t expected_leap)
         realtime=0; request_time(&s); read_request(s,sockets[1],true);
         ca_private_parser parser {};
         const unsigned before=set_calls;
-        ca_private_network_parser_feed(&parser,captured,sizeof(captured),deliver,&s);
+        ca_private_network_parser_feed(&parser,captured,sizeof(captured),request,&s);
         assert(parser.length==0 && set_calls==before+1 && realtime==expected);
     }
     // A real leap day is valid, including when a reserved byte is nonzero.
@@ -149,6 +201,77 @@ static void test_exchange(bool old,time_t expected,time_t expected_leap)
     disconnect(&s); assert(!s.time_pending && s.time_request_ms==0 && s.source==0);
     close(sockets[1]);
 }
+static void test_failures(bool old)
+{
+    assert(APC_Timezone::apply("GMT")==0);
+    ca_unigcs s;
+    int sockets[2]; assert(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0);
+    assert(fcntl(sockets[0],F_SETFL,O_NONBLOCK)==0);
+    s.client=sockets[0]; s.source=0xd0; s.long_format=old;
+    s.last_request=monotonic;
+    const uint64_t idle=s.last_request;
+    const uint8_t date[]={0xea,7,9,27,6,43,50};
+    realtime=0; set_calls=0; failure_logs=0; fail_set=true;
+    // Repeated replies must neither fill the log nor keep the session alive.
+    for(unsigned i=0;i<10000;i++) {
+        request_time(&s); read_request(s,sockets[1],true);
+        send_time(s,date,sizeof(date));
+        assert(s.last_request==idle && set_calls==i+1 && failure_logs==1);
+        monotonic+=1000;
+    }
+    ca_unigcs_update(&s,nullptr,false);
+    assert(s.client==-1 && !s.time_pending && !s.source);
+    close(sockets[1]);
+
+    // A reconnect while the same failure persists must not restart log spam.
+    assert(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0);
+    s.client=sockets[0]; s.source=0xd0; s.long_format=old;
+    request_time(&s); read_request(s,sockets[1],true);
+    send_time(s,date,sizeof(date)); assert(failure_logs==1);
+    // Retrying can still recover; a later, separate failure is reported again.
+    monotonic+=1000; fail_set=false;
+    request_time(&s); read_request(s,sockets[1],true);
+    send_time(s,date,sizeof(date));
+    assert(realtime==1790491430 && !s.time_pending && s.last_request==monotonic);
+    realtime=0; fail_set=true;
+    request_time(&s); read_request(s,sockets[1],true);
+    send_time(s,date,sizeof(date)); assert(failure_logs==2);
+    // Recovery by another time source also ends the failure period.
+    realtime=1790491430;
+    request_time(&s); read_request(s,sockets[1],false);
+    realtime=0;
+    request_time(&s); read_request(s,sockets[1],true);
+    send_time(s,date,sizeof(date)); assert(failure_logs==3);
+    disconnect(&s); close(sockets[1]); fail_set=false;
+}
+
+static void test_calendar_boundaries(bool old)
+{
+    int sockets[2]; assert(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0);
+    ca_unigcs s;
+    s.client=sockets[0]; s.source=0xd0; s.long_format=old;
+    realtime=0; set_calls=0; fail_set=false;
+    assert(APC_Timezone::apply("Australia/Sydney")==0);
+    request_time(&s); read_request(s,sockets[1],true);
+    const uint8_t gap[]={0xeb,7,10,3,2,30,0};
+    send_time(s,gap,sizeof(gap)); assert(set_calls==0);
+    const uint8_t repeated[]={0xeb,7,4,4,2,30,0};
+    send_time(s,repeated,sizeof(repeated));
+    // The protocol has no offset/DST field: either occurrence round-trips.
+    assert(set_calls==1 && (realtime==1806766200 || realtime==1806769800));
+    assert(APC_Timezone::apply("GMT")==0);
+    realtime=0;
+    request_time(&s); read_request(s,sockets[1],true);
+    const uint8_t last_year[]={0x33,8,12,31,23,59,59}; // 2099
+    send_time(s,last_year,sizeof(last_year));
+    if(sizeof(time_t)>=8) {
+        tm checked {};
+        assert(set_calls==2 && localtime_r(&realtime,&checked));
+        assert(checked.tm_year==199 && checked.tm_mon==11 && checked.tm_mday==31);
+    } else assert(realtime==0); // ARMv7 time_t cannot represent this date.
+    disconnect(&s); close(sockets[1]);
+}
+
 int main()
 {
     // Known epoch values, independent of the conversion being tested. In the
@@ -165,5 +288,9 @@ int main()
         test_exchange(false,c.september,c.february);
         test_exchange(true,c.september,c.february);
     }
-    puts("PASS UniGCS time: v3/legacy framing, local dates, timezone/DST, retries and existing clock preservation");
+    for(bool old: {false,true}) {
+        test_failures(old);
+        test_calendar_boundaries(old);
+    }
+    puts("PASS UniGCS time: production dispatch, v3/legacy routing, timezone/DST, bounded failure logging and idle timeout");
 }

@@ -152,9 +152,24 @@ stock firmware, and lets libc determine daylight saving. MAVLink `SYSTEM_TIME`
 and public SDK `30` still supply epoch timestamps independent of timezone.
 Invalid dates, dates before the validity threshold, years after
 2099 and dates the platform's `time_t` cannot represent are rejected. Clock
-setting errors are logged and retried. Once the clock is valid, including if
+setting errors are retried, but only the first failure is logged until a
+supported source establishes a valid clock. Reconnecting does not reset this
+suppression. Failed clock updates do not refresh the five-second client idle
+timeout. Successful updates log the effective timezone and UTC offset.
+Once the clock is valid, including if
 MAVLink or public SDK `30` sets it first, private requests stop and delayed
 replies cannot step the clock. Existing files are not renamed or retimestamped.
+
+The seven-byte calendar reply has no UTC offset or DST indicator. During the
+repeated local hour when daylight saving ends, either occurrence can pass the
+round-trip check; libc chooses one, and the result can be an hour wrong.
+Nonexistent local times during the spring-forward gap are rejected. Correctly
+configured clients never emit those nonexistent times, but differing client
+and camera timezone rules can cause rejection. Use matching timezone settings.
+MAVLink `SYSTEM_TIME` only initializes an invalid clock; it does **not** correct
+a clock that UniGCS has already set to a valid but wrong epoch. Public SDK `30`
+can explicitly set the epoch. The validity cutoff is 1 September 2026 **UTC**,
+regardless of the timezone used in the calendar reply.
 
 This is confirmed by stock executable analysis: MT11 V1.0.5
 `get_utc_time_ontick` at `0x5f21f0` sends the request; handler `0x63d680` copies
@@ -208,9 +223,11 @@ or UniGCS version. Do not infer a timezone from a country/language code:
 countries can span multiple timezones. Configure the camera timezone to match
 the client when using this local-calendar time source.
 
-Run `make -C camera_app unigcs-time-test` to check the handshake, malformed
-dates, leap years, positive/negative timezone offsets, daylight saving, retries and existing clock protection
-without altering the host clock.
+Run `make -C camera_app unigcs-time-test` to check the production dispatcher,
+handshake, gimbal routing, malformed dates, the 2099 year limit, leap years,
+timezone offsets, DST gaps/repeated hours, retry recovery, bounded failure
+logging, idle disconnection and existing clock protection without altering
+the host clock.
 
 The stock MT11 capture in `analysis/MT11/unigcs-20260925/stock-camera.pcap0`
 does not contain that private exchange: packet 1691 already sets its clock

@@ -59,6 +59,7 @@ struct ca_unigcs {
     uint64_t multicast_join=0;
     uint64_t time_request_ms=0;
     bool time_pending=false;
+    bool time_error_reported=false;
     int zoom_direction=0;
     bool zoom_reply=true;
     bool focusing=false;
@@ -133,7 +134,7 @@ static bool time_needed()
 static void request_time(ca_unigcs *s)
 {
     if(s->client<0 || !s->source) return;
-    if(!time_needed()) { s->time_pending=false; return; }
+    if(!time_needed()) { s->time_pending=false; s->time_error_reported=false; return; }
     const uint64_t now=now_ms();
     if(s->time_pending && now-s->time_request_ms<1000) return;
     const uint8_t wanted=1;
@@ -152,7 +153,7 @@ static void receive_time(ca_unigcs *s,const ca_private_frame *f)
     if(s->client<0 || !s->source || !s->time_pending || f->source!=s->source ||
        long_format!=s->long_format || f->destination!=camera_address || f->link!=0x16 ||
        f->command!=0x91 || (f->control!=0x08 && f->control!=0x09 && f->control!=0x0a)) return;
-    if(!time_needed()) { s->time_pending=false; return; }
+    if(!time_needed()) { s->time_pending=false; s->time_error_reported=false; return; }
     // Stock stores a uint16 year and five calendar bytes in an eight-byte
     // struct. Accept its padded form and the packed seven-byte form.
     const uint8_t *p=f->payload;
@@ -172,13 +173,18 @@ static void receive_time(ca_unigcs *s,const ca_private_frame *f)
     if(epoch<1788220800 || !localtime_r(&epoch,&checked) ||
        checked.tm_year!=int(year)-1900 || checked.tm_mon!=p[2]-1 || checked.tm_mday!=p[3] ||
        checked.tm_hour!=p[4] || checked.tm_min!=p[5] || checked.tm_sec!=p[6]) return;
-    s->last_request=now_ms();
     const timespec wanted {epoch,0};
     if(clock_settime(CLOCK_REALTIME,&wanted)==0) {
-        s->time_pending=false;
-        ca_log("system time set from UniGCS command=0x91 source=0x%02x peer=%s epoch=%lld",
-               f->source,inet_ntoa(s->peer.sin_addr),static_cast<long long>(epoch));
-    } else {
+        s->last_request=now_ms();
+        s->time_pending=false; s->time_error_reported=false;
+        char zone[64];
+        if(!strftime(zone,sizeof(zone),"%Z (UTC%z)",&checked)) strcpy(zone,"unknown");
+        ca_log("system time set from UniGCS command=0x91 source=0x%02x peer=%s epoch=%lld timezone=%s",
+               f->source,inet_ntoa(s->peer.sin_addr),static_cast<long long>(epoch),zone);
+    } else if(!s->time_error_reported) {
+        // Suppress repeated failures, including across client reconnects,
+        // until a supported time source establishes a valid clock.
+        s->time_error_reported=true;
         ca_log("system time setting from UniGCS failed: %s",strerror(errno));
     }
 }
