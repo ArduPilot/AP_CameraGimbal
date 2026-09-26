@@ -314,6 +314,13 @@ tests/test_telemetry_time: tests/test_telemetry_time.cpp src/protocol/mavlink_se
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/targeting.cpp src/protocol/mavlink.cpp -lm
 
+.PHONY: timezone-test
+timezone-test: tests/test_timezone
+	./tests/test_timezone
+
+tests/test_timezone: tests/test_timezone.cpp $(APCAM_HEADERS)
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $<
+
 $(CONFIG_TEST_TARGET): tests/test_config.cpp src/config.cpp include/camera_app/config.h $(APCAM_HEADERS)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
 
@@ -566,7 +573,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
 		src/log.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp -lpthread -lm
 
-test: system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \

@@ -3,6 +3,7 @@
 #endif
 #include "camera_app/mavlink_server.h"
 #include "apcam/lens.h"
+#include "apcam/APC_Timezone.h"
 #include "apcam/config_status.h"
 
 #include "camera_app/backend.h"
@@ -2016,7 +2017,7 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
     if ((next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL &&
          ca_media_set_thermal_palette(server->media, next->thermal_palette) < 0) ||
         (record != was_recording && ca_media_set_recording(server->media, record) < 0) ||
-        (strcmp(next->timezone, previous.timezone) != 0 && setenv("TZ", next->timezone, 1) < 0)) {
+        (strcmp(next->timezone, previous.timezone) != 0 && APC_Timezone::apply(next->timezone) < 0)) {
         int saved_errno = errno;
         if (ca_media_recording(server->media) != was_recording)
             (void)ca_media_set_recording(server->media, was_recording);
@@ -2027,7 +2028,6 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
         errno = saved_errno;
         return -1;
     }
-    if (strcmp(next->timezone, previous.timezone) != 0) tzset();
     if (next->tracking_method != previous.tracking_method || !next->position_targeting) {
         stop_tracking_rate(server);
         server->last_target_location_ms = 0;

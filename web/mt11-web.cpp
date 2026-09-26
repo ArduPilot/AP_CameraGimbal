@@ -464,6 +464,7 @@ enum parameter_kind {
     PARAM_ENUM,
     PARAM_LUT,
     PARAM_TEXT,
+    PARAM_TIMEZONE,
     PARAM_PASSWORD
 };
 
@@ -601,7 +602,7 @@ static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {
 
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
-     PARAM_TEXT, 1, 127, 0, NULL, 0},
+     PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
     {"photo_scope", "capture", "photo_scope", S_P_PHOTO_SCOPE, S_H_PHOTO_SCOPE,
      PARAM_ENUM, 0, 0, 0, photo_scope_options, 2},
     {"orientation", "mount", "orientation", S_P_ORIENTATION, S_H_ORIENTATION,
@@ -2105,6 +2106,7 @@ static bool collect_described_parameters(const APC_HTTPRequest *request,
                 valid = valid_lut_value(value);
                 if (valid) snprintf(normalized, sizeof(normalized), "%s", value);
                 break;
+            case PARAM_TIMEZONE:
             case PARAM_TEXT:
             case PARAM_PASSWORD:
                 valid = valid_text_parameter(parameter, value);
@@ -4351,7 +4353,25 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
     page->append("\">");
     page->append_html(T(parameter->label));
     page->append("</label>");
-    if (parameter->kind == PARAM_ENUM || parameter->kind == PARAM_BOOLEAN) {
+    if (parameter->kind == PARAM_TIMEZONE) {
+        page->append("<select required name=\"timezone\" id=\"timezone\">");
+        // Keep an existing POSIX setting selected when saving unrelated fields.
+        if (present && !APC_Timezone::rule(display_value)) {
+            page->append("<option selected value=\"");
+            page->append_html(display_value);
+            page->append("\">");
+            page->append_html(display_value);
+            page->append("</option>");
+        }
+        for (const auto &zone : APC_Timezone::zones) {
+            page->append("<option value=\"");
+            page->append_html(zone.name);
+            page->appendf("\"%s>", present && !strcmp(display_value, zone.name) ? " selected" : "");
+            page->append_html(zone.name);
+            page->append("</option>");
+        }
+        page->append("</select>");
+    } else if (parameter->kind == PARAM_ENUM || parameter->kind == PARAM_BOOLEAN) {
         page->append("<select required name=\"");
         page->append_html(parameter->form_name);
         page->append("\" id=\"");
@@ -6934,12 +6954,10 @@ static void apply_configured_timezone(void)
     char zone[128];
     char *config = read_file(REPLACEMENT_CONFIG_PATH, MAX_CONFIG, &length);
 
-    if (config == NULL) return;
-    if (ini_get_value(config, "general", "timezone", zone, sizeof(zone)) && zone[0] != '\0') {
-        const char *current = getenv("TZ");
-        if (current == NULL || strcmp(current, zone) != 0) {
-            if (setenv("TZ", zone, 1) == 0) tzset();
-        }
+    snprintf(zone, sizeof(zone), "%s", APCAM_DEFAULT_TIMEZONE);
+    if (config != NULL) ini_get_value(config, "general", "timezone", zone, sizeof(zone));
+    if (zone[0] != '\0') {
+        if (APC_Timezone::apply(zone) < 0) log_message("cannot apply timezone %s", zone);
     }
     free(config);
 }

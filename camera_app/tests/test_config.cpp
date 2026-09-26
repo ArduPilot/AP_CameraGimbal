@@ -36,7 +36,14 @@ int main(int argc, char **argv)
     ca_config_defaults(&config);
     assert(!config.log_disarmed);
     assert(!config.network_capture);
-    assert(strcmp(config.timezone, "GMT-10") == 0);
+    assert(strcmp(config.timezone, "GMT") == 0);
+    const auto *timezone_field = APC_Config::find("general", "timezone");
+    assert(timezone_field);
+    for (const auto &zone : APC_Timezone::zones) {
+        assert(APC_Config::validate(*timezone_field, zone.name));
+    }
+    assert(APC_Config::validate(*timezone_field, "GMT-10"));
+    assert(!APC_Config::validate(*timezone_field, "Australia/Sydny"));
     assert(config.photo_scope == CA_PHOTO_SCOPE_ALL);
     assert(config.orientation == CA_MOUNT_AUTO);
     assert(config.uart_protocol == CA_UART_NONE);

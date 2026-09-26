@@ -115,13 +115,19 @@ and SD-card lifecycle management are also pending.
 
 ## Configuration
 
+The timezone defaults to `GMT` (UTC+0). The web dropdown selects a built-in
+IANA name, which is saved in `[general] timezone`. All cameras and SITL share
+the [supported names and current-rule limitations](../timezones/README.md);
+no system zoneinfo installation is required. Existing POSIX settings remain
+valid during upgrades.
+
 The ArduPilot camera app reads `/app/camera.ini`; it does not read or attempt to match
 the vendor `/app/config.ini` format. The repository default is
 [`camera.ini`](camera.ini):
 
 ```ini
 [general]
-timezone = GMT-10
+timezone = GMT
 
 [capture]
 photo_scope = all
@@ -173,8 +179,9 @@ targets default the main alias to `main.264`; an empty alias adds nothing.
 Aliases are a single path segment (letters, digits, `.`, `-`, `_`) and apply
 on camera-app restart.
 
-`timezone` accepts a POSIX TZ string or an installed IANA zone name and is
-applied before media filenames and normal startup logging are generated.
+`timezone` accepts a supported built-in IANA name (or an existing explicit
+POSIX TZ setting) and is applied before media filenames and normal startup
+logging are generated.
 `photo_scope` is `thermal` or `all`. `thermal` writes the current radiometric
 plane. `all` writes wide, zoom, and thermal-display JPEGs plus the radiometric
 thermal plane. Every JPEG carries an EXIF block (capture time with

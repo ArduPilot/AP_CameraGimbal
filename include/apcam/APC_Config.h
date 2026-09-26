@@ -3,6 +3,7 @@
 #include "config.h"
 #include "target.h"
 #include "network.h"
+#include "APC_Timezone.h"
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
@@ -353,7 +354,7 @@ private:
             unsigned char c = (unsigned char)value[i];
             if (iscntrl(c) || isspace(c)) return false;
         }
-        return true;
+        return APC_Timezone::valid(value);
     }
 
     static int set_field(struct ca_config *config, const Field *field,
