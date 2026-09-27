@@ -86,7 +86,7 @@ IPC = {'run.sh': b'#!/bin/sh\n./camera_gcu.sh &\n', 'camera_gcu.sh': b'#!/bin/sh
 
 if not (MAVLINK / 'all/mavlink.h').exists():
     subprocess.run(['make', '-C', str(ROOT / 'camera_app'), 'CAMERA_BACKEND=z1mini',
-                    'build/mavlink/all/include/all/mavlink.h'], check=True, stdout=subprocess.DEVNULL)
+                    'build/mavlink/all/include/all/mavlink.h'], check=True, stdout=subprocess.DEVNULL, close_fds=False)
 
 with tempfile.TemporaryDirectory(prefix='z1mini-upgrade-test-') as directory:
     root = Path(directory)

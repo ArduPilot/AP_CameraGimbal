@@ -1,3 +1,6 @@
+.DEFAULT_GOAL := all
+include ../tools/build.mk
+
 CAMERA_BACKEND ?= mt11
 include ../include/apcam/targets.mk
 CROSS_COMPILE ?= aarch64-linux-gnu-
@@ -64,7 +67,9 @@ SITL_DEFINES := -DWEBROOT_PATH='"$(CURDIR)/webroot"' -DMT11_WEB_TEST -DMT11_WEB_
 A8_CROSS_COMPILE ?= arm-linux-
 A8_HOST_CHECK := tests/a8-web-host
 
-.PHONY: all clean sitl test a8-web FORCE
+.PHONY: all clean sitl test FORCE generated
+
+generated: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) build/zr10_upgrade.h
 
 $(VERSION_HEADER): FORCE ../tools/write_build_version.py
 	python3 ../tools/write_build_version.py $@
@@ -77,22 +82,24 @@ $(WEBROOT_HEADER): ../tools/build_webroot.py $(WEBROOT_FILES) FORCE
 
 FORCE:
 
-.DEFAULT_GOAL := all
-
 all: mt11-web
 
 mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(call progress,Linking $@)
 	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
 a8-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(call progress,Linking $@)
 	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
 $(A8_HOST_CHECK): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
 
 $(HOST_TEST): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST -DWEBROOT_PATH='"$(TEST_ROOT)/webroot"' \
 		-DAPP_DIR='"$(TEST_ROOT)/app"' \
 		-DMEDIA_ROOT='"$(TEST_ROOT)/mnt"' \
@@ -121,17 +128,21 @@ portable-sitl: $(SITL_BIN_ROOT)/mt11-web-portable
 
 $(SITL_BIN_ROOT)/mt11-web-portable: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DMT11_WEB_TEST -DMT11_WEB_SITL \
 		-DWEB_PORTABLE_SITL -o $@ $< -lm
 
 $(SITL_TARGET): mt11-web.cpp gcu_manifest.h Makefile $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(SITL_DEFINES) $(SITL_EXTRA_DEFINES) -o $@ $< -lm
 
 tests/test_string_buffer: tests/test_string_buffer.cpp APC_StringBuffer.h
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
 tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WEBROOT_HEADER)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
 test: $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
@@ -142,10 +153,11 @@ test: $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
 
 clean:
 	rm -f tests/test_string_buffer tests/test_webroot mt11-web a8-web zr10-web z1mini-web $(HOST_TEST) $(A8_HOST_CHECK)
-	rm -rf tests/runtime
+	rm -rf tests/runtime build
 
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
 zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(call progress,Linking $@)
 	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
 
 .PHONY: zr10-test
@@ -159,7 +171,15 @@ build/zr10_upgrade.h: ../tools/zr10_firmware.py ../packaging/zr10/upgrade_script
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
 z1mini-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(Z1MINI_MAVLINK)/all/mavlink.h Makefile
+	$(call progress,Linking $@)
 	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
+
+ifeq ($(CAMERA_BACKEND),zr10)
+$(SITL_TARGET) $(SITL_BIN_ROOT)/mt11-web-portable $(HOST_TEST): build/zr10_upgrade.h zr10_firmware.h
+endif
+ifeq ($(CAMERA_BACKEND),z1mini)
+$(SITL_TARGET) $(SITL_BIN_ROOT)/mt11-web-portable $(HOST_TEST): $(Z1MINI_MAVLINK)/all/mavlink.h z1mini_mavlink.h
+endif
 
 $(Z1MINI_MAVLINK)/all/mavlink.h:
 	$(MAKE) -C ../camera_app CAMERA_BACKEND=z1mini build/mavlink/all/include/all/mavlink.h

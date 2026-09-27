@@ -94,10 +94,25 @@ Build the hardware installation packages with:
 
 ```sh
 python3 tools/install_build_environment.py
-make release
+make -j10 release
 # Or build just the camera being tested:
-make release RELEASE_TARGETS=A8
+make -j10 release RELEASE_TARGETS=A8
 ```
+
+Builds support parallel compilation, including multiple camera targets in one
+invocation, for example `make -j10 sitl a8_sitl zr10_sitl z1mini_sitl`.
+Shared generated inputs are prepared before the camera builds start. Recursive
+builds, including the thermal codecs, share the same job limit; CI uses eight
+jobs. Release packages are published one camera at a time, with parallel
+compilation inside each build. Run `make clean` separately before a clean build;
+`make -j10 clean all` would delete files while they are being compiled.
+Both `make clean` and `make sitl-clean` preserve downloaded dependencies and
+toolchains.
+
+Output defaults to short progress messages such as `Compiling main.cpp` and
+`Linking camera-app`. Compiler diagnostics and test output remain visible. Add
+`VERBOSE=1` to any Make invocation to see the full commands, for example
+`make -j10 release VERBOSE=1`.
 
 The output is `release/<version>/`, where `<version>` is the latest reachable
 `vX.y` or `vX.y.z` tag (for example, `v1.0.1`). Checkpoint tags such as

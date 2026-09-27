@@ -67,7 +67,8 @@ class PrebuiltTools(unittest.TestCase):
         repo = self.root / 'checkout'
         repo.mkdir()
         shutil.copyfile(ROOT / 'Makefile', repo / 'Makefile')
-        (repo / 'tools').mkdir()
+        (repo / 'tools').mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / 'tools/build.mk', repo / 'tools/build.mk')
         shutil.copyfile(ROOT / 'tools/prebuilt_mt11_tools.py', repo / 'tools/prebuilt_mt11_tools.py')
         shutil.copytree(tools.BUNDLE, repo / 'packaging/mt11/tools')
         commands = self.root / 'commands'

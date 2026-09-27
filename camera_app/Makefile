@@ -1,4 +1,6 @@
 .DEFAULT_GOAL := all
+include ../tools/build.mk
+
 CAMERA_BACKEND ?= mt11
 include ../include/apcam/targets.mk
 SUPPORTED_BACKENDS := mt11 a8 zr10 z1mini
@@ -38,7 +40,7 @@ MAVGEN_SOURCES := $(wildcard $(MAVLINK_ROOT)/message_definitions/v1.0/*.xml) \
 	$(wildcard $(MAVLINK_ROOT)/pymavlink/generator/C/include_v2.0/*.h)
 MAVLINK_HEADER := $(MAVLINK_GEN_DIR)/$(MAVLINK_DIALECT)/mavlink.h
 # Records the dialect the objects were built for; rewritten only on change.
-MAVLINK_STAMP := build/mavlink/dialect
+MAVLINK_STAMP := build/$(CAMERA_BACKEND)/mavlink-dialect
 MAVLINK_DEPS := $(APCAM_HEADERS) $(MAVLINK_HEADER) $(MAVLINK_STAMP) include/camera_app/mavlink.h
 MAVLINK_CPPFLAGS := -I$(MAVLINK_GEN_DIR) -DCA_MAVLINK_DIALECT=$(MAVLINK_DIALECT)
 
@@ -63,11 +65,29 @@ MINIMP4_ROOT ?= $(abspath ../build/deps/minimp4)
 MINIMP4_HEADER := build/minimp4.h
 SAMPLE_COMMON := $(SS928_MPP_ROOT)/src/common
 VENDOR_LIB_DIR := $(SS928_MPP_ROOT)/lib/linux/hisilicon
-RTSP_ROOT := $(SS928_MPP_ROOT)/src/rtspserver/src
-ifeq ($(shell uname -s),Darwin)
-# Prepare before enumerating the vendor source files below. Writes only on change.
-XOP_DARWIN_PREPARE := $(shell $(PYTHON) ../tools/prepare_xop.py $(RTSP_ROOT) ../build/darwin-xop)
-RTSP_ROOT := $(abspath ../build/darwin-xop)
+# Explicit RTSP_ROOT overrides are already prepared trees (Windows supplies
+# its POSIX compatibility copy this way). Otherwise build a private copy with
+# real dependencies, leaving the pinned download unchanged.
+ifeq ($(origin RTSP_ROOT),undefined)
+RTSP_SOURCE_ROOT := $(SS928_MPP_ROOT)/src/rtspserver/src
+RTSP_ROOT := $(abspath build/xop)
+XOP_ENUM_ROOT := $(RTSP_SOURCE_ROOT)
+XOP_INPUT_FILES := $(wildcard $(RTSP_SOURCE_ROOT)/net/* $(RTSP_SOURCE_ROOT)/xop/* $(RTSP_SOURCE_ROOT)/3rdpart/md5/*)
+XOP_PREPARED_FILES := $(patsubst $(RTSP_SOURCE_ROOT)/%,$(RTSP_ROOT)/%,$(XOP_INPUT_FILES))
+XOP_PREPARE_STAMP := $(RTSP_ROOT)/.prepared
+XOP_PREPARE = $(PYTHON) ../tools/prepare_xop.py $(if $(filter Darwin,$(shell uname -s)),,--native) $(RTSP_SOURCE_ROOT) $(RTSP_ROOT)
+
+$(XOP_PREPARE_STAMP): $(XOP_INPUT_FILES) ../tools/prepare_xop.py ../tools/xop_warnings.patch
+	$(call progress,Preparing RTSP sources)
+	$(XOP_PREPARE)
+	touch $@
+
+# Re-read each file's mtime after preparation. Unchanged source/header files
+# retain their timestamps, so an edit rebuilds only their actual consumers.
+$(XOP_PREPARED_FILES): $(XOP_PREPARE_STAMP)
+	@test -f $@ || $(XOP_PREPARE)
+else
+XOP_ENUM_ROOT := $(RTSP_ROOT)
 endif
 SCENE_ROOT := $(SS928_MPP_ROOT)/src/scene_auto
 XOP_VENDOR_LIB := $(SS928_MPP_ROOT)/lib/linux/3rdparty/libxoprtsp.a
@@ -122,6 +142,7 @@ OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o bui
 	build/live_video_server.o \
 	build/mp4_minimp4.o \
 	build/rtsp_xop.o build/xop_rtsp_connection.o build/xop_rtp_connection.o \
+	build/xop_buffer_writer.o build/xop_socket_util.o \
 	build/mt11_imx586.o \
 	build/sample_comm_sys.o \
 	build/sample_comm_isp.o build/sample_comm_vi.o build/sample_comm_vpss.o \
@@ -150,19 +171,22 @@ A8_HOST_TARGET := tests/camera-app-a8-host
 A8_HOST_SOURCES := $(filter-out src/backends/mt11/control.cpp \
 	src/backends/a8/control.cpp,$(COMMON_SOURCES)) \
 	src/backends/a8/control.cpp src/media/stub.cpp
-SITL_TARGET ?= ../build/sitl/camera-app
-SITL_OBJDIR ?= build/sitl
+SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sitl)
+SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
+SITL_OBJDIR ?= build/$(SITL_VARIANT)
 SITL_EXTRA_CPPFLAGS ?=
 SITL_SOURCES := $(COMMON_SOURCES) src/media/stub.cpp src/media/sitl_terrain.cpp \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp
 SITL_APP_OBJECTS := $(patsubst %.cpp,$(SITL_OBJDIR)/c/%.o,$(SITL_SOURCES))
-XOP_HOST_SOURCES := $(filter-out $(RTSP_ROOT)/xop/RtspConnection.cpp \
-	$(RTSP_ROOT)/xop/RtpConnection.cpp,$(wildcard $(RTSP_ROOT)/net/*.cpp) \
-	$(wildcard $(RTSP_ROOT)/xop/*.cpp))
+XOP_HOST_SOURCES := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%,\
+	$(filter-out $(XOP_ENUM_ROOT)/xop/RtspConnection.cpp $(XOP_ENUM_ROOT)/xop/RtpConnection.cpp,\
+	$(wildcard $(XOP_ENUM_ROOT)/net/*.cpp $(XOP_ENUM_ROOT)/xop/*.cpp)))
 XOP_HOST_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,$(SITL_OBJDIR)/xop/%.o,\
 	$(XOP_HOST_SOURCES)) $(SITL_OBJDIR)/xop/xop/RtspConnection.o \
 	$(SITL_OBJDIR)/xop/xop/RtpConnection.o
 SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
+# Our adapter includes vendor headers before compiler-generated .d files exist.
+build/rtsp_xop.o build/$(CAMERA_BACKEND)/rtsp_xop.o $(SITL_OBJDIR)/rtsp_xop.o: | $(XOP_PREPARE_STAMP)
 
 # Full-depth thermal codecs are only linked into the MT11 firmware/SITL.
 THERMAL_CODECS_ROOT := $(abspath ../build/deps/thermal-codecs)
@@ -180,9 +204,9 @@ THERMAL_TARGET_EXTRA_LIBS = $(call thermal_extra_libs,aarch64)
 THERMAL_HOST_EXTRA_LIBS = $(call thermal_extra_libs,host)
 endif
 $(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a &: ../tools/build_thermal_codecs.sh
-	../tools/build_thermal_codecs.sh host
+	+MAKE='$(MAKE)' ../tools/build_thermal_codecs.sh host
 $(THERMAL_CODECS_ROOT)/aarch64/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/aarch64/lib/libavutil.a &: ../tools/build_thermal_codecs.sh
-	THERMAL_CROSS_COMPILE='$(CROSS_COMPILE)' ../tools/build_thermal_codecs.sh aarch64
+	+MAKE='$(MAKE)' THERMAL_CROSS_COMPILE='$(CROSS_COMPILE)' ../tools/build_thermal_codecs.sh aarch64
 
 SSH_HOST ?= MT11
 SSH ?= ssh
@@ -204,10 +228,18 @@ WEB_PORT ?= 80
 
 all: $(TARGET)
 
-build/binlog_version.h: FORCE
+build/binlog_version.h: FORCE ../tools/write_build_version.py
 	$(PYTHON) ../tools/write_build_version.py $@
 
-src/recording/binlog.cpp: build/binlog_version.h
+# Depend on the generated header from consumers, not from an unmodified source
+# file: an older source mtime must not conceal a changed firmware identity.
+src/recording/binlog.o $(SITL_OBJDIR)/c/src/recording/binlog.o \
+ build/$(CAMERA_BACKEND)/c/src/recording/binlog.o \
+ build/z1mini-host/c/src/recording/binlog.o: build/binlog_version.h
+
+.PHONY: generated
+generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
+ build/xop_rtp_connection.cpp build/binlog_version.h
 
 
 ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
@@ -221,11 +253,13 @@ OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECT
 
 $(TARGET): Makefile $(OBJECTS)
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc)
 
-build/$(CAMERA_BACKEND)/c/%.o: %.cpp $(MINIMP4_HEADER)
+build/$(CAMERA_BACKEND)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
 		-Wno-error=sign-compare -Wno-error=unused-variable \
 		-Wno-error=implicit-fallthrough -ffunction-sections -fdata-sections \
@@ -233,36 +267,42 @@ build/$(CAMERA_BACKEND)/c/%.o: %.cpp $(MINIMP4_HEADER)
 
 build/$(CAMERA_BACKEND)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
 build/$(CAMERA_BACKEND)/xop/%.o: $(RTSP_ROOT)/%.cpp
 	mkdir -p $(dir $@)
-	$(CXX) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-I$(RTSP_ROOT)/3rdpart -include cstdint -O2 -pipe -Wall -Wextra \
 		-Wno-error -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
 build/$(CAMERA_BACKEND)/xop/xop/RtspConnection.o: build/xop_rtsp_connection.cpp
 	mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
 build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o: build/xop_rtp_connection.cpp
 	mkdir -p $(dir $@)
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 else
 $(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS)
+	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 		-Wl,--start-group $(MEDIA_LIBS) -Wl,--end-group \
 		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm -ldl
 endif
 
 %.o: %.cpp
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -c -o $@ $<
 
 $(MAVLINK_XML) $(MAVGEN):
@@ -270,13 +310,14 @@ $(MAVLINK_XML) $(MAVGEN):
 	@exit 1
 
 $(MAVLINK_HEADER): $(MAVLINK_XML) $(MAVGEN) $(MAVGEN_SOURCES)
+	$(call progress,Generating MAVLink $(MAVLINK_DIALECT) headers)
 	mkdir -p $(MAVLINK_GEN_DIR)
 	$(PYTHON) $(MAVGEN) --lang C --wire-protocol 2.0 \
 		--output $(MAVLINK_GEN_DIR) $(MAVLINK_XML)
 
 $(MAVLINK_STAMP): FORCE
 	@mkdir -p $(dir $@)
-	@echo '$(CAMERA_BACKEND) $(MAVLINK_DIALECT)' | cmp -s - $@ || echo '$(CAMERA_BACKEND) $(MAVLINK_DIALECT)' > $@
+	@echo '$(MAVLINK_DIALECT)' | cmp -s - $@ || echo '$(MAVLINK_DIALECT)' > $@
 
 src/protocol/mavlink.o src/protocol/mavlink_server.o src/protocol/support_mavlink.o: $(MAVLINK_DEPS)
 $(SITL_OBJDIR)/c/src/protocol/mavlink.o \
@@ -287,14 +328,17 @@ build/$(CAMERA_BACKEND)/c/src/protocol/mavlink.o \
 	build/$(CAMERA_BACKEND)/c/src/protocol/support_mavlink.o: $(MAVLINK_DEPS)
 
 $(TEST_TARGET): $(TEST_SOURCES)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(TEST_SOURCES)
 
 $(MAVLINK_TEST_TARGET): tests/test_mavlink.cpp src/protocol/mavlink.cpp \
                         $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -lm
 
 tests/test_mavlink_time: tests/test_mavlink_time.cpp src/protocol/mavlink_server.cpp \
                         src/protocol/mavlink.cpp $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/mavlink.cpp -lm
 
@@ -306,11 +350,13 @@ build/test_unigcs_time: tests/test_unigcs_time.cpp src/protocol/unigcs.cpp \
                        src/protocol/private_uart.cpp src/protocol/siyi.cpp include/camera_app/private_uart.h \
                        include/camera_app/unigcs.h src/config.cpp $(APCAM_HEADERS)
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/private_uart.cpp src/protocol/siyi.cpp src/config.cpp -lm
 
 tests/test_telemetry_time: tests/test_telemetry_time.cpp src/protocol/mavlink_server.cpp \
                           include/camera_app/telemetry_time.h src/protocol/targeting.cpp src/protocol/mavlink.cpp $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections -o $@ $< src/protocol/targeting.cpp src/protocol/mavlink.cpp -lm
 
@@ -319,153 +365,188 @@ timezone-test: tests/test_timezone
 	./tests/test_timezone
 
 tests/test_timezone: tests/test_timezone.cpp $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $<
 
 $(CONFIG_TEST_TARGET): tests/test_config.cpp src/config.cpp include/camera_app/config.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
 
 tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rate.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -I../include -Iinclude -DAPCAM_TARGET=APCAM_TARGET_A8 $(APP_CXXFLAGS) -o $@ $< -lm
 
 $(TARGETING_TEST_TARGET): tests/test_targeting.cpp src/protocol/targeting.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lm
 
 $(STILL_TEST_TARGET): tests/test_still.cpp src/recording/still.cpp \
 		src/recording/metadata.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread -lm
 
 $(AUTOFOCUS_TEST_TARGET): tests/test_autofocus.cpp src/media/autofocus.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^
 
-$(HOST_TARGET): $(COMMON_SOURCES) src/media/stub.cpp $(MAVLINK_DEPS)
+$(HOST_TARGET): build/binlog_version.h $(COMMON_SOURCES) src/media/stub.cpp $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lm
 
 $(A8_HOST_TARGET): CAMERA_BACKEND=a8
-$(A8_HOST_TARGET): $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src/backends/siyi/control.cpp
+$(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src/backends/siyi/control.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) \
 		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp,$^)) -lm
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(APP_CXXFLAGS) -c $< -o $@
 
 build/mt11_media.o: $(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(APP_CXXFLAGS) -Wno-unused-function -Wno-error=unused-parameter \
 		-ffunction-sections -fdata-sections -c $< -o $@
 
 build/mt11_pipeline.o: $(BACKEND_DIR)/pipeline.cpp $(BACKEND_DIR)/pipeline.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(APP_CXXFLAGS) -Wno-error=unused-parameter \
 		-ffunction-sections -fdata-sections -c $< -o $@
 
 build/mt11_isp.o: $(BACKEND_DIR)/isp.cpp $(BACKEND_DIR)/isp.h
 	mkdir -p build
+	$(call progress,Linking $@)
 	$(CXX) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(APP_CXXFLAGS) -Wno-error=unused-parameter \
 		-ffunction-sections -fdata-sections \
 		-c $< -o $@
 
 build/mt11_e5739.o: $(BACKEND_DIR)/e5739.cpp $(BACKEND_DIR)/e5739.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
 build/mt11_thermal.o: $(BACKEND_DIR)/thermal.cpp $(BACKEND_DIR)/thermal.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
 build/raw_thermal_server.o: src/streaming/raw_thermal_server.cpp \
                               include/camera_app/raw_thermal_server.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
 build/live_video_server.o: src/streaming/live_video_server.cpp \
                               include/camera_app/live_video_server.h \
                               include/camera_app/mp4.h
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 
-$(MINIMP4_HEADER): $(MINIMP4_ROOT)/minimp4.h src/recording/minimp4_metadata.patch Makefile
-	mkdir -p build
-	cp $< $@
-	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
-	patch $@ < src/recording/minimp4_metadata.patch
-	$(PYTHON) -c 'from pathlib import Path; import re; p=Path("$@"); p.write_text(re.sub(r"(?m)^#define MP4D_TFDT_SUPPORT\s+0", "#define MP4D_TFDT_SUPPORT 1", p.read_text()))'
-	grep -q '^#define MP4D_TFDT_SUPPORT[[:space:]]*1' $@
+$(MINIMP4_HEADER): $(MINIMP4_ROOT)/minimp4.h src/recording/minimp4_metadata.patch ../tools/patch_source.py
+	$(call progress,Generating $@)
+	$(PYTHON) ../tools/patch_source.py --minimp4 $< src/recording/minimp4_metadata.patch $@
+
+# Only the muxer includes minimp4; patch changes should not rebuild the
+# otherwise independent camera control and media translation units.
+build/$(CAMERA_BACKEND)/c/src/recording/mp4_minimp4.o \
+ $(SITL_OBJDIR)/c/src/recording/mp4_minimp4.o \
+ build/z1mini-host/c/src/recording/mp4_minimp4.o: $(MINIMP4_HEADER)
 
 build/mp4_minimp4.o: src/recording/mp4_minimp4.cpp $(MINIMP4_HEADER)
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
 		-Wno-error=sign-compare -Wno-error=unused-variable \
 		-Wno-error=implicit-fallthrough -c $< -o $@
 
 build/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
-build/xop_rtsp_connection.cpp: src/streaming/xop_aggregate_setup.patch Makefile
-	mkdir -p build
-	cp $(RTSP_ROOT)/xop/RtspConnection.cpp $@
-	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
-	patch $@ < $<
+build/xop_rtsp_connection.cpp: $(RTSP_ROOT)/xop/RtspConnection.cpp src/streaming/xop_aggregate_setup.patch ../tools/patch_source.py
+	$(call progress,Generating $@)
+	$(PYTHON) ../tools/patch_source.py $< src/streaming/xop_aggregate_setup.patch $@
 
 build/xop_rtsp_connection.o: build/xop_rtsp_connection.cpp
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 
-build/xop_rtp_connection.cpp: src/streaming/xop_satip_payload.patch Makefile
-	mkdir -p build
-	cp $(RTSP_ROOT)/xop/RtpConnection.cpp $@
-	$(PYTHON) -c 'from pathlib import Path; p=Path("$@"); p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))'
-	patch $@ < $<
+build/xop_rtp_connection.cpp: $(RTSP_ROOT)/xop/RtpConnection.cpp src/streaming/xop_satip_payload.patch ../tools/patch_source.py
+	$(call progress,Generating $@)
+	$(PYTHON) ../tools/patch_source.py $< src/streaming/xop_satip_payload.patch $@
 
 build/xop_rtp_connection.o: build/xop_rtp_connection.cpp
-	$(CXX) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
+
+# Replace the vendor archive's scalar-delete buffer and no-op TCP_NODELAY
+# implementation with the same corrected sources used by SITL/ARM cameras.
+build/xop_buffer_writer.o: $(RTSP_ROOT)/net/BufferWriter.cpp
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -O2 -pipe -Wall -Wextra -Werror -std=c++11 -c $< -o $@
+
+build/xop_socket_util.o: $(RTSP_ROOT)/net/SocketUtil.cpp
+	$(call progress,Compiling $(notdir $<))
+	$(CXX) $(DEPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -O2 -pipe -Wall -Wextra -Werror -std=c++11 -c $< -o $@
 
 $(XOP_COMPAT_LIB): $(XOP_VENDOR_LIB) Makefile
 	mkdir -p build
 	cp $< $@
 	$(CROSS_COMPILE)ar d $@ RtspConnection.o
-	$(CROSS_COMPILE)ar d $@ RtpConnection.o
+	$(CROSS_COMPILE)ar d $@ RtpConnection.o BufferWriter.o SocketUtil.o
 
 build/mt11_imx586.o: $(BACKEND_DIR)/imx586.cpp $(BACKEND_DIR)/imx586.h \
 		$(BACKEND_DIR)/imx586_mode0_registers.inc
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CXX) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections \
 		-DMT11_IMX586_EXPORT_IMX678_ALIAS -c $< -o $@
 
 build/sample_comm_%.o: $(SAMPLE_COMMON)/sample_comm_%.c
 	mkdir -p build
+	$(call progress,Compiling $(notdir $<))
 	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(CFLAGS) -Wno-error -fno-aggressive-loop-optimizations \
-		-ffunction-sections -fdata-sections -D_GNU_SOURCE -c $< -o $@
+		-ffunction-sections -fdata-sections $(if $(filter sample_comm_isp.c,$(notdir $<)),,-D_GNU_SOURCE) -c $< -o $@
 
 build/scene_ot_confaccess.o: $(SCENE_ROOT)/tools/configaccess/src/ot_confaccess.c
 	mkdir -p build
-	$(CC) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
+	$(call progress,Compiling $(notdir $<))
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
 		-Wno-error -ffunction-sections -fdata-sections -c $< -o $@
 
 build/scene_loadparam.o: $(SCENE_ROOT)/src/sample/scene_loadparam.c
 	mkdir -p build
-	$(CC) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
+	$(call progress,Compiling $(notdir $<))
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
 		-Wno-error -ffunction-sections -fdata-sections -c $< -o $@
 
 build/scene_ot_scene.o: $(SCENE_ROOT)/src/core/ot_scene.c
 	mkdir -p build
-	$(CC) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
+	$(call progress,Compiling $(notdir $<))
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
 		-Wno-error -ffunction-sections -fdata-sections -c $< -o $@
 
 build/scene_ot_scene_setparam.o: $(SCENE_ROOT)/src/core/ot_scene_setparam.c
 	mkdir -p build
-	$(CC) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
+	$(call progress,Compiling $(notdir $<))
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
 		-Wno-error -ffunction-sections -fdata-sections -c $< -o $@
 
 build/scene_setparam_inner.o: $(SCENE_ROOT)/src/core/scene_setparam_inner.c
 	mkdir -p build
-	$(CC) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
+	$(call progress,Compiling $(notdir $<))
+	$(CC) $(DEPFLAGS) $(MEDIA_CPPFLAGS) $(filter-out -std=c11,$(CFLAGS)) -std=gnu11 \
 		-Wno-error -ffunction-sections -fdata-sections -c $< -o $@
 
 host: $(HOST_TARGET)
@@ -479,15 +560,18 @@ sitl: $(SITL_TARGET)
 
 $(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 
-$(SITL_OBJDIR)/c/%.o: %.cpp $(MINIMP4_HEADER)
+$(SITL_OBJDIR)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
 	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-DCAMERA_APP_SITL -DCA_SITL_VIDEO_SCRIPT='"$(abspath ../sitl/terrain_video.py)"' -c $< -o $@
 
 $(SITL_OBJDIR)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 	mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
 	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
 		-I$(RTSP_ROOT)/xop -O2 -pipe -Wall -Wextra -Werror -Wno-error \
 		-Wno-error=unused-parameter -Wno-error=missing-field-initializers \
@@ -495,7 +579,8 @@ $(SITL_OBJDIR)/rtsp_xop.o: src/streaming/rtsp_xop.cpp
 
 $(SITL_OBJDIR)/xop/%.o: $(RTSP_ROOT)/%.cpp
 	mkdir -p $(dir $@)
-	$(HOST_CXX) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
+	$(call progress,Compiling $(notdir $<))
+	$(HOST_CXX) $(DEPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop \
 		-I$(RTSP_ROOT)/3rdpart -include cstdint \
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error \
 		-Wno-error=unused-parameter \
@@ -503,43 +588,51 @@ $(SITL_OBJDIR)/xop/%.o: $(RTSP_ROOT)/%.cpp
 
 $(SITL_OBJDIR)/xop/xop/RtspConnection.o: build/xop_rtsp_connection.cpp
 	mkdir -p $(dir $@)
-	$(HOST_CXX) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
+	$(call progress,Compiling $(notdir $<))
+	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
 		-I$(RTSP_ROOT)/xop -O2 -pipe -Wall -Wextra -Werror -Wno-error \
 		-Wno-error=unused-parameter -Wno-error=missing-field-initializers \
 		-std=c++11 -c $< -o $@
 
 $(SITL_OBJDIR)/xop/xop/RtpConnection.o: build/xop_rtp_connection.cpp
 	mkdir -p $(dir $@)
-	$(HOST_CXX) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
+	$(call progress,Compiling $(notdir $<))
+	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) $(SITL_EXTRA_CPPFLAGS) -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net \
 		-I$(RTSP_ROOT)/xop -O2 -pipe -Wall -Wextra -Werror -Wno-error \
 		-Wno-error=unused-parameter -Wno-error=missing-field-initializers \
 		-std=c++11 -c $< -o $@
 
 tests/test_support_mavlink: tests/test_support_mavlink.cpp src/protocol/support_mavlink.cpp \
                            src/protocol/mavlink.cpp src/config.cpp src/log.cpp $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -lpthread -lm
 
 $(VIDEO_METADATA_TEST_TARGET): tests/test_video_metadata.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread -lm
 
 $(MP4_TEST_TARGET): tests/test_mp4.cpp src/recording/mp4_minimp4.cpp \
                     src/recording/video_metadata.cpp src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ $(filter %.cpp,$^) -lpthread -lm
 
 $(E5739_TEST_TARGET): tests/test_e5739.cpp $(BACKEND_DIR)/e5739.cpp src/log.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lm
 
 $(MP4_SYNC_TEST_TARGET): tests/test_mp4_sync.cpp src/recording/mp4_minimp4.cpp \
                     src/recording/video_metadata.cpp src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ $(filter %.cpp,$^) -Wl,--wrap=fdatasync -Wl,--wrap=fstatfs64 -lpthread -lm
 
 $(MP4_ROLLOVER_TEST_TARGET): tests/test_mp4_rollover.cpp src/recording/mp4_minimp4.cpp \
                     src/recording/video_metadata.cpp src/recording/metadata.cpp \
                     $(MINIMP4_HEADER)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ $(filter %.cpp,$^) -Wl,--wrap=fstatfs64 -Wl,--wrap=pwrite64 -lpthread -lm
 
@@ -548,19 +641,23 @@ recording-test: $(MP4_TEST_TARGET) $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_T
 	python3 tests/test_mp4_rollover.py --large
 
 $(THERMAL_TEST_TARGET): tests/test_thermal.cpp $(BACKEND_DIR)/thermal.cpp src/log.cpp include/camera_app/thermal.h
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -lpthread
 
 $(MT11_IMX586_TEST_TARGET): tests/test_mt11_imx586.cpp $(BACKEND_DIR)/imx586.cpp \
 		$(BACKEND_DIR)/imx586.h $(BACKEND_DIR)/imx586_mode0_registers.inc
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(MEDIA_CPPFLAGS) $(filter-out -static,$(APP_CXXFLAGS)) \
 		-DMT11_IMX586_TEST_API -o $@ \
 		$(BACKEND_DIR)/imx586.cpp tests/test_mt11_imx586.cpp
 
 $(RAW_THERMAL_TEST_TARGET): tests/test_raw_thermal.cpp src/recording/raw_thermal.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^
 
 $(RAW_THERMAL_SERVER_TEST_TARGET): tests/test_raw_thermal_server.cpp \
                                    src/streaming/raw_thermal_server.cpp src/log.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $^ -lpthread
 
 $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
@@ -568,6 +665,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
                                   src/recording/mp4_minimp4.cpp src/log.cpp \
                                   src/recording/video_metadata.cpp src/recording/metadata.cpp \
                                   $(MINIMP4_HEADER)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-error \
 		-o $@ tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
@@ -659,7 +757,8 @@ src/backends/a8/control.o src/backends/zr10/control.o: src/backends/siyi/control
 
 ZR10_HOST_TARGET := tests/camera-app-zr10-host
 $(ZR10_HOST_TARGET): CAMERA_BACKEND=zr10
-$(ZR10_HOST_TARGET): $(filter-out src/backends/mt11/control.cpp src/backends/a8/control.cpp src/backends/zr10/control.cpp,$(COMMON_SOURCES)) src/backends/zr10/control.cpp src/backends/siyi/control.cpp src/media/stub.cpp $(MAVLINK_DEPS)
+$(ZR10_HOST_TARGET): build/binlog_version.h $(filter-out src/backends/mt11/control.cpp src/backends/a8/control.cpp src/backends/zr10/control.cpp,$(COMMON_SOURCES)) src/backends/zr10/control.cpp src/backends/siyi/control.cpp src/media/stub.cpp $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp,$^)) -lm
 
 .PHONY: zr10-test
@@ -674,6 +773,7 @@ ZR10_ROOTFS ?=
 zr10-runtime-test: $(TARGET)
 	test '$(CAMERA_BACKEND)' = zr10
 	test -n '$(ZR10_ROOTFS)'
+	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) tests/test_zr10_ctype.cpp src/compat/zr10_uclibc.cpp -o build/zr10/test_ctype
 	$(ZR10_QEMU) -L '$(ZR10_ROOTFS)' -E LD_BIND_NOW=1 build/zr10/test_ctype
 	$(ZR10_QEMU) -L '$(ZR10_ROOTFS)' -E LD_BIND_NOW=1 $(TARGET) --help
@@ -687,9 +787,11 @@ Z1_HOST_OBJECTS := $(patsubst %.cpp,build/z1mini-host/c/%.o,$(Z1_HOST_SOURCES))
 .PHONY: z1mini-host
 z1mini-host: $(Z1_HOST_TARGET)
 $(Z1_HOST_TARGET): $(Z1_HOST_OBJECTS) $(SITL_RTSP_OBJECTS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -o $@ $^ -lpthread -lm
-build/z1mini-host/c/%.o: %.cpp $(MINIMP4_HEADER) $(MAVLINK_DEPS)
+build/z1mini-host/c/%.o: %.cpp $(MAVLINK_DEPS)
 	mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
 	$(HOST_CXX) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function -Wno-error=sign-compare -Wno-error=unused-variable -Wno-error=implicit-fallthrough -DCA_Z1_TEST -DCAMERA_APP_HOST -c $< -o $@
 -include $(Z1_HOST_OBJECTS:.o=.d)
 
@@ -704,12 +806,14 @@ z1mini-capture: build/z1mini/ax-capture
 z1mini-overlay-test: media-overlay-test z1-overlay-race-test
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p build/tests
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini tests/test_z1mini_overlay.cpp src/media/overlay.cpp -o build/tests/test_z1mini_overlay -ldl -pthread -lm
 	./build/tests/test_z1mini_overlay
 
 build/z1mini/ax-capture: src/backends/z1mini/ax_capture.cpp Makefile src/media/overlay.cpp include/camera_app/overlay.h src/backends/z1mini/ax_config.h src/backends/z1mini/native.h include/camera_app/exposure.h $(APCAM_HEADERS)
 	@test -n "$(Z1MINI_AX_SDK_INCLUDE)" || { echo 'Set Z1MINI_AX_SDK_INCLUDE to AX620A msp/out/include' >&2; exit 1; }
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(CXX) -O2 -g -Wall -Wextra -Werror $(CXXFLAGS) $(APCAM_CPPFLAGS) -Iinclude -I'$(Z1MINI_AX_SDK_INCLUDE)' -Isrc/backends/z1mini $< src/media/overlay.cpp -o $@ -static-libstdc++ -static-libgcc -ldl -pthread -lm
 
 .PHONY: thermal-monitor-test
@@ -717,6 +821,7 @@ thermal-monitor-test: tests/test_thermal_monitor
 	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_thermal_monitor"], check=True, timeout=10)'
 
 tests/test_thermal_monitor: tests/test_thermal_monitor.cpp src/media/media.cpp include/camera_app/media.h include/camera_app/binlog.h include/camera_app/exposure.h
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.cpp src/media/media.cpp -lpthread -lm
 
 .PHONY: exposure-test
@@ -725,9 +830,11 @@ exposure-test: a8-exposure-test thermal-monitor-test tests/test_exposure tests/t
 	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_exposure_native"], check=True, timeout=10)'
 
 tests/test_exposure: tests/test_exposure.cpp include/camera_app/sigmastar_exposure.h include/camera_app/exposure.h
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $< -lm
 
 tests/test_exposure_native: tests/test_z1mini_native.cpp src/backends/z1mini/native.cpp src/backends/z1mini/native.h include/camera_app/exposure.h src/log.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ tests/test_z1mini_native.cpp src/backends/z1mini/native.cpp src/log.cpp -lpthread -lm
 
 .PHONY: manual-control-test
@@ -739,11 +846,13 @@ mavlink-components-test: host
 	$(PYTHON) tests/test_mavlink_components.py ./$(HOST_TARGET) ../sitl/gimbal_sim.py
 
 tests/test_manual_control: tests/test_manual_control.cpp src/protocol/manual_control.cpp include/camera_app/manual_control.h ../include/apcam/manual_control.h include/camera_app/backend.h
+	$(call progress,Linking $@)
 	$(HOST_CXX) -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_MT11 -I../include -Iinclude -o $@ $< -lm
 
 .PHONY: media-overlay-test
 media-overlay-test:
 	mkdir -p build/tests
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude tests/test_media_overlay.cpp -o build/tests/test_media_overlay -pthread -lm
 	./build/tests/test_media_overlay
 
@@ -754,7 +863,9 @@ z1-overlay-race-test: build/tests/test_z1_overlay_race
 build/tests/test_z1_overlay_race: tests/test_z1_overlay_race.cpp src/backends/z1mini/native.cpp src/backends/z1mini/native.h
 	mkdir -p $(dir $@)
 	# Check the production translation unit without headers supplied by the harness.
+	$(call progress,Compiling $(notdir $<))
 	$(HOST_CXX) -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -fsyntax-only src/backends/z1mini/native.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -o $@ $< -lpthread
 
 .PHONY: a8-zoom-test
@@ -764,6 +875,7 @@ a8-zoom-test: build/tests/test_a8_zoom
 
 build/tests/test_a8_zoom: tests/test_a8_zoom.cpp src/backends/a8/pipeline.cpp src/backends/a8/pipeline.h src/backends/siyi/overlay.cpp $(wildcard src/backends/a8/mi/star/*.h) $(wildcard ../include/apcam/*.h)
 	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -Wno-unused-function -Wno-sign-compare -Wno-unused-variable -ffunction-sections -fdata-sections -DAPCAM_TARGET=APCAM_TARGET_A8 -I../include -Iinclude -Isrc/backends/a8 -o $@ $< -Wl,--gc-sections -ldl
 
 .PHONY: a8-exposure-test
@@ -772,7 +884,9 @@ a8-exposure-test: build/tests/test_a8_exposure
 
 build/tests/test_a8_exposure: tests/test_a8_exposure.cpp src/backends/a8/isp.cpp src/backends/a8/isp.h include/camera_app/config.h
 	mkdir -p $(dir $@)
+	$(call progress,Compiling $(notdir $<))
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -fsyntax-only src/backends/a8/isp.cpp
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -o $@ $< -ldl
 
 .PHONY: system-stats-test
@@ -791,6 +905,7 @@ vendor-binlog-test: $(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET) build/t
 	$(PYTHON) tests/test_vendor_packets.py --probe ./build/test_packet_binlog --mt11 ./$(HOST_TARGET) --a8 ./$(A8_HOST_TARGET) --zr10 ./$(ZR10_HOST_TARGET) --z1mini ./build/vendor-test-z1mini
 
 build/test_packet_binlog: tests/test_packet_binlog.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/config.cpp src/protocol/siyi.cpp src/protocol/private_uart.cpp build/binlog_version.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lpthread -lm
 
 system-stats-test: tests/test_system_stats tests/test_binlog_sys
@@ -798,9 +913,11 @@ system-stats-test: tests/test_system_stats tests/test_binlog_sys
 	$(PYTHON) tests/test_binlog_sys.py ./tests/test_binlog_sys
 
 tests/test_system_stats: tests/test_system_stats.cpp src/recording/system_stats.cpp include/camera_app/system_stats.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude $(APP_CXXFLAGS) -o $@ $< -lm
 
 tests/test_binlog_sys: tests/test_binlog_sys.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/config.cpp build/binlog_version.h include/camera_app/system_stats.h include/camera_app/binlog.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lpthread -lm
 
 # Shared schema and C++ ownership changes must invalidate host regression binaries.
@@ -811,7 +928,21 @@ $(TEST_TARGET) tests/test_config tests/test_thermal_monitor build/tests/test_a8_
 thermal-codec-bench: build/thermal-codec-bench build/mt11/thermal-codec-bench
 build/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_HOST_LIBS)
 	mkdir -p $(@D)
+	$(call progress,Linking $@)
 	$(HOST_CXX) -O2 -std=c++17 -Wall -Wextra -Werror -I$(THERMAL_CODECS_ROOT)/host/include -o $@ $< $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 build/mt11/thermal-codec-bench: tests/thermal_codec_bench.cpp src/streaming/thermal_codec.h $(THERMAL_TARGET_LIBS)
 	mkdir -p $(@D)
+	$(call progress,Linking $@)
 	aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra -Werror -static -I$(THERMAL_CODECS_ROOT)/aarch64/include -o $@ $< $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm
+
+# ASan detects the vendor's old new[]/scalar-delete mismatch on both queue
+# draining and connection shutdown; TCP_NODELAY verifies the socket fix.
+.PHONY: xop-test
+xop-test: build/tests/test_xop_buffer
+	./build/tests/test_xop_buffer
+	$(PYTHON) ../tests/test_xop_preparation.py
+
+build/tests/test_xop_buffer: tests/test_xop_buffer.cpp $(RTSP_ROOT)/net/BufferWriter.cpp $(RTSP_ROOT)/net/SocketUtil.cpp $(RTSP_ROOT)/net/BufferWriter.h $(RTSP_ROOT)/net/SocketUtil.h $(RTSP_ROOT)/net/Socket.h
+	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
+	$(HOST_CXX) -O1 -g -fsanitize=address -fno-omit-frame-pointer -std=c++11 -Wall -Wextra -Werror -I$(RTSP_ROOT) $(filter %.cpp,$^) -o $@

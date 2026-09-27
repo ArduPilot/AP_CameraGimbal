@@ -211,7 +211,7 @@ def main():
             '-o', str(root/'native-unit'), str(ROOT/'camera_app/tests/test_z1mini_native.cpp'),
             str(ROOT/'camera_app/src/backends/z1mini/native.cpp'), str(ROOT/'camera_app/src/log.cpp'), '-pthread')
         run(str(root/'native-unit'))
-        run('make', '-C', str(ROOT/'camera_app'), 'CAMERA_BACKEND=z1mini', 'z1mini-host', '-j8', stdout=log, stderr=log)
+        run('make', '-C', str(ROOT/'camera_app'), 'CAMERA_BACKEND=z1mini', 'z1mini-host', stdout=log, stderr=log, close_fds=False)
         source = root/'source.h264'
         run('ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
             'testsrc2=size=1920x1080:rate=10', '-frames:v', '10', '-c:v', 'libx264',

@@ -58,7 +58,7 @@ if Path('fail').exists():
             self.assertIn('v1.0.1', (folder / 'README.md').read_text())
 
     def test_make_selects_highest_reachable_version(self):
-        for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk'):
+        for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk', 'tools/build.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)
