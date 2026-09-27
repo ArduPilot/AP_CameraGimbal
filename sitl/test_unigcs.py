@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from unittest.mock import patch
+from target_properties import TARGETS, transform
 
 from gimbal_sim import Gimbal, mt11_private_frame, parse_mt11_private, a8_private_frame, parse_a8_private
 from test_sitl import reserve_port, terminate, read_rtsp_sdp, verify_rtsp_sdp, verify_rtsp_video, verify_rtsp_rtcp, request as public_request
@@ -95,7 +96,42 @@ class Client:
         return self.reply(cmd if response is None else response, dest)
 
 
+def verify_a8_native_gimbal():
+    for orientation in (1, 2):
+        with patch('gimbal_sim.time.monotonic', return_value=100) as clock:
+            gimbal = Gimbal(orientation, 'a8')
+            def send(cmd, payload, control=9, source=0x2c, link=0x6b):
+                return gimbal.handle_private(a8_private_frame(
+                    control, 123, cmd, payload, source=source, destination=0x2e, link=link))
+            for preset, expected in ((1, (0, 0)), (2, (0, -90)),
+                                     (3, (0, -20)), (4, (40, -90))):
+                gimbal.yaw, gimbal.pitch = 40, -20
+                gimbal.target = None
+                assert send(0x9b, bytes((preset,)), source=0xd0, link=0x11) is None
+                assert gimbal.target is None, 'A8 must ignore untranslated MT11 presets'
+                assert send(0x07, bytes((preset,))) is None
+                if orientation == 2 and preset != 3:
+                    assert gimbal.target is None, 'inverted A8 ignores native pitch presets'
+                    continue
+                for _ in range(100):
+                    clock.return_value += .05
+                    gimbal.update()
+                assert abs(gimbal.yaw-expected[0]) < .1 and abs(gimbal.pitch-expected[1]) < .1
+            send(0x06, b'\x28\x14')
+            assert gimbal.target is None and gimbal.commanded_rates != (0, 0)
+            send(0x06, b'\x00\x00', control=8)
+            assert gimbal.commanded_rates == (0, 0)
+            for cmd, payload, control in ((0x07,b'\x00',9), (0x07,b'\x05',9),
+                                           (0x06,b'\x7f\x00',9), (0x06,b'\x01',9),
+                                           (0x07,b'\x01',10)):
+                assert send(cmd,payload,control) is None
+                assert gimbal.target is None and gimbal.commanded_rates == (0, 0)
+
+
 def verify_native_gimbal(backend):
+    if backend == 'a8':
+        verify_a8_native_gimbal()
+        return
     build = mt11_private_frame if backend == "mt11" else a8_private_frame
     parse = parse_mt11_private if backend == "mt11" else parse_a8_private
     for orientation in (1, 2):
@@ -182,6 +218,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('camera', type=Path)
     parser.add_argument('--backend', choices=('mt11','a8','zr10'), default='mt11')
+    parser.add_argument('--orientation', choices=('upright','inverted'), default='upright')
     parser.add_argument('--video-codec', choices=('h264', 'h265'))
     parser.add_argument('--late-interface', action='store_true',
                         help='test delayed NIC discovery; run with sudo unshare -n')
@@ -192,6 +229,11 @@ def main():
     product_id = {'mt11':0x89, 'a8':0x72, 'zr10':0x6b}[args.backend]
     thermal = args.backend == 'mt11'
     verify_native_gimbal(args.backend)
+    def read_pose(public):
+        yaw,pitch = struct.unpack_from('<hh',public_request(public,22,0x0d))
+        _,pitch,yaw = transform(TARGETS[args.backend], 'feedback', args.orientation == 'inverted',
+                                (0,pitch/10,yaw/10))
+        return yaw*10,pitch*10
     camera = args.camera.resolve()
     script = Path(__file__).with_name('gimbal_sim.py')
     with tempfile.TemporaryDirectory(prefix='unigcs-test-') as directory:
@@ -242,7 +284,7 @@ def main():
             try:
                 gimbal_ready = root/'gimbal-ready'
                 processes.append(subprocess.Popen([sys.executable, str(script), '--backend',args.backend,
-                    '--port',str(ports['gimbal']),'--ready-file',str(gimbal_ready)], stdout=log, stderr=log))
+                    '--orientation',args.orientation,'--port',str(ports['gimbal']),'--ready-file',str(gimbal_ready)], stdout=log, stderr=log))
                 deadline = time.monotonic()+5
                 while not gimbal_ready.exists() and time.monotonic()<deadline:
                     time.sleep(.02)
@@ -346,7 +388,7 @@ def main():
                 assert c.request(0x9b, b'\x01', dest=0x2e, link=0x11) == b'\x01'
                 deadline = time.monotonic()+3
                 while time.monotonic() < deadline:
-                    yaw, pitch = struct.unpack_from('<hh', public_request(public, 22, 0x0d))
+                    yaw, pitch = read_pose(public)
                     if abs(yaw) <= 1 and abs(pitch) <= 1:
                         break
                     time.sleep(.05)
@@ -413,6 +455,38 @@ def main():
                 old.sock.sendall(long_command(0x94,control=0)+long_command(0x80))
                 assert len(old.reply(0x80))==5
                 assert 0x94 not in old.received, 'unexpected no-ACK response'
+                if args.backend == 'a8':
+                    # An ACK alone cannot prove dispatch: the A8 MCU has a
+                    # different command namespace from the network client.
+                    public = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+                    public.connect(('127.0.0.1',ports['public']))
+                    for preset, expected_pitch in ((2,-900),(1,0),(4,-900),(3,-900),(1,0)):
+                        expected_yaw = 0
+                        if preset == 4:
+                            # Start away from centre to prove pitch-only
+                            # look-down preserves the measured yaw.
+                            _,wire_pitch,wire_yaw = transform(TARGETS[args.backend], 'angle_command',
+                                args.orientation == 'inverted', (0,-20,20), inverse=True)
+                            public_request(public,23,0x0e,struct.pack('<hh',round(wire_yaw*10),round(wire_pitch*10)))
+                            deadline = time.monotonic()+3
+                            while time.monotonic() < deadline:
+                                yaw,pitch = read_pose(public)
+                                if abs(yaw-200) <= 1 and abs(pitch+200) <= 1:
+                                    break
+                                time.sleep(.05)
+                            assert abs(yaw-200) <= 1 and abs(pitch+200) <= 1
+                            expected_yaw = 200
+                        assert old.request(0x9b,bytes((preset,))) == b'\x01'
+                        deadline = time.monotonic()+3
+                        while time.monotonic() < deadline:
+                            yaw,pitch = read_pose(public)
+                            if abs(yaw-expected_yaw) <= 1 and abs(pitch-expected_pitch) <= 1:
+                                break
+                            time.sleep(.05)
+                        assert abs(yaw-expected_yaw) <= 1 and abs(pitch-expected_pitch) <= 1, (preset,yaw,pitch)
+                    assert old.request(0x9b,b'\x00') == b'\x00'
+                    assert old.request(0x9b,b'\x05') == b'\x00'
+                    public.close()
                 assert old.request(0x9b,b'\x01')==b'\x01'
                 assert old.request(0x9a,b'\x00\x00')==b'\x01'
                 old.sock.close()

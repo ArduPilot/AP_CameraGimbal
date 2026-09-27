@@ -291,6 +291,7 @@ a8_sitl-run: a8_sitl
 
 a8_sitl-test: a8_sitl
 	python3 sitl/test_unigcs.py $(A8_SITL_BUILD)/camera-app --backend a8 --video-codec h265
+	python3 sitl/test_unigcs.py $(A8_SITL_BUILD)/camera-app --backend a8 --orientation inverted
 	python3 sitl/test_sitl.py $(A8_SITL_BUILD)/camera-app \
 		$(A8_SITL_BUILD)/a8-web sitl/gimbal_sim.py \
 		$(abspath $(A8_SITL_BUILD)/runtime) --backend a8 --orientation upright

@@ -612,6 +612,55 @@ int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *reque
         errno = EINVAL;
         return -1;
     }
+#if APCAM_TARGET == APCAM_TARGET_A8
+    if (request->command == 0x9a || request->command == 0x9b) {
+        /* A8 cardv translates network motion into camera-originated 6b/06
+         * (rates) and 6b/07 (presets). Its MCU ignores the MT11's 11/9a,9b
+         * commands. The network ACK confirms dispatch, as in stock cardv. */
+        const bool rates = request->command == 0x9a;
+        if ((request->control != 0x08 && request->control != 0x09) ||
+            request->payload_length != (rates ? 2U : 1U) ||
+            (rates && ((int8_t)request->payload[0] < -100 ||
+                       (int8_t)request->payload[0] > 100 ||
+                       (int8_t)request->payload[1] < -100 ||
+                       (int8_t)request->payload[1] > 100))) {
+            errno = EINVAL;
+            return -1;
+        }
+        uint8_t status = rates || (request->payload[0] >= 1 && request->payload[0] <= 4);
+        if (status) {
+            if (rates || request->payload[0] == 3) {
+                if (send_link(backend, A8_LINK_FLAG_REQUEST, rates ? 0x06 : 0x07,
+                              request->payload, request->payload_length) < 0) return -1;
+                backend->angle_target.valid = false;
+            } else {
+                /* Native pitch presets did not move the inverted A8. Use
+                 * the calibrated angle path for level/look-down instead. */
+                const bool keep_yaw = request->payload[0] == 4;
+                if (keep_yaw && (!backend->have_attitude ||
+                    monotonic_ms() - backend->attitude.timestamp_ms > 1000U)) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+                const float yaw = keep_yaw ? backend->attitude.yaw_rad : 0.0f;
+                const float pitch = request->payload[0] == 1 ? 0.0f : -PI_F / 2;
+                if (ca_backend_set_gimbal_angles(backend, pitch, yaw) < 0) return -1;
+            }
+        }
+        if ((request->control & 1) && backend->private_emit) {
+            ca_private_frame reply = *request;
+            reply.control = A8_LINK_FLAG_REPLY;
+            reply.source = A8_LINK_GIMBAL;
+            reply.destination = request->source;
+            reply.payload = &status;
+            reply.payload_length = 1;
+            reply.raw = nullptr;
+            reply.raw_length = 0;
+            backend->private_emit(backend->private_opaque, &reply);
+        }
+        return 0;
+    }
+#endif
     uint8_t frame[A8_LINK_MAX_FRAME];
     frame[0] = 0xaa; frame[1] = request->control; frame[2] = 2;
     frame[3] = request->payload_length;
