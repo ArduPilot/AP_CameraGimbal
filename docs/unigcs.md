@@ -6,8 +6,9 @@ It is **not yet full UniGCS feature parity**. The simulator emulates startup
 queries, pan/tilt rates and four preset movements. Native mode, rangefinder
 and telemetry subscription commands still need decoding and tests.
 
-MT11 forwards private v3 gimbal frames unchanged to its MCU. A8/ZR10 convert
-the v3 network frames to their v2 MCU framing and convert replies back to v3,
+MT11 forwards private v3 gimbal frames unchanged to its MCU. A8 translates
+pan/tilt and preset requests to its native MCU commands, as described below.
+For other gimbal requests, A8/ZR10 convert the v3 network frames to their v2 MCU framing and convert replies back to v3,
 preserving source/destination IDs, sequence, link, command and payload. Their
 MCU payload limit is 255 bytes; longer requests are rejected. Camera replies
 use network address 34 for the v3 endpoint queried by UniGCS, independently
@@ -54,8 +55,10 @@ followed by a second 32-bit checksum. Both checksums use polynomial 04C11DB7,
 initial zero, MSB first, no final XOR, stored little-endian. The first covers
 bytes 0–11; the second covers the complete header and payload. Captured A8
 status request: `5566aabb01000000000000802d977a34b7ad40eb`.
-Old-format pan/tilt 9A and preset 9B are translated to native gimbal link 11;
-other decoded camera commands share the camera handlers. Unimplemented A8
+Old-format pan/tilt 9A and preset 9B enter the gimbal handler; on A8 it sends
+camera-originated `6B/06` for rates, `6B/07` for yaw centring, and explicit
+SDK angle targets for presets involving pitch. Other decoded camera
+commands share the camera handlers. Unimplemented A8
 version/configuration and image-control variations are logged, not treated
 as implemented merely because their frame checksum is valid.
 
@@ -277,7 +280,7 @@ Image-setting writes fail on targets without image-control support (ZR10).
 
 ## Native gimbal controls in SITL
 
-Link `11`, destination `2E`:
+UniGCS link `11`, destination `2E` (or commands in the older A8 network format):
 
 | Command | Payload | Behaviour |
 | --- | --- | --- |
@@ -300,8 +303,43 @@ dispatch table at file offset `0x3BAA0` maps `9A`/`9B` to wrappers at
 The former shares the public SDK rate handler; the latter calls ILM routines
 `0x6D94`, `0x6DB0`, `0x6E04`, `0x6E1C` for the four presets. The startup
 copy maps file `0x3CE10` to ILM `0xEE0`. These establish payload semantics
-independently of the simulator tests. Physical-camera commands continue to
-be forwarded to the MCU, with the framing conversion described above.
+independently of the simulator tests. MT11 commands are forwarded to the MCU
+unchanged; its command namespace must not be assumed to apply to A8.
+
+### A8 motion translation
+
+Stock A8 `cardv` v0.3.7 handles pan/tilt at
+`camera_sdk_gimbal_turn_action` (`0x63268`) and presets at
+`camera_sdk_gimbal_one_key_action` (`0x632A0`). Its worker
+`gimbal_action_ontoick` (`0x64AA0`) sends their payloads unchanged as
+`6B/06` (two signed rate bytes) and `6B/07` (one preset byte), from camera
+CPU `2C` to gimbal `2E`. It acknowledges the network request locally.
+Passing through `D0 -> 2E, 11/9B` on the real A8 produced no MCU reply or
+movement, despite working in the earlier simulator.
+
+On the tested inverted A8, native rates and yaw-only preset 3 worked, but
+native presets 1, 2 and 4 did not move pitch. Those presets therefore use
+the existing mounting-aware SDK `0E` angle path: level or -90-degree pitch,
+with yaw zero for presets 1/2 and current yaw for preset 4. Preset 4 requires
+attitude feedback no older than one second. Yaw-only centring retains native
+`6B/07`; rates use `6B/06`.
+
+UniGCS testing on the physical inverted A8 confirmed all four presets and
+hold-and-drag motion after this change. Its logged pitch settled near -25
+degrees for a -90-degree look-down request, then returned to level for
+preset 1. Thus the controls work, but full downward travel in inverted
+mounting has not been demonstrated; the simulated limits do not establish
+the real MCU's available travel.
+
+The A8 backend supports both network formats, validates rates (-100 to 100)
+and presets (1 to 4), and acknowledges successful dispatch locally when
+requested. This acknowledgement confirms acceptance, not completion of the
+movement. Invalid preset IDs return zero without moving the gimbal; malformed
+requests are rejected. The A8 simulator rejects untranslated `11/9A,9B`
+commands and reproduces the inverted native-preset limitation. Tests verify
+all four resulting positions in upright and inverted configurations, not just
+receipt of an acknowledgement. ZR10's private preset translation still
+requires separate hardware validation.
 
 ## Camera command coverage
 

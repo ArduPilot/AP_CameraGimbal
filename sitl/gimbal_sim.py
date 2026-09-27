@@ -290,6 +290,17 @@ class Gimbal:
             return None
         return siyi_frame(2, sequence, opcode, reply)
 
+    def apply_preset(self, preset):
+        self.update()
+        # 1: centre both; 2: centre yaw and look down;
+        # 3: centre yaw only; 4: look down, preserving yaw.
+        yaw = self.yaw if preset == 4 else 0.0
+        pitch = self.pitch if preset == 3 else (
+            -90.0 if preset in (2, 4) else 0.0)
+        self.target = (yaw, clamp(pitch, self.properties['gimbal_pitch_min'],
+                                  self.properties['gimbal_pitch_max']))
+        self.commanded_rates = (0.0, 0.0)
+
     def handle_private(self, data):
         if self.properties['vendor_protocol'] == 2:
             if len(data) != 40 or data[:2] != b"\xa9\x5b" or crc16(data):
@@ -311,6 +322,9 @@ class Gimbal:
         if destination == GIMBAL_MCU and link == 0x11:
             if _control not in (0x08, 0x09):
                 return None
+            if self.backend == "a8" and command in (0x9A, 0x9B):
+                # A8 firmware needs camera-originated 6b/06,07 translations.
+                return None
             # Native commands share the stock MCU's SDK motion handlers.
             # See docs/unigcs.md for capture and firmware evidence.
             reply = None
@@ -327,15 +341,7 @@ class Gimbal:
                     reply = b"\x01"
             elif command == 0x9B and len(payload) == 1:
                 if 1 <= payload[0] <= 4:
-                    self.update()
-                    # 1: centre both; 2: centre yaw and look down;
-                    # 3: centre yaw only; 4: look down, preserving yaw.
-                    yaw = self.yaw if payload[0] == 4 else 0.0
-                    pitch = self.pitch if payload[0] == 3 else (
-                        -90.0 if payload[0] in (2, 4) else 0.0)
-                    self.target = (yaw, clamp(pitch, self.properties['gimbal_pitch_min'],
-                                              self.properties['gimbal_pitch_max']))
-                    self.commanded_rates = (0.0, 0.0)
+                    self.apply_preset(payload[0])
                     reply = b"\x01"
                 else:
                     reply = b"\x00"
@@ -347,6 +353,18 @@ class Gimbal:
         if source != camera_cpu or destination != GIMBAL_MCU or link != PRIVATE_LINK:
             return None
         reply = None
+        if self.backend == "a8" and command in (0x06, 0x07):
+            if _control not in (0x08, 0x09):
+                return None
+            if command == 0x06 and len(payload) == 2:
+                if all(-100 <= value <= 100 for value in struct.unpack('<bb', payload)):
+                    self.handle_siyi(siyi_frame(0, _sequence, 0x07, payload))
+            elif command == 0x07 and len(payload) == 1 and 1 <= payload[0] <= 4:
+                # Inverted A8 hardware only honoured native yaw centring;
+                # the camera backend must supply explicit pitch targets.
+                if self.mounting_direction != 2 or payload[0] == 3:
+                    self.apply_preset(payload[0])
+            return None
         if self.backend == "zr10" and command in (0x04, 0x05, 0x06, 0x07, 0x37):
             if command == 0x37 and len(payload) == 2:
                 self.update()
