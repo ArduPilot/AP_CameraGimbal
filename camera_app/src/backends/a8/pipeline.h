@@ -15,6 +15,10 @@
 #define CA_A8_FRAME_RATE APCAM_FRAME_RATE
 #define CA_A8_MAX_ZOOM APCAM_ZOOM_MAX
 
+/* Frame-buffered ISP output feeds SCL device 1. Digital zoom can upscale
+ * beyond the sensor's pixel rate, which overruns the realtime SCL path. */
+#define CA_A8_SCL_DEV 1
+
 #define CA_A8_MAIN_VENC 0U
 #define CA_A8_SUB_VENC 1U
 #define CA_A8_RECORD_VENC 2U

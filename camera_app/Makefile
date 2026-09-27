@@ -757,6 +757,15 @@ build/tests/test_z1_overlay_race: tests/test_z1_overlay_race.cpp src/backends/z1
 	$(HOST_CXX) -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -fsyntax-only src/backends/z1mini/native.cpp
 	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -I../include -Iinclude -o $@ $< -lpthread
 
+.PHONY: a8-zoom-test
+test: a8-zoom-test
+a8-zoom-test: build/tests/test_a8_zoom
+	./build/tests/test_a8_zoom
+
+build/tests/test_a8_zoom: tests/test_a8_zoom.cpp src/backends/a8/pipeline.cpp src/backends/a8/pipeline.h src/backends/siyi/overlay.cpp $(wildcard src/backends/a8/mi/star/*.h) $(wildcard ../include/apcam/*.h)
+	mkdir -p $(dir $@)
+	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -Wno-unused-function -Wno-sign-compare -Wno-unused-variable -ffunction-sections -fdata-sections -DAPCAM_TARGET=APCAM_TARGET_A8 -I../include -Iinclude -Isrc/backends/a8 -o $@ $< -Wl,--gc-sections -ldl
+
 .PHONY: a8-exposure-test
 a8-exposure-test: build/tests/test_a8_exposure
 	./build/tests/test_a8_exposure

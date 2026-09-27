@@ -11,13 +11,13 @@
 #include <string.h>
 #include <dlfcn.h>
 #if APCAM_TARGET == APCAM_TARGET_A8
+#include "pipeline.h"
 #include "mi/star/m6_rgn.h"
 #define MI_TYPE(name) m6_##name
 #define MI_CALL(hw, name, ...) (hw)->mi.name(0, __VA_ARGS__)
 #define MI_DEINIT(hw) (hw)->mi.fnDeinit(0)
-/* The vendor app attaches its OSD to the scaler output ports (module id 34),
- * not to the encoder; port c feeds VENC channel c from SCL device/channel 0. */
-#define MI_DEST(c) (m6_sys_bind){.module=M6_SYS_MOD_SCL,.device=0,.channel=0,.port=(c)}
+/* Attach OSD to the same scaler device used by the A8 video pipeline. */
+#define MI_DEST(c) (m6_sys_bind){.module=M6_SYS_MOD_SCL,.device=CA_A8_SCL_DEV,.channel=0,.port=(c)}
 #else
 #include "mi/star/i6_rgn.h"
 #define MI_TYPE(name) i6_##name
