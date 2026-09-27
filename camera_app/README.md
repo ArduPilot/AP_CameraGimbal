@@ -807,6 +807,15 @@ MT11 media build uses the SS928 V2.0.2.2 B090 MPP tree at
 pinned CC0 minimp4 checkout at `MINIMP4_ROOT`. Override the external roots on
 the make command line when needed. The repository-level `make dependencies`
 fetches and verifies both pinned public dependencies under `build/deps`.
+The build leaves downloaded sources untouched and prepares an XOP copy under
+`camera_app/build/xop`, applying the reviewed fixes in
+`tools/xop_warnings.patch`. This corrects copied-buffer array ownership and
+socket options, and removes unused declarations and incomplete C++ aggregate
+initializers. The same buffer/socket implementations replace the corresponding
+objects in the MT11 vendor archive. `make -C camera_app xop-test` checks buffer
+release with AddressSanitizer and verifies TCP_NODELAY. The minimp4 patch also
+annotates intentional fall-throughs and checks signed file sizes before
+unsigned comparisons; compiler diagnostics remain enabled.
 
 ## SupportProxy
 

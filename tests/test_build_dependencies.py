@@ -28,6 +28,7 @@ class BuildDependenciesTest(unittest.TestCase):
         # Stand in for downloaded sources; exercise the real Make entry points.
         tools = self.repo / 'tools'
         tools.mkdir()
+        shutil.copyfile(ROOT / 'tools/build.mk', tools / 'build.mk')
         bootstrap = tools / 'bootstrap_dependencies.sh'
         bootstrap.write_text('''#!/bin/sh
 set -eu
@@ -44,7 +45,11 @@ echo bootstrap >> calls
         for component in ['camera_app', 'web']:
             directory = self.repo / component
             directory.mkdir()
-            (directory / 'Makefile').write_text('''all:
+            (directory / 'Makefile').write_text('''.DEFAULT_GOAL := all
+.PHONY: generated
+generated:
+\t@test -f "$(MINIMP4_ROOT)/minimp4.h"
+all:
 	@test -f "$(MINIMP4_ROOT)/minimp4.h"
 	@echo compile >> ../calls
 ''')
@@ -61,7 +66,7 @@ recursive:
                     'MAKEFLAGS', 'MFLAGS', 'MAKELEVEL']:
             env.pop(key, None)
         env.update(extra_env or {})
-        result = subprocess.run(['make', '-j4', '-f', 'recursive.mk', *args,
+        result = subprocess.run(['make', '-j10', '-f', 'recursive.mk', *args,
                                  'MT11_VERSION=v1.0', 'MT11_GIT_HASH=123456',
                                  'ZR10_BUILD_HASH=123456', 'Z1MINI_BUILD_HASH=123456'],
                                 cwd=self.repo, env=env, text=True,
@@ -104,6 +109,62 @@ recursive:
         self.assertEqual(self.make('recursive', 'DEPS_ROOT=custom-deps'),
                          ['bootstrap', 'compile', 'compile'])
         self.assertTrue((self.repo / 'custom-deps/minimp4/minimp4.h').is_file())
+
+    def prepare_sitl(self, fail=False):
+        # The real top-level graph runs four backend submakes. Delay the shared
+        # generator to expose any backend that starts before preparation ends.
+        for name in ('sitl', 'a8-sitl', 'zr10-sitl', 'z1mini-sitl'):
+            directory = self.repo / 'build' / name
+            directory.mkdir()
+            for filename in ('rgb.h264', 'thermal.h264', 'main.h264', 'sub.h264', 'photo.jpg'):
+                (directory / filename).touch()
+        (self.repo / 'sitl').mkdir()
+        (self.repo / 'sitl/prepare_runtime.py').write_text('')
+        (self.repo / 'tools/export_targets.py').write_text('')
+        for component in ('camera_app', 'web'):
+            (self.repo / component / 'Makefile').write_text(""".DEFAULT_GOAL := all
+.PHONY: generated sitl all
+generated:
+\t@test -f "$(MINIMP4_ROOT)/minimp4.h"
+\t@echo generating-%s >> ../calls
+\t@sleep 0.05
+\t@%s
+\t@touch ../%s-ready
+sitl all:
+\t@test -f ../camera_app-ready -a -f ../web-ready
+\t@echo compile-%s >> ../calls
+""" % (component, 'false' if fail and component == 'camera_app' else 'true',
+       component, component))
+
+    def test_parallel_camera_goals_generate_shared_inputs_once(self):
+        self.prepare_sitl()
+        calls = self.make('dependencies', 'sitl', 'a8_sitl', 'zr10_sitl', 'z1mini_sitl')
+        self.assertEqual(calls[:3], ['bootstrap', 'generating-camera_app', 'generating-web'])
+        self.assertEqual(calls.count('bootstrap'), 1)
+        self.assertEqual(calls.count('generating-camera_app'), 1)
+        self.assertEqual(calls.count('generating-web'), 1)
+        self.assertEqual(calls.count('compile-camera_app'), 4)
+        self.assertEqual(calls.count('compile-web'), 4)
+
+    def test_shared_generation_failure_stops_every_backend(self):
+        self.prepare_sitl(fail=True)
+        self.make('sitl', 'a8_sitl', 'zr10_sitl', 'z1mini_sitl', expect_success=False)
+        self.assertEqual((self.repo / 'calls').read_text().splitlines(),
+                         ['bootstrap', 'generating-camera_app'])
+
+    def test_sitl_clean_preserves_build_environment_and_dependency_cache(self):
+        cache = self.repo / 'build/deps/cached-source'
+        cache.parent.mkdir()
+        cache.touch()
+        for name in ('sitl', 'a8-sitl', 'zr10-sitl', 'z1mini-sitl'):
+            (self.repo / 'build' / name).mkdir()
+            (self.repo / 'camera_app/build' / name).mkdir(parents=True)
+        self.make('sitl-clean')
+        self.assertTrue(cache.exists())
+        self.assertTrue((self.repo / 'build/environment.mk').exists())
+        for name in ('sitl', 'a8-sitl', 'zr10-sitl', 'z1mini-sitl'):
+            self.assertFalse((self.repo / 'build' / name).exists())
+            self.assertFalse((self.repo / 'camera_app/build' / name).exists())
 
 
 class CachedRTSPSourcesTest(unittest.TestCase):

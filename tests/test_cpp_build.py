@@ -44,9 +44,10 @@ class CppBuildTest(unittest.TestCase):
         self.assertIsNotNone(real_rsync, 'Install rsync (tools/install_build_environment.py)')
         with tempfile.TemporaryDirectory(prefix='apcam-web-install-') as directory:
             fixture = Path(directory)
-            for name in ('camera_app', 'web', 'include/apcam', 'remote/bin'):
+            for name in ('camera_app', 'web', 'include/apcam', 'tools', 'remote/bin'):
                 (fixture / name).mkdir(parents=True)
             shutil.copy(ROOT / 'camera_app/Makefile', fixture / 'camera_app/Makefile')
+            shutil.copy(ROOT / 'tools/build.mk', fixture / 'tools/build.mk')
             shutil.copy(ROOT / 'include/apcam/targets.mk', fixture / 'include/apcam/targets.mk')
             shutil.copytree(ROOT / 'web/webroot', fixture / 'web/webroot')
             (fixture / 'web/mt11-web').write_text('new web binary')

@@ -43,7 +43,17 @@ else
     set -- "$@" --disable-x86asm
 fi
 "$root/ffmpeg-$version/configure" "$@"
-make -j"${THERMAL_BUILD_JOBS:-6}"
-make install
+# Recursive recipes keep the parent's jobserver descriptors open. Do not
+# replace that shared limit with a fresh -j pool for FFmpeg.
+make_command=${MAKE:-make}
+verbose=
+[ "${VERBOSE:-0}" != 1 ] || verbose=1
+if [ "${MAKELEVEL:-0}" -gt 0 ] || [ -n "${MAKEFLAGS:-}" ]; then
+    # This also preserves an explicitly serial parent (-j1 has no jobserver).
+    "$make_command" "V=$verbose"
+else
+    "$make_command" -j"${THERMAL_BUILD_JOBS:-6}" "V=$verbose"
+fi
+"$make_command" "V=$verbose" install
 printf '%s\n' "$configuration" > "$prefix/configuration"
 cp "$root/ffmpeg-$version/COPYING.LGPLv2.1" "$prefix/"

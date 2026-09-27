@@ -8,6 +8,9 @@ permissions:
 concurrency:
   group: camera-firmware-${{ github.ref }}
   cancel-in-progress: true
+env:
+  MAKEFLAGS: -j8
+
 jobs:
   legacy-python:
     runs-on: ubuntu-22.04
@@ -37,7 +40,7 @@ jobs:
       - name: Install compilers, SDKs and build tools
         run: python3 tools/install_build_environment.py
       - name: Build all camera release packages
-        run: make -j4 release
+        run: make -j8 release
       - name: Check packaging and UUID helpers
         run: make release-test platform-test camera-definition-test targets-test
       - name: Test native Z1-Mini overlay failures and request ordering
@@ -79,6 +82,10 @@ jobs:
           echo "$PWD/build/terrain-venv/bin" >> "$GITHUB_PATH"
       - name: Fetch pinned build sources
         run: make dependencies
+      - name: Build all four simulators concurrently
+        run: make -j8 sitl a8_sitl zr10_sitl z1mini_sitl
+      - name: Test RTSP buffer ownership and TCP socket options
+        run: make -C camera_app xop-test
       - name: Test C++ web buffer ownership and escaping
         run: |
           make -C web tests/test_string_buffer

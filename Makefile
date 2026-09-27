@@ -1,3 +1,6 @@
+.DEFAULT_GOAL := all
+include tools/build.mk
+
 # Written by tools/install_build_environment.py; command-line overrides win.
 -include build/environment.mk
 
@@ -24,8 +27,8 @@ MT11_GIT_HASH ?= $(shell git rev-parse HEAD 2>/dev/null | cut -c1-6)
 export MT11_VERSION MT11_GIT_HASH
 SITL_VIDEO_PYTHON ?= $(if $(wildcard $(CURDIR)/build/terrain-venv/bin/python),$(CURDIR)/build/terrain-venv/bin/python,python3)
 export CAMERA_GIMBAL_SITL_PYTHON ?= $(SITL_VIDEO_PYTHON)
-# Versioned, user-facing packages. Build cameras serially because their
-# native builds share generated MAVLink headers and some intermediate files.
+# Versioned, user-facing packages. Each camera build uses the inherited
+# jobserver; the release publisher installs completed packages one at a time.
 RELEASE_ROOT ?= release
 RELEASE_TARGETS ?= A8 MT11 ZR10 Z1-Mini
 MT11_PACKAGE_OUT ?= build/MT11_FW_ArduPilot_$(MT11_VERSION)_$(MT11_GIT_HASH).bin
@@ -73,8 +76,17 @@ BOOTSTRAP_DEPENDENCIES := $(filter $(abspath $(DEPS_ROOT)/ss928-mpp) $(abspath $
 	ardupilot-siyi-test ardupilot-mavlink-test mavproxy-camera-test \
 	sitl-clean clean _mt11_package
 
-all: build-dependencies
+.PHONY: generated camera-app web-app
+# Finish shared generators before backend submakes start. A multi-camera
+# invocation must have one owner for every generated header and patched source.
+generated: build-dependencies
+	$(MAKE) -C camera_app generated
+	$(MAKE) -C web generated
+
+all: camera-app web-app
+camera-app: generated
 	$(MAKE) -C camera_app
+web-app: generated
 	$(MAKE) -C web
 
 .PHONY: release release-test
@@ -97,6 +109,7 @@ release-test:
 	python3 tests/test_cpp_build.py
 	python3 tests/test_release.py
 	python3 tests/test_build_dependencies.py
+	python3 tests/test_parallel_build.py
 	python3 tests/test_prebuilt_tools.py
 
 .PHONY: platform-test
@@ -105,17 +118,18 @@ platform-test:
 	python3 tests/test_zr10_install.py
 	python3 tests/test_platform_packages.py '$(RELEASE_ROOT)/$(MT11_VERSION)'
 
-.PHONY: build-dependencies mavlink-dependencies
+.PHONY: build-dependencies mavlink-dependencies bootstrap-dependencies
 mavlink-dependencies:
 	@if test ! -f modules/mavlink/message_definitions/v1.0/all.xml || \
 		test ! -f modules/mavlink/pymavlink/tools/mavgen.py; then \
 		git submodule update --init --recursive; \
 	fi
 
-build-dependencies: mavlink-dependencies
-	$(if $(BOOTSTRAP_DEPENDENCIES),tools/bootstrap_dependencies.sh '$(DEPS_ROOT)',:)
+build-dependencies: mavlink-dependencies $(if $(BOOTSTRAP_DEPENDENCIES),bootstrap-dependencies)
 
-dependencies: mavlink-dependencies
+dependencies: bootstrap-dependencies
+
+bootstrap-dependencies: mavlink-dependencies
 	tools/bootstrap_dependencies.sh '$(DEPS_ROOT)'
 
 # Verify on every invocation: also repair deleted/corrupt cached binaries.
@@ -123,9 +137,8 @@ dependencies: mavlink-dependencies
 mt11_tools:
 	python3 tools/prebuilt_mt11_tools.py --output '$(MT11_TOOLS_ROOT)'
 
-sitl: $(SITL_BUILD)/rgb.h264 $(SITL_BUILD)/thermal.h264 \
+sitl: generated $(SITL_BUILD)/rgb.h264 $(SITL_BUILD)/thermal.h264 \
 	$(SITL_BUILD)/photo.jpg
-	$(MAKE) build-dependencies
 	$(MAKE) -C camera_app sitl SITL_TARGET=$(abspath $(SITL_BUILD)/camera-app)
 	$(MAKE) -C web sitl SITL_TARGET=$(abspath $(SITL_BUILD)/mt11-web) \
 		SITL_ROOT=$(abspath $(SITL_BUILD)/runtime) SITL_BIN_ROOT=$(abspath $(SITL_BUILD))
@@ -250,7 +263,7 @@ a8_sitl-supportproxy-test: a8_sitl
 	python3 sitl/test_support_proxy.py --proxy $(SUPPORTPROXY_ROOT) --backend a8 --build $(A8_SITL_BUILD)
 
 recording-recovery-test:
-	python3 web/tests/test_recording_download.py
+	+python3 web/tests/test_recording_download.py
 
 $(A8_SITL_BUILD)/photo.jpg: $(SITL_BUILD)/photo.jpg
 	mkdir -p $(dir $@)
@@ -272,9 +285,8 @@ $(A8_SITL_BUILD)/sub.h264:
 		-x264-params keyint=25:min-keyint=25:scenecut=0:repeat-headers=1:aud=1 \
 		-f h264 -y $@
 
-a8_sitl: $(A8_SITL_BUILD)/main.h264 $(A8_SITL_BUILD)/sub.h264 \
+a8_sitl: generated $(A8_SITL_BUILD)/main.h264 $(A8_SITL_BUILD)/sub.h264 \
 	$(A8_SITL_BUILD)/photo.jpg
-	$(MAKE) build-dependencies
 	$(MAKE) -C camera_app sitl CAMERA_BACKEND=a8 \
 		SITL_OBJDIR=build/a8-sitl \
 		SITL_TARGET=$(abspath $(A8_SITL_BUILD)/camera-app)
@@ -300,40 +312,42 @@ a8_sitl-test: a8_sitl
 		$(abspath $(A8_SITL_BUILD)/runtime) --backend a8 --orientation inverted
 
 ardupilot-siyi-test:
-	tests/run_ardupilot_siyi_test.sh
+	+tests/run_ardupilot_siyi_test.sh
 
 ardupilot-mavlink-test:
-	tests/run_ardupilot_mavlink_test.sh
+	+tests/run_ardupilot_mavlink_test.sh
 
 mavproxy-camera-test:
 	@test -n "$(MAVPROXY_REPO)" || { \
 		echo 'Set MAVPROXY_REPO to the MAVProxy worktree' >&2; exit 2; \
 	}
 	@test -f "$(MAVPROXY_REPO)/MAVProxy/modules/mavproxy_camera/__init__.py"
-	MAVPROXY_REPO="$(abspath $(MAVPROXY_REPO))" \
+	+MAVPROXY_REPO="$(abspath $(MAVPROXY_REPO))" \
 		tests/run_ardupilot_mavlink_test.sh
 
 sitl-clean:
-	rm -rf build
+	$(call progress,Cleaning SITL builds)
+	rm -rf $(SITL_BUILD) $(A8_SITL_BUILD) $(ZR10_SITL_BUILD) $(Z1MINI_SITL_BUILD)
+	rm -rf camera_app/build/sitl camera_app/build/a8-sitl \
+		camera_app/build/zr10-sitl camera_app/build/z1mini-sitl
 
 packaging/mt11/thermal_socket: packaging/mt11/thermal_socket.cpp
+	$(call progress,Linking $@)
 	$(CROSS_COMPILE)g++ -static -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
 		-o $@ $<
 
-mt11_package:
+mt11_package: _mt11_package
+
+_mt11_package: all packaging/mt11/thermal_socket \
+	packaging/mt11/mt11-timesync.sh packaging/mt11/app_init.sh \
+	packaging/mt11/app_selection.sh packaging/mt11/start-dropbear.sh \
+	mt11_tools
 	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$$' || { \
 		echo 'No reachable Git tag of the form vX.y or vX.y.z; cannot name package' >&2; exit 1; \
 	}
 	@printf '%s\n' '$(MT11_GIT_HASH)' | grep -Eq '^[0-9a-f]{6}$$' || { \
 		echo 'Cannot determine the six-character Git commit hash' >&2; exit 1; \
 	}
-	$(MAKE) build-dependencies
-	$(MAKE) _mt11_package
-
-_mt11_package: all packaging/mt11/thermal_socket \
-	packaging/mt11/mt11-timesync.sh packaging/mt11/app_init.sh \
-	packaging/mt11/app_selection.sh packaging/mt11/start-dropbear.sh \
-	mt11_tools
 	tools/build_mt11_package.sh \
 		'$(MT11_KERNEL)' '$(MT11_ROOTFS)' '$(MT11_UPDATE_CONFIG)' \
 		'$(MT11_PACKAGE_OUT)' \
@@ -349,7 +363,7 @@ _mt11_package: all packaging/mt11/thermal_socket \
 # SIYI A8 mini SD-card update: camera-app replaces the vendor application
 # partition. Needs the arm-linux- (armv7 hard-float, glibc <= 2.30) toolchain
 # on PATH and mkfs.jffs2. Platform assets are checked in separately.
-a8_package:
+a8_package: generated build/a8-uuid
 	@printf '%s\n' '$(MT11_VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$$' || { \
 		echo 'No reachable Git tag of the form vX.y or vX.y.z; cannot name package' >&2; exit 1; \
 	}
@@ -358,23 +372,26 @@ a8_package:
 		echo 'or run make a8_package A8_TOOLCHAIN_DIR=<toolchain root> (or A8_CROSS_COMPILE=<dir>/arm-linux-)' >&2; \
 		exit 1; \
 	}
-	$(MAKE) build-dependencies
 	$(MAKE) -C camera_app CAMERA_BACKEND=a8 CROSS_COMPILE=$(A8_CROSS_COMPILE)
 	$(MAKE) -C web a8-web A8_CROSS_COMPILE=$(A8_CROSS_COMPILE)
-	$(A8_CROSS_COMPILE)g++ -static-libstdc++ -static-libgcc -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
-		-o build/a8-uuid packaging/a8/a8-uuid.cpp -ldl
 	CROSS_COMPILE=$(A8_CROSS_COMPILE) tools/build_a8_package.sh \
 		'$(A8_PLATFORM_DIR)' '$(A8_PACKAGE_OUT)' \
 		camera_app/build/a8/camera-app build/a8-uuid web/a8-web \
 		packaging/a8/app_init.sh packaging/a8/camera.ini \
 		packaging/a8/upgrade_script.txt '$(MT11_VERSION)-$(MT11_GIT_HASH)'
 
+build/a8-uuid: packaging/a8/a8-uuid.cpp Makefile
+	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
+	$(A8_CROSS_COMPILE)g++ -static-libstdc++ -static-libgcc -O2 -pipe -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
+		-o $@ $< -ldl
+
 clean:
 	$(MAKE) -C camera_app clean
 	$(MAKE) -C web clean
 	rm -f packaging/mt11/thermal_socket
 	rm -f '$(MT11_PACKAGE_OUT)' '$(A8_PACKAGE_OUT)' '$(A8_PACKAGE_OUT).sha256'
-	rm -rf $(SITL_BUILD)
+	rm -rf $(SITL_BUILD) $(A8_SITL_BUILD) $(ZR10_SITL_BUILD) $(Z1MINI_SITL_BUILD)
 
 # ZR10 application bundle: SD-based installation, no partition image.
 ZR10_CROSS_COMPILE ?= $(CURDIR)/build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-
@@ -383,14 +400,18 @@ ZR10_BUILD_HASH := $(MT11_GIT_HASH)$(shell git diff --quiet HEAD -- || printf --
 ZR10_PACKAGE_OUT ?= build/ZR10_APP_ArduPilot_$(MT11_VERSION)_$(ZR10_BUILD_HASH).tar.gz
 export ZR10_WEB_PASSWORD
 .PHONY: zr10 zr10_package zr10_dependencies
-zr10_dependencies:
+zr10_dependencies: build-dependencies
 	tools/bootstrap_zr10_toolchain.sh
-	$(MAKE) build-dependencies
-zr10: zr10_dependencies
+zr10: zr10_dependencies generated build/zr10-uuid
 	$(MAKE) -C camera_app CAMERA_BACKEND=zr10 CROSS_COMPILE='$(ZR10_CROSS_COMPILE)'
 	$(MAKE) -C web zr10-web ZR10_CROSS_COMPILE='$(ZR10_CROSS_COMPILE)'
+
+build/zr10-uuid: packaging/zr10/zr10-uuid.cpp Makefile | zr10_dependencies
+	mkdir -p $(dir $@)
+	$(call progress,Linking $@)
 	$(ZR10_CROSS_COMPILE)g++ -static-libstdc++ -static-libgcc -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers \
-		-o build/zr10-uuid packaging/zr10/zr10-uuid.cpp -ldl
+		-o $@ $< -ldl
+
 zr10_package: zr10
 	ZR10_CROSS_COMPILE='$(ZR10_CROSS_COMPILE)' tools/build_zr10_package.sh \
 		'$(ZR10_PACKAGE_OUT)' camera_app/build/zr10/camera-app web/zr10-web \
@@ -415,12 +436,10 @@ $(ZR10_SITL_BUILD)/photo.jpg: $(A8_SITL_BUILD)/photo.jpg
 	mkdir -p $(dir $@)
 	cp $< $@
 .PHONY: zr10_sitl zr10_sitl-run
-zr10_sitl: $(ZR10_SITL_BUILD)/main.h264 $(ZR10_SITL_BUILD)/sub.h264 $(ZR10_SITL_BUILD)/photo.jpg
-	$(MAKE) build-dependencies
+zr10_sitl: generated $(ZR10_SITL_BUILD)/main.h264 $(ZR10_SITL_BUILD)/sub.h264 $(ZR10_SITL_BUILD)/photo.jpg
 	$(MAKE) -C camera_app sitl CAMERA_BACKEND=zr10 \
 		SITL_OBJDIR=build/zr10-sitl \
 		SITL_TARGET=$(abspath $(ZR10_SITL_BUILD)/camera-app)
-	python3 tools/zr10_firmware.py header web/build/zr10_upgrade.h
 	$(MAKE) -C web sitl SITL_TARGET=$(abspath $(ZR10_SITL_BUILD)/zr10-web) \
 		SITL_ROOT=$(abspath $(ZR10_SITL_BUILD)/runtime) \
 		SITL_BIN_ROOT=$(abspath $(ZR10_SITL_BUILD)) SITL_WEB_BINARY=zr10-web \
@@ -447,7 +466,7 @@ Z1MINI_BUILD_HASH := $(MT11_GIT_HASH)$(shell git diff --quiet HEAD -- || printf 
 Z1MINI_PACKAGE_OUT ?= build/Z1Mini_AP_$(MT11_VERSION)_$(Z1MINI_BUILD_HASH).gcu
 Z1MINI_RETAINED_ISP_PACKAGE_OUT ?= $(Z1MINI_PACKAGE_OUT)
 .PHONY: z1mini z1mini_package z1mini_retained_isp_package z1mini-test z1mini-test-headers
-z1mini: build-dependencies
+z1mini: generated
 	$(MAKE) -C camera_app CAMERA_BACKEND=z1mini CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
 	$(MAKE) -C web z1mini-web Z1MINI_CROSS_COMPILE='$(Z1MINI_CROSS_COMPILE)'
 z1mini_retained_isp_package: z1mini
@@ -455,8 +474,8 @@ z1mini_retained_isp_package: z1mini
 z1mini-test-headers:
 	$(MAKE) -C web build/version.h build/icons.h
 z1mini-test: z1mini-test-headers
-	python3 tests/test_z1mini.py
-	python3 web/tests/test_z1mini_upgrade.py
+	+python3 tests/test_z1mini.py
+	+python3 web/tests/test_z1mini_upgrade.py
 	python3 tests/test_z1mini_4k.py
 	python3 tests/test_z1mini_4k.py --orientation inverted
 	python3 tests/test_z1mini_service.py
@@ -487,8 +506,7 @@ $(Z1MINI_SITL_BUILD)/photo.jpg: $(A8_SITL_BUILD)/photo.jpg
 	mkdir -p $(dir $@)
 	cp $< $@
 .PHONY: z1mini_sitl z1mini_sitl-run
-z1mini_sitl: $(Z1MINI_SITL_BUILD)/main.h264 $(Z1MINI_SITL_BUILD)/sub.h264 $(Z1MINI_SITL_BUILD)/photo.jpg
-	$(MAKE) build-dependencies
+z1mini_sitl: generated $(Z1MINI_SITL_BUILD)/main.h264 $(Z1MINI_SITL_BUILD)/sub.h264 $(Z1MINI_SITL_BUILD)/photo.jpg
 	$(MAKE) -C camera_app sitl CAMERA_BACKEND=z1mini \
 		SITL_OBJDIR=build/z1mini-sitl \
 		SITL_TARGET=$(abspath $(Z1MINI_SITL_BUILD)/camera-app)
