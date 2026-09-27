@@ -19,15 +19,15 @@
 #include <sys/select.h>
 #include <unistd.h>
 
-/* ids: everything lives on device/channel 0 */
+/* ISP port 1 and SCL device 1 provide the buffered digital zoom path. */
 #define SNR_PAD 0
 #define VIF_GRP 0
 #define VIF_DEV 0
 #define VIF_PORT 0
 #define ISP_DEV 0
 #define ISP_CHN 0
-#define ISP_PORT 0
-#define SCL_DEV 0
+#define ISP_PORT 1
+#define SCL_DEV CA_A8_SCL_DEV
 #define SCL_CHN 0
 #define JPEG_SCL_PORT CA_A8_MAIN_VENC
 #define JPEG_VENC_CHN 0
@@ -201,7 +201,7 @@ static int isp_start(struct a8_pipeline *p)
     MI_CHECK(p->isp.fnSetChannelParam(ISP_DEV, ISP_CHN, &param));
     MI_CHECK(p->isp.fnStartChannel(ISP_DEV, ISP_CHN));
     memset(&port, 0, sizeof(port));
-    port.pixFmt = M6_PIXFMT_YUV422_YUYV;
+    port.pixFmt = M6_PIXFMT_YUV420SP;
     MI_CHECK(p->isp.fnSetPortConfig(ISP_DEV, ISP_CHN, ISP_PORT, &port));
     MI_CHECK(p->isp.fnEnablePort(ISP_DEV, ISP_CHN, ISP_PORT));
     return 0;
@@ -224,14 +224,15 @@ static int scl_start(struct a8_pipeline *p)
 static int bind_front_end(struct a8_pipeline *p)
 {
     m6_sys_bind vif = {M6_SYS_MOD_VIF, VIF_DEV, VIF_PORT, 0};
-    m6_sys_bind isp = {M6_SYS_MOD_ISP, ISP_DEV, ISP_CHN, ISP_PORT};
+    m6_sys_bind isp_input = {M6_SYS_MOD_ISP, ISP_DEV, ISP_CHN, 0};
+    m6_sys_bind isp_output = {M6_SYS_MOD_ISP, ISP_DEV, ISP_CHN, ISP_PORT};
     m6_sys_bind scl = {M6_SYS_MOD_SCL, SCL_DEV, SCL_CHN, 0};
 
-    MI_CHECK(p->sys.fnBindExt(0, &vif, &isp, CA_A8_FRAME_RATE,
+    MI_CHECK(p->sys.fnBindExt(0, &vif, &isp_input, CA_A8_FRAME_RATE,
                               CA_A8_FRAME_RATE, M6_SYS_LINK_REALTIME, 0));
     p->stage = STAGE_BOUND;
-    MI_CHECK(p->sys.fnBindExt(0, &isp, &scl, CA_A8_FRAME_RATE,
-                              CA_A8_FRAME_RATE, M6_SYS_LINK_REALTIME, 0));
+    MI_CHECK(p->sys.fnBindExt(0, &isp_output, &scl, CA_A8_FRAME_RATE,
+                              CA_A8_FRAME_RATE, M6_SYS_LINK_FRAMEBASE, 0));
     return 0;
 }
 
@@ -463,7 +464,7 @@ void ca_a8_pipeline_close(void)
         destination = (m6_sys_bind){M6_SYS_MOD_SCL, SCL_DEV, SCL_CHN, 0};
         (void)p->sys.fnUnbind(0, &source, &destination);
         source = (m6_sys_bind){M6_SYS_MOD_VIF, VIF_DEV, VIF_PORT, 0};
-        destination = (m6_sys_bind){M6_SYS_MOD_ISP, ISP_DEV, ISP_CHN, ISP_PORT};
+        destination = (m6_sys_bind){M6_SYS_MOD_ISP, ISP_DEV, ISP_CHN, 0};
         (void)p->sys.fnUnbind(0, &source, &destination);
     }
     if (p->stage >= STAGE_SCL) {
