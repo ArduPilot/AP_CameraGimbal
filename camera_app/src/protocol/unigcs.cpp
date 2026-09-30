@@ -360,6 +360,16 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         if(n && !(n==1 && p[0]==1)) break;
         out[0]=ca_media_capture_photo(s->media,cfg.photo_scope)==0;
         reply(s,0xc6,out,1); return;
+    case 0x9f:
+        // Legacy A8 UniGCS sends camera-mode 0 for a single photo, not C6/01.
+        // Stock replies with mode 0, rather than C6's boolean success byte.
+        // Other modes and the v3 command namespace are not aliases for capture.
+        if(!s->long_format || n!=1 || p[0]!=0) break;
+        if(ca_media_capture_photo(s->media,cfg.photo_scope)<0) {
+            ca_log("UniGCS photo capture failed: %s",strerror(errno));
+            return;
+        }
+        reply(s,0x9f,p,1); return;
     case 0xb4:
         if(n) break;
         out[0]=APCAM_HAVE_THERMAL ? (cfg.photo_scope==CA_PHOTO_SCOPE_ALL ? 0x0b : 0x08) : 1;
