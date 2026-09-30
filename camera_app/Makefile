@@ -973,6 +973,6 @@ $(Z1_HOST_TARGET): build/host/tracking_dlib.o
 image-tracking-test: build/tests/test_image_tracker
 	./build/tests/test_image_tracker
 test: image-tracking-test
-build/tests/test_image_tracker: tests/test_image_tracker.cpp include/camera_app/image_tracker.h include/camera_app/tracking_pose.h build/host/tracking_dlib.o
+build/tests/test_image_tracker: tests/test_image_tracker.cpp include/camera_app/image_tracker.h include/camera_app/tracking_pose.h include/camera_app/tracking_rate.h build/host/tracking_dlib.o
 	mkdir -p $(@D)
 	$(HOST_CXX) -O2 -std=gnu++17 -Wall -Wextra -Werror -Iinclude -o $@ $< build/host/tracking_dlib.o -lpthread -lm
