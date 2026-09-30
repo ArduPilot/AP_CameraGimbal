@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from image_controls import ImageControls, PALETTES
+from target_properties import TARGETS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,7 +165,8 @@ def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, ro
         write(link, definition, 'OSD_THERMAL_FOV', 1)
         box = viewer.frame()
         # Independent pinhole projection using native thermal 5:4 aspect.
-        half_w = w * .5 * math.tan(math.radians(24.2)/2) / math.tan(math.radians(88)/2)
+        wide_fov = TARGETS[backend]['lens1_fov_h']
+        half_w = w * .5 * math.tan(math.radians(24.2)/2) / math.tan(math.radians(wide_fov)/2)
         half_h = half_w * 512 / 640
         x0, x1 = round(cx-half_w), round(cx+half_w)
         y0, y1 = round(cy-half_h), round(cy+half_h)
@@ -207,7 +209,7 @@ def overlay_checks(link, definition, viewer, rtsp, backend, baseline, config, ro
         rh, rw = frame.shape[:2]
         rs = max(1, rh // 720)
         assert frame[rh//2 + 12*rs, rw//2 + 12*rs].min() > 180
-        rx = round(rw/2-rw*.5*math.tan(math.radians(24.2)/2)/math.tan(math.radians(88)/2))
+        rx = round(rw/2-rw*.5*math.tan(math.radians(24.2)/2)/math.tan(math.radians(wide_fov)/2))
         ry = round(rh/2-(rw/2-rx)*512/640)
         assert frame[ry, rx+5*rs].min() > 180
         # Leave recording fixtures for the existing later checks unambiguous.
@@ -381,16 +383,21 @@ def integration(backend):
                     thermal.close()
                     thermal = None
                     write(link, definition, 'VIDEO_MAIN_CODEC', 1)
-                    write(link, definition, 'VIDEO_SUB_CODEC', 1)
+                    # Explicit mixed codecs: thermal now honours its configured
+                    # codec, so requesting H.265 for both cannot test this swap.
+                    write(link, definition, 'VIDEO_SUB_CODEC', 0)
                     for source in (0, 1, 0):
                         write(link, definition, 'CAM_SOURCE', source)
                         time.sleep(.4)
-                        for index, codec in enumerate(('h264', 'hevc') if source else ('hevc', 'h264')):
+                        # Thermal and secondary RGB both use the sub-stream
+                        # codec; only the primary RGB encoder uses main_codec.
+                        for index, codec in enumerate(('h264', 'h264') if source else ('hevc', 'h264')):
                             with av.open(f'rtsp://127.0.0.1:{rtsp}/video{index+1}',
                                          options={'rtsp_transport': 'tcp'}, timeout=10) as stream:
-                                assert stream.streams.video[0].codec_context.name == codec
+                                actual_codec = stream.streams.video[0].codec_context.name
+                                assert actual_codec == codec, (source, index, actual_codec, codec)
                                 assert next(stream.decode(video=0)).width == 1280
-                    print('PASS H.265 RGB/H.264 thermal swaps advertise and deliver matching codecs', flush=True)
+                    print('PASS mixed-codec RGB/thermal swaps advertise and deliver matching codecs', flush=True)
                 print(f'PASS {backend} simulated video controls', flush=True)
                 assert camera.poll() is None
             except Exception:

@@ -34,7 +34,10 @@
 #define APCAM_WEB_PORT 80
 #define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS1_NAME "Wide RGB"
-#define APCAM_LENS1_FOV_H 88.0f
+/* Wide lens: 84-degree diagonal on the full 4:3 sensor. Retain its width
+ * when cropping to 16:9 video: H=2*atan(tan(84/2)*4/5)=71.532165 degrees,
+ * V=2*atan(tan(H/2)*9/16)=44.113793 degrees. See include/apcam/README.md. */
+#define APCAM_LENS1_FOV_H 71.532165f
 #define APCAM_LENS1_FOV_H_TELE 0.0f
 #define APCAM_LENS1_FOV_MODEL APCAM_FOV_FOCAL_LENGTH
 #define APCAM_LENS1_OPTICAL_ZOOM_MAX 1

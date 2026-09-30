@@ -18,6 +18,12 @@ static inline float ca_video_hfov(float native_hfov_deg, float magnification)
     return APC_Lens::zoom_FOV(native_hfov_deg, magnification);
 }
 
+/* Active image geometry, before encoder stretching or padding. */
+static inline float ca_video_vfov(float hfov_deg, unsigned width, unsigned height)
+{
+    return width && height ? APC_Lens::zoom_FOV(hfov_deg, float(width) / height) : 0.0f;
+}
+
 static inline float ca_lens1_hfov(float zoom)
 {
     return APC_Camera::get_singleton().lens(0)->get_FOV(zoom);

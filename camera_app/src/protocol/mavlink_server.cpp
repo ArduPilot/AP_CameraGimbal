@@ -20,6 +20,7 @@
 #include "camera_app/targeting.h"
 #include "camera_app/telemetry_time.h"
 #include "camera_app/thermal_stream.h"
+#include "camera_app/video_fov.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -832,6 +833,46 @@ static void stream_properties(const struct ca_mavlink_server *server,
     }
 }
 
+// CAMERA_FOV_STATUS describes the current main camera source. Unlike the
+// stream messages it carries both angles as floats, without degree rounding.
+static void send_camera_fov(struct ca_mavlink_server *server, const struct route *route)
+{
+    mavlink_camera_fov_status_t status = {};
+    status.time_boot_ms = boot_ms(server);
+    status.lat_camera = status.lon_camera = status.alt_camera = INT32_MAX;
+    status.lat_image = status.lon_image = status.alt_image = INT32_MAX;
+    for (float &v : status.q) v = NAN;
+    ca_metadata metadata;
+    ca_metadata_snapshot(&metadata);
+    if (metadata.have_position) {
+        status.lat_camera = metadata.lat_e7;
+        status.lon_camera = metadata.lon_e7;
+        const double alt_mm = double(metadata.alt_amsl_m) * 1000;
+        if (isfinite(alt_mm) && alt_mm > INT32_MIN && alt_mm < INT32_MAX)
+            status.alt_camera = (int32_t)llround(alt_mm);
+    }
+    if (metadata.have_gimbal_attitude && metadata.have_vehicle_attitude) {
+        euler_to_quaternion(metadata.gimbal_roll_rad, metadata.gimbal_pitch_rad,
+                            metadata.vehicle_yaw_rad + metadata.gimbal_yaw_rad, status.q);
+    }
+    const bool thermal = ca_media_thermal_main(server->media);
+    unsigned width, height;
+    ca_video_resolution_size(server->settings.main_resolution, &width, &height);
+#if APCAM_HAVE_THERMAL
+    // Use the native thermal sensor aspect, before encoder stretching/padding.
+    if (thermal) { width = APCAM_LENS3_WIDTH; height = APCAM_LENS3_HEIGHT; }
+#endif
+    status.hfov = ca_media_hfov(server->media, thermal);
+    status.vfov = ca_video_vfov(status.hfov, width, height);
+    if (!(status.hfov > 0 && status.hfov < 180))
+        status.hfov = status.vfov = NAN;
+    else if (!(status.vfov > 0)) status.vfov = NAN;
+    mavlink_message_t message;
+    mavlink_msg_camera_fov_status_encode_status(server->system_id, server->camera_component_id,
+                                               &server->encode_status, &message, &status);
+    (void)send_message(server, route, &message);
+}
+
 static unsigned stream_count()
 {
     return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
@@ -1462,6 +1503,7 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         unsigned instance = isfinite(params[1]) ? (unsigned)params[1] : 0U;
         if (requested == MAVLINK_MSG_ID_AUTOPILOT_VERSION) send_protocol_capabilities(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_INFORMATION) send_camera_information(server, route);
+        else if (requested == MAVLINK_MSG_ID_CAMERA_FOV_STATUS) send_camera_fov(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_SETTINGS) send_camera_settings(server, route);
         else if (requested == MAVLINK_MSG_ID_STORAGE_INFORMATION) send_storage_information(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS) send_capture_status(server, route);

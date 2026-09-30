@@ -59,6 +59,14 @@ int main(void)
     near(ca_lens1_hfov(1), 54.7f);
     assert(APCAM_MAIN_RESOLUTIONS == APCAM_RES_MASK_1080P);
     assert(APCAM_RECORDING_RESOLUTIONS & APCAM_RES_MASK_2160P);
+#elif APCAM_TARGET == APCAM_TARGET_MT11
+    near(ca_lens1_hfov(1), 71.532165f);
+    near(ca_video_vfov(ca_lens1_hfov(1), 3840, 2160), 44.113793f);
+    near(ca_video_vfov(ca_lens1_hfov(2), 1920, 1080),
+         ca_video_hfov(44.113793f, 2));
+    assert(ca_video_vfov(NAN, 1920, 1080) == 0);
+    assert(ca_video_vfov(71.532165f, 0, 1080) == 0);
+    assert(ca_video_vfov(71.532165f, 1920, 0) == 0);
 #else
     near(ca_lens1_hfov(1), 88);
     assert(ca_lens1_hfov(2) > 51 && ca_lens1_hfov(2) < 52);

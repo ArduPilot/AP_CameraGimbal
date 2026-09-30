@@ -11,6 +11,7 @@ import time
 from unittest import mock
 
 import terrain_video as video
+from target_properties import TARGETS
 
 
 def record():
@@ -23,6 +24,10 @@ def record():
 
 def geometry():
     np = video.np
+    # The renderer must use the 16:9 crop of the MT11's 84-degree 4:3 sensor.
+    camera = mock.Mock()
+    video.set_camera_fov(camera, TARGETS['mt11']['lens1_fov_h'], 16 / 9)
+    assert abs(camera.SetViewAngle.call_args.args[0] - 44.113793) < 1e-5
     forward, up = video.camera_vectors(0, 0, 0)
     np.testing.assert_allclose(forward, (0, 1, 0))  # north
     np.testing.assert_allclose(up, (0, 0, 1))
