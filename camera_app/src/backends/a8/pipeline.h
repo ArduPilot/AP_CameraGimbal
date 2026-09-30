@@ -6,6 +6,9 @@
 #include <stdint.h>
 
 #include "camera_app/config.h"
+#include "camera_app/image_tracker.h"
+bool ca_a8_tracking_available();
+bool ca_a8_tracking_frame(ca_tracking_frame &frame);
 #include "apcam/target.h"
 
 /* SIYI A8 mini: SigmaStar SSC8836 (Mercury6) with a Sony IMX678.

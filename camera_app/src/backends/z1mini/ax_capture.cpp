@@ -305,6 +305,25 @@ struct encoder_worker {
     FILE *out;
     bool framed, failed;
 };
+
+static void publish_tracking_luma(AX_VIDEO_FRAME_S *v,FILE *out)
+{
+    if(v->enCompressMode!=AX_COMPRESS_MODE_NONE || v->u32PicStride[0]<v->u32Width ||
+       v->u32LeftPadding || !v->u32Width || !v->u32Height) return;
+    auto map=reinterpret_cast<void*(*)(AX_U64,AX_U32)>(sym("AX_SYS_Mmap"));
+    auto unmap=reinterpret_cast<int(*)(void*,AX_U32)>(sym("AX_SYS_Munmap"));
+    const unsigned size=v->u32PicStride[0]*v->u32Height;
+    auto *pixels=static_cast<uint8_t *>(map(v->u64PhyAddr[0],size));
+    if(!pixels || pixels==reinterpret_cast<void *>(-1)) return;
+    uint8_t luma[320*180];
+    for(unsigned y=0;y<180;y++) for(unsigned x=0;x<320;x++)
+        luma[y*320+x]=pixels[(uint64_t(y)*v->u32Height/180)*v->u32PicStride[0]+uint64_t(x)*v->u32Width/320];
+    (void)unmap(pixels,size);
+    const ca_z1_native_header header={CA_Z1_NATIVE_LUMA_MAGIC,sizeof(luma),mono_ms(),0,0};
+    pthread_mutex_lock(&output_lock);
+    if(fwrite(&header,1,sizeof(header),out)!=sizeof(header) || fwrite(luma,1,sizeof(luma),out)!=sizeof(luma)) stopped=true;
+    pthread_mutex_unlock(&output_lock);
+}
 static void *encode(void *opaque) {
     struct encoder_worker *worker = (encoder_worker*)(opaque);
     unsigned c = worker->channel;
@@ -337,6 +356,7 @@ static void *encode(void *opaque) {
             goto failed;
         }
         if (framed) {
+            if(c==0 && worker->frames%2==0) publish_tracking_luma(v,worker->out);
             if (c==0) read_overlay_request();
             overlay_frame(c,v,worker->out,&cross);
         }

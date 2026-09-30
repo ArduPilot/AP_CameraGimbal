@@ -7,8 +7,15 @@
 
 #include "camera_app/config.h"
 #include "camera_app/thermal.h"
+#include "camera_app/image_tracker.h"
 
 struct ca_media;
+struct ca_backend;
+bool ca_media_tracking_available(struct ca_media *media);
+int ca_media_tracking_start(struct ca_media *media, ca_tracking_rect rect, ca_tracking_owner owner);
+void ca_media_tracking_stop(struct ca_media *media, ca_tracking_owner owner=CA_TRACK_OWNER_NONE);
+ca_tracking_status ca_media_tracking_status(struct ca_media *media);
+void ca_media_tracking_update(struct ca_media *media, struct ca_backend *backend, bool manual);
 
 enum ca_media_lens {
     CA_MEDIA_LENS_WIDE = 0,
@@ -48,6 +55,8 @@ int ca_media_set_lens(struct ca_media *media, enum ca_media_lens lens);
 enum ca_media_lens ca_media_lens(const struct ca_media *media);
 int ca_media_set_thermal_main(struct ca_media *media, bool thermal_main);
 bool ca_media_thermal_main(const struct ca_media *media);
+int ca_media_set_side_by_side(struct ca_media *media, bool enabled);
+bool ca_media_side_by_side(const struct ca_media *media);
 int ca_media_autofocus(struct ca_media *media, uint16_t x, uint16_t y);
 int ca_media_manual_focus(struct ca_media *media, int direction);
 int ca_media_set_focus_percent(struct ca_media *media, float percent);

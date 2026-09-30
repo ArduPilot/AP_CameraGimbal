@@ -133,6 +133,8 @@ class Gimbal:
         self.zoom = 1.0
         self.zoom_rate = 0.0
         self.sequence = 1
+        self.measure = False
+        self.measure_source = 0
         self.last_update = time.monotonic()
         self.started = self.last_update
 
@@ -335,6 +337,12 @@ class Gimbal:
                 reply = bytes((self.mounting_direction,))
             elif command == 0xC2 and not payload:
                 reply = b"\x00"  # observed stock startup response; meaning unconfirmed
+            elif self.backend == 'mt11' and command == 0xBA and not payload:
+                reply = bytes((self.measure, 2))
+            elif self.backend == 'mt11' and command == 0xBB and payload in (b'\x00', b'\x01'):
+                self.measure = bool(payload[0])
+                self.measure_source = source
+                reply = payload
             elif command == 0x9A and len(payload) == 2:
                 if all(-100 <= value <= 100 for value in struct.unpack('<bb', payload)):
                     self.handle_siyi(siyi_frame(0, _sequence, 0x07, payload))
@@ -452,6 +460,7 @@ def main():
           f"backend={args.backend} orientation={args.orientation}", flush=True)
     peer = None
     next_stream = time.monotonic() + 0.1
+    next_measure = time.monotonic()
     try:
         while not stop:
             readable, _, _ = select.select((sock,), (), (), 0.05)
@@ -472,6 +481,13 @@ def main():
                     if reply is not None:
                         sock.sendto(reply, peer)
             now = time.monotonic()
+            if peer is not None and gimbal.measure and now >= next_measure:
+                next_measure = now + 1
+                distance_dm = round(125 + 20 * math.sin((now - gimbal.started) * .7))
+                for command, payload in ((0x89, struct.pack('<I', distance_dm)), (0xB0, bytes(8))):
+                    gimbal.sequence = (gimbal.sequence + 1) & 0xffff
+                    sock.sendto(mt11_private_frame(0x08, gimbal.sequence, command, payload,
+                        destination=gimbal.measure_source, link=0x11), peer)
             if peer is not None and args.backend != "mt11" and now >= next_stream:
                 sock.sendto(gimbal.stream_attitude(), peer)
                 next_stream = now + 0.1

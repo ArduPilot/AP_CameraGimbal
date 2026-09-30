@@ -13,7 +13,13 @@
 #include <unistd.h>
 
 static atomic_bool stopped;
-static unsigned count, exposure_count, stop_after=2;
+static unsigned count, exposure_count, luma_count, stop_after=2;
+static void tracking(void *, const ca_tracking_frame &f)
+{
+    assert(f.width==320 && f.height==180 && f.timestamp_ms==1234);
+    for(unsigned i=0;i<f.width*f.height;i++) assert(f.pixels[i]==uint8_t(i));
+    luma_count++;
+}
 static int read_exact_fd(int fd, void *data, size_t size)
 {
     size_t offset=0;
@@ -105,6 +111,14 @@ int main(int argc, char **argv)
             return 0;
         }
         struct ca_z1_native_header h = {CA_Z1_NATIVE_MAGIC, 5, 1234567, 1, 0};
+        if(valid || !strcmp(mode,"luma-size")) {
+            uint8_t pixels[320*180];
+            for(unsigned i=0;i<sizeof(pixels);i++) pixels[i]=uint8_t(i);
+            ca_z1_native_header luma={CA_Z1_NATIVE_LUMA_MAGIC,sizeof(pixels),1234,0,0};
+            if(!strcmp(mode,"luma-size")) luma.size++;
+            if(write(3,&luma,sizeof(luma))!=sizeof(luma)) return 1;
+            if(write(3,pixels,sizeof(pixels))!=sizeof(pixels)) return 0;
+        }
         if (valid || !strcmp(mode,"ae-size")) {
             struct ca_exposure s=ca_exposure_empty(0,1234567);
             s.shutter_us=10000; s.analog_gain=2; s.valid=CA_AE_SHUTTER|CA_AE_AGAIN;
@@ -129,19 +143,20 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry", "legacy", "inverted"};
+    const char *modes[] = {"valid", "oversized", "truncated", "stream", "ae-size", "overlay", "retry", "legacy", "inverted", "luma-size"};
     for (unsigned i = 0; i < sizeof(modes)/sizeof(modes[0]); i++) {
         setenv("Z1_NATIVE_TEST_MODE", modes[i], 1);
         atomic_store(&stopped, false);
-        count = exposure_count = 0;
+        count = exposure_count = luma_count = 0;
         stop_after = i==6 ? 195 : 2;
         struct ca_z1_overlay_control overlay={.desired=1,.applied=-EINPROGRESS};
         bool valid=i==0 || i==5 || i==7 || i==8;
         bool overlay_test=i>=5 && i<=7;
-        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL, i==8);
+        int result = ca_z1_native_receive(argv[0], &stopped, frame, exposure, NULL, overlay_test ? &overlay : NULL, i==8, tracking);
         if (overlay_test) assert(atomic_load(&overlay.applied)==(i==7 ? -ENOTSUP : 1));
         assert(result == (valid || i==6 ? 0 : -1));
         assert(exposure_count == (valid ? 1U : 0U));
+        assert(luma_count == (valid ? 1U : 0U));
         assert(count == (valid ? 2U : i==6 ? 195U : 0U));
         assert(waitpid(-1, NULL, WNOHANG) == -1); /* no leaked helper children */
     }

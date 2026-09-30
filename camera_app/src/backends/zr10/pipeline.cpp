@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "pipeline.h"
+#include "../siyi/tracking_frame.h"
 #include "mi_api.h"
 #include "camera_app/log.h"
 #include <errno.h>
@@ -21,6 +22,10 @@
 #define JPEG_CHN 3U
 #define CHANNELS 4U
 static struct mi_api mi;
+static bool tracking_port;
+static CA_MI_TrackingFrames tracking_frames;
+bool ca_zr10_tracking_available() { return tracking_frames.available(); }
+bool ca_zr10_tracking_frame(ca_tracking_frame &frame) { return tracking_frames.read(frame); }
 static int (*get_af_stats)(unsigned, void *);
 static pthread_mutex_t focus_lock=PTHREAD_MUTEX_INITIALIZER;
 static uint8_t focus_payload[27];
@@ -116,6 +121,8 @@ static void encoder_close(unsigned ch)
 
 void ca_zr10_pipeline_close(void)
 {
+    tracking_frames={};
+    if(tracking_port) { (void)mi.MI_VPE_DisablePort(0,3); tracking_port=false; }
     for(unsigned i=CHANNELS;i>0;i--)encoder_close(i-1);
     if(front_bound) { CLEAN(mi.MI_SYS_UnBindChnPort(&vif,&vpe));front_bound=false; }
     if(vpe_up) { CLEAN(mi.MI_VPE_StopChannel(0));vpe_up=false; }
@@ -237,6 +244,13 @@ int ca_zr10_pipeline_open(const struct ca_zr10_pipeline_config *config)
     if(mi.MI_SYS_Init()) { errno=EIO;goto fail; }sys_up=true;
     if(sensor_start())goto fail;
     for(unsigned i=0;i<CA_ZR10_VENC_COUNT;i++)if(encoder_open(i,&cfg.streams[i],false))goto fail;
+    {
+        i6_vpe_port port={.output={320,180},.mirror=0,.flip=0,.pixFmt=I6_PIXFMT_YUV420SP};
+        if(mi.MI_VPE_SetPortMode(0,3,&port)==0 && mi.MI_VPE_EnablePort(0,3)==0) {
+            tracking_port=true;
+            if(!tracking_frames.open(I6_SYS_MOD_VPE,0,false)) ca_log("ZR10 tracking frame depth unavailable");
+        } else ca_log("ZR10 tracking VPE output unavailable");
+    }
     return 0;
 fail:
     ca_zr10_pipeline_close();return -1;
@@ -336,6 +350,10 @@ int ca_zr10_set_inverted(bool value)
             }
             errno=EIO;return -1;
         }
+    }
+    if(tracking_port) {
+        i6_vpe_port port={.output={320,180},.mirror=value,.flip=value,.pixFmt=I6_PIXFMT_YUV420SP};
+        if(mi.MI_VPE_SetPortMode(0,3,&port)) { tracking_frames={}; ca_log("ZR10 tracking orientation unavailable"); }
     }
     inverted=value;return 0;
 }

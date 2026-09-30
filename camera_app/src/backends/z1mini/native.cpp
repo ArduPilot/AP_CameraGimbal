@@ -32,7 +32,7 @@ static int receive_exact(int fd, void *data, size_t size, const atomic_bool *sto
 
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                          ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
-                         struct ca_z1_overlay_control *overlay, bool inverted)
+                         struct ca_z1_overlay_control *overlay, bool inverted, ca_z1_native_tracking_fn tracking)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) return -1;
@@ -141,6 +141,14 @@ int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                 receive_exact(sockets[0],&sample,sizeof(sample),stop)) break;
             if (sample.lens || sample.source) break;
             if (exposure) exposure(opaque,&sample);
+            continue;
+        }
+        if(header.magic==CA_Z1_NATIVE_LUMA_MAGIC) {
+            ca_tracking_frame luma;
+            if(header.size!=320*180 || header.stream || header.key ||
+               receive_exact(sockets[0],luma.pixels,header.size,stop)) break;
+            luma.width=320; luma.height=180; luma.timestamp_ms=header.pts;
+            if(tracking) tracking(opaque,luma);
             continue;
         }
         if (header.magic != CA_Z1_NATIVE_MAGIC || header.stream > 1 ||

@@ -51,6 +51,7 @@ struct APC_Media_SITL_State {
     APC_ATOMIC(float) visible_hfov_deg;
     APC_ATOMIC(enum ca_media_lens) lens;
     APC_ATOMIC(bool) thermal_main;
+    APC_ATOMIC(bool) combined;
     unsigned thermal_captures;
     APC_ATOMIC(uint8_t) thermal_gain;
     APC_ATOMIC(uint8_t) thermal_palette;
@@ -77,6 +78,8 @@ struct APC_Media_SITL_State {
     pthread_mutex_t image_lock;
     struct ca_config image_settings;
     struct ca_exposure exposure;
+    ca_tracking_frame tracking_frame;
+    ca_tracking_status tracking_status;
     uint64_t thermal_sampled_us, thermal_sequence;
     pthread_cond_t capture_changed;
     unsigned capture_mask;
@@ -116,6 +119,32 @@ public:
         return std::unique_ptr<APC_Media_Backend>(driver);
     }
     bool ready() const override;
+    bool tracking_available() const override {
+#ifdef CAMERA_APP_SITL
+        return _state && _state->terrain;
+#else
+        return false;
+#endif
+    }
+    bool tracking_frame(ca_tracking_frame &frame) override {
+#ifdef CAMERA_APP_SITL
+        pthread_mutex_lock(&_state->image_lock);
+        frame=_state->tracking_frame;
+        pthread_mutex_unlock(&_state->image_lock);
+        return frame.timestamp_ms!=0;
+#else
+        (void)frame; return false;
+#endif
+    }
+    void tracking_overlay(const ca_tracking_status *status) override {
+#ifdef CAMERA_APP_SITL
+        pthread_mutex_lock(&_state->image_lock);
+        _state->tracking_status=status?*status:ca_tracking_status{};
+        pthread_mutex_unlock(&_state->image_lock);
+#else
+        (void)status;
+#endif
+    }
     int set_recording(bool active) override;
     int configure_raw_thermal(const ca_config *settings) override {
 #ifdef CAMERA_APP_SITL
@@ -137,6 +166,12 @@ public:
     enum ca_media_lens lens() const override;
     int set_thermal_main(bool thermal_main) override;
     bool thermal_main() const override;
+    bool side_by_side() const override { return _state->combined; }
+    int set_side_by_side(bool enabled) override {
+        if(enabled && !_state->has_thermal) { errno=ENOTSUP; return -1; }
+        if(enabled && set_thermal_main(false)<0) return -1;
+        _state->combined=enabled; return 0;
+    }
     int autofocus(uint16_t x, uint16_t y) override;
     int manual_focus(int direction) override;
     int set_focus_percent(float percent) override;
@@ -283,6 +318,8 @@ static void *render_terrain_frames(void *opaque)
         struct ca_sitl_image image = {};
         pthread_mutex_lock(&media->image_lock);
         image.settings = media->image_settings;
+        image.tracking = media->tracking_status;
+        image.side_by_side = media->combined;
         image.capture_mask = media->capture_mask;
         image.capture_generation = media->capture_generation;
         memcpy(image.capture_fov, media->capture_fov, sizeof(image.capture_fov));
@@ -299,17 +336,19 @@ static void *render_terrain_frames(void *opaque)
         uint8_t *photos[3] = {};
         size_t photo_length[3] = {};
         struct ca_exposure exposure;
+        ca_tracking_frame tracking_frame;
         unsigned exposure_lens=media->lens;
         int result = ca_sitl_terrain_frame(media->terrain, frame->pts,
                 (uint64_t)due.tv_sec * 1000U + (uint64_t)due.tv_nsec / 1000000U,
                 frame->fov, frame->thermal_main, media->has_thermal,
                 atomic_load(&media->sitl_recording),
-                &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure, frame->raw);
+                &image, frame->data, frame->length, frame->key, photos, photo_length, &exposure, frame->raw, &tracking_frame);
         if (result==0) {
             exposure.time_us=ca_binlog_time_us();
             exposure.lens=exposure_lens;
             pthread_mutex_lock(&media->image_lock);
             media->exposure=exposure;
+            media->tracking_frame=tracking_frame;
             media->thermal_sampled_us=exposure.time_us;
             media->thermal_sequence++;
             pthread_mutex_unlock(&media->image_lock);
@@ -549,7 +588,7 @@ static int open_sitl_video(struct APC_Media_SITL_State *media,
         }
         const unsigned widths[CA_SITL_STREAMS] = {width1, width2, width3, width4, width2}, heights[CA_SITL_STREAMS] = {height1, height2, height3, height4, height2};
         const enum ca_video_codec codecs[CA_SITL_STREAMS] = {config->settings.main_codec,
-            media->has_thermal ? CA_VIDEO_H264 : config->settings.sub_codec,
+            config->settings.sub_codec,
             config->settings.sub_codec, CA_VIDEO_H264, CA_VIDEO_H264};
         for (unsigned i = 0; i < CA_SITL_STREAMS; i++) media->videos[i].codec = codecs[i];
         const char *renderer = terrain ? terrain : getenv("CAMERA_APP_SITL_RENDERER");

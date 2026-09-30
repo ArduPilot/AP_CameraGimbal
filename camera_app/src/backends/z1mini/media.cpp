@@ -40,6 +40,7 @@ struct APC_Media_Z1Mini_State {
     char path[PATH_MAX];
     uint64_t pts_offset, last_pts[2];
     struct ca_exposure exposure;
+    ca_tracking_frame tracking;
 
     APC_Media_Z1Mini *owner = nullptr;
 };
@@ -62,6 +63,16 @@ public:
         return std::unique_ptr<APC_Media_Backend>(driver);
     }
     bool ready() const override;
+    bool tracking_available() const override {
+        if(!_state) return false;
+        pthread_mutex_lock(&_state->lock);
+        const bool ok=_state->tracking.timestamp_ms!=0;
+        pthread_mutex_unlock(&_state->lock); return ok;
+    }
+    bool tracking_frame(ca_tracking_frame &frame) override {
+        pthread_mutex_lock(&_state->lock); frame=_state->tracking;
+        pthread_mutex_unlock(&_state->lock); return frame.timestamp_ms!=0;
+    }
     int set_recording(bool active) override;
     bool recording() const override;
     const char * recording_path() const override;
@@ -146,7 +157,11 @@ static void *receiver(void *opaque)
     if (native_path && *native_path) {
         ca_log("Z1 native AX capture starting; exclusive media ownership required");
         int result = ca_z1_native_receive(native_path, &m->stop, consume_native, consume_exposure, m, &m->overlay,
-            m->config.settings.orientation == CA_MOUNT_INVERTED);
+            m->config.settings.orientation == CA_MOUNT_INVERTED,
+            [](void *opaque,const ca_tracking_frame &frame) {
+                auto *m=static_cast<APC_Media_Z1Mini_State *>(opaque);
+                pthread_mutex_lock(&m->lock); m->tracking=frame; pthread_mutex_unlock(&m->lock);
+            });
         ca_log("Z1 native AX capture stopped result=%d", result);
         atomic_store(&m->ready, false);
         pthread_mutex_lock(&m->lock);

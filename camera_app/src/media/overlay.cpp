@@ -47,6 +47,21 @@ void ca_overlay_free(struct ca_overlay_bitmap out[CA_OVERLAY_REGIONS])
     for (unsigned i=0; i<CA_OVERLAY_REGIONS; i++) { free(out[i].pixels); out[i].pixels=NULL; }
 }
 
+void ca_overlay_tracking(struct ca_overlay_geometry *g, unsigned width, unsigned height,
+                         const float rect[4])
+{
+    if(g->count>CA_OVERLAY_LINES-4) return;
+    for(unsigned i=0;i<4;i++) if(!isfinite(rect[i])) return;
+    const int x0=lroundf(fmaxf(0,fminf(1,rect[0]))*(width-1)),
+        y0=lroundf(fmaxf(0,fminf(1,rect[1]))*(height-1)),
+        x1=lroundf(fmaxf(0,fminf(1,rect[2]))*(width-1)),
+        y1=lroundf(fmaxf(0,fminf(1,rect[3]))*(height-1));
+    g->lines[g->count++]={x0,y0,x1,y0,5,false};
+    g->lines[g->count++]={x0,y1,x1,y1,6,false};
+    g->lines[g->count++]={x0,y0,x0,y1,7,false};
+    g->lines[g->count++]={x1,y0,x1,y1,8,false};
+}
+
 static int minimum(int a,int b) { return a<b?a:b; }
 static int maximum(int a,int b) { return a>b?a:b; }
 static void dot(struct ca_overlay_bitmap *b, int x, int y, int radius, uint16_t color)
@@ -91,7 +106,7 @@ int ca_overlay_bitmaps(struct ca_overlay_bitmap out[CA_OVERLAY_REGIONS],
                     if (l->dashed && (k/dash)%2) continue;
                     int x=l->x0+(n ? (l->x1-l->x0)*k/n : 0);
                     int y=l->y0+(n ? (l->y1-l->y0)*k/n : 0);
-                    dot(b,x,y,pass ? core : radius,pass ? 0xffff : 0x8000);
+                    dot(b,x,y,pass ? core : radius,pass ? (region>=5?0x821f:0xffff) : 0x8000);
                 }
             }
         }

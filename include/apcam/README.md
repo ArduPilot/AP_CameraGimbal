@@ -119,8 +119,8 @@ MAVLink `VIDEO_STREAM_INFORMATION` and `VIDEO_STREAM_STATUS` report the current
 HFOV rounded to whole degrees (72 at MT11 wide 1x). Requestable
 `CAMERA_FOV_STATUS` (message 271, via `MAV_CMD_REQUEST_MESSAGE`) reports both HFOV
 and VFOV as floats for the current main source, including optical/digital zoom.
-Thermal VFOV uses the native sensor aspect before encoder stretching/padding.
-Unknown camera or image
+Thermal VFOV uses the native sensor aspect before encoder stretching/padding;
+composite side-by-side views report unknown FOV. Unknown camera or image
 positions use the protocol sentinel rather than a fabricated location. Encoded
 video/recording telemetry retains the per-frame floating-point `hfov_deg` field.
 The supported SIYI/UniGCS control messages have no identified FOV report field;
