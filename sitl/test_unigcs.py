@@ -240,6 +240,9 @@ def main():
         root = Path(directory)
         ready = root/'ready.json'
         config = root/'camera.ini'
+        photo = root/'photo.jpg'
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=size=64x48',
+                        '-frames:v','1','-threads','1',str(photo)], check=True)
         config.write_text('[recording]\nautorecord=false\nresolution=1280x720\n'
                           '[logging]\ndisarmed=false\n'
                           f'[stream.main]\ncodec={args.video_codec or "h264"}\n')
@@ -251,6 +254,7 @@ def main():
                    CAMERA_APP_RTSP_PORT=str(reserve_port(socket.SOCK_STREAM, span=3)), CAMERA_APP_UNIGCS_PORT=str(ports['private']),
                    CAMERA_APP_DISCOVERY_PORT=str(ports['discovery']), CAMERA_APP_CONFIG=str(config),
                    CAMERA_APP_READY_PATH=str(ready), CAMERA_APP_RECORD_ROOT=str(root/'record'),
+                   CAMERA_APP_SITL_PHOTO=str(photo),
                    CAMERA_APP_CAPTURE_ROOT=str(root/'capture'), CAMERA_APP_LOG_ROOT=str(root/'logs'),
                    CAMERA_APP_RECORD_STATE=str(root/'record.state'), CAMERA_APP_MAVLINK_TCP_PORT='0',
                    CAMERA_APP_MAVLINK_UDP_PORT='0')
@@ -361,6 +365,12 @@ def main():
                 assert c.request(0x83,b'\x01')[0:2] == bytes((1, 2 if args.video_codec == 'h265' else 1))
                 assert c.request(0xd5,b'\x03') == b'\x03\x00\x00\x00'
                 assert c.request(0xc6,b'\x01') == b'\x01'
+                photos = set((root/'capture').glob('*.jpg'))
+                assert photos, 'C6 photo ACK did not produce an image'
+                # 9F/00 is a legacy command, not a v3 capture alias.
+                c.sock.sendall(command(0x9f,b'\x00'))
+                c.request(0x80)
+                assert set((root/'capture').glob('*.jpg')) == photos
                 assert c.request(0xe1,b'\x0a')[:4] == b'\x0a\x32\x32\x32'
                 if args.backend != 'zr10':
                     assert c.request(0xe3,b'\x00\x0a\x3c') == b'\x00\x0a\x01'
@@ -460,11 +470,57 @@ def main():
                 old.sock.sendall(long_command(0x94,control=0)+long_command(0x80))
                 assert len(old.reply(0x80))==5
                 assert 0x94 not in old.received, 'unexpected no-ACK response'
+                # Android UniGCS 3.2.1 uses 9F/00 on the A8, unlike MT11 C6/01.
+                photos = set((root/'capture').glob('*.jpg'))
+                assert old.request(0x9f,b'\x00') == b'\x00'
+                captured_photos = set((root/'capture').glob('*.jpg')) - photos
+                assert captured_photos, 'legacy photo ACK did not capture an image'
+                assert all(p.read_bytes().startswith(b'\xff\xd8') for p in captured_photos)
+                photos |= captured_photos
+                old.received.clear()
+                for payload in (b'',b'\x01',b'\x00\x00'):
+                    old.sock.sendall(long_command(0x9f,payload))
+                old.request(0x80)
+                assert 0x9f not in old.received, 'invalid photo request acknowledged'
+                assert set((root/'capture').glob('*.jpg')) == photos
+                old.received.clear()
+                old.sock.sendall(long_command(0x9f,b'\x00',control=0))
+                old.request(0x80)
+                assert 0x9f not in old.received, 'no-ACK photo request acknowledged'
+                assert set((root/'capture').glob('*.jpg')) > photos
+                # A storage failure must not be reported as a successful capture.
+                (root/'capture').rename(root/'saved-capture')
+                (root/'capture').write_text('not a directory')
+                try:
+                    old.received.clear()
+                    old.sock.sendall(long_command(0x9f,b'\x00'))
+                    old.request(0x80)
+                    assert 0x9f not in old.received, 'failed photo capture acknowledged'
+                    assert old.request(0xc6,b'\x01') == b'\x00'
+                finally:
+                    (root/'capture').unlink()
+                    (root/'saved-capture').rename(root/'capture')
+                assert old.request(0x81,b'\x01') == b'\x01\x01'
+                assert old.request(0x80)[0] == 1
+                assert old.request(0x81,b'\x00') == b'\x00\x01'
+                assert old.request(0x80)[0] == 0
                 if args.backend == 'a8':
                     # An ACK alone cannot prove dispatch: the A8 MCU has a
                     # different command namespace from the network client.
                     public = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
                     public.connect(('127.0.0.1',ports['public']))
+                    before = read_pose(public)
+                    assert old.request(0x9a,b'\x0c\x00') == b'\x01'
+                    time.sleep(.3)
+                    assert read_pose(public) != before, 'Android drag did not move A8'
+                    assert old.request(0x9a,b'\x00\x00') == b'\x01'
+                    # Allow the calibrated motor response and 10 Hz feedback
+                    # to settle before checking that the stop holds position.
+                    time.sleep(1)
+                    stopped_pose = read_pose(public)
+                    time.sleep(.2)
+                    assert all(abs(a-b)<=1 for a,b in zip(read_pose(public),stopped_pose)), \
+                        'Android release did not stop A8'
                     for preset, expected_pitch in ((2,-900),(1,0),(4,-900),(3,-900),(1,0)):
                         expected_yaw = 0
                         if preset == 4:

@@ -62,6 +62,36 @@ commands share the camera handlers. Unimplemented A8
 version/configuration and image-control variations are logged, not treated
 as implemented merely because their frame checksum is valid.
 
+### Android A8 camera controls
+
+UniGCS Android 3.2.1 selects the legacy command namespace for A8. Its photo
+button sends `9F/00`, not the MT11 `C6/01` request. The APK's `E1` serializer
+selects these by camera model. Stock A8 `cardv`'s
+`camera_sdk_gimbal_camera_mode_action` at `0x6339c` replies with the camera
+mode byte (`00` for photo), not C6's boolean success byte. The legacy handler
+now captures through the shared media backend and replies `9F/00` only when
+capture succeeds. It rejects other modes, malformed payloads and v3 `9F`
+requests; those are not established photo aliases.
+
+Hardware testing with the Android tablet on 2026-09-28 found three separate
+causes for controls appearing ineffective:
+
+- Photo: `9F/00` was unhandled. With the handler installed, the Android button
+  produced a 270568-byte JPEG on the A8 card.
+- Gimbal: Android sent `9A/0C00` followed by `9A/0000`, but the camera still
+  ran build `31d096`, which predates the A8 MCU translation in `5720d8c`.
+  Installing the current application made the same gesture move measured yaw
+  from 1.7 to 6.8 degrees, settling at 6.7 after release.
+- Recording: `81/01` was already supported and returned `81/0100` (failure)
+  while the card was full. Once space was available, the Android buttons
+  returned `81/0101` for start and `81/0001` for stop and created an MP4.
+
+The legacy protocol tests replay these controls and verify image creation,
+storage failure, no-ACK and malformed requests, recording state, and actual
+simulated A8 motion/stop in both mounting orientations. A movement ACK alone
+does not establish that the MCU moved; likewise a video stream does not
+establish that the camera control session is connected.
+
 ## Running and testing
 
 Build with `make sitl`, `make a8_sitl` or `make zr10_sitl`, then launch the
