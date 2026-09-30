@@ -71,8 +71,14 @@ Samples older than 350 ms cannot drive the motors; confirmation expires after
 rates and exposure pose; `TFRA` records MT11 capture/SDK timestamps.
 
 The estimated target LOS rate predicts the next search rectangle and supplies
-feed-forward gimbal rates. A bounded integral term overcomes the measured
-motor dead zone. Commands are limited to 30 degrees/s and camera travel limits.
+feed-forward gimbal rates. MT11 tracking realizes rates below its measured
+6 degrees/s minimum with zero/minimum-rate pulses, carrying the unsent angle
+between control ticks. This replaces the dead-zone integral on MT11, which
+otherwise accumulated while the motor stood still and drove past the target
+when motion started. Other cameras retain their existing bounded integral.
+Pulse state is cleared on acquisition, cancellation, stale data, direction
+changes and travel limits. Ordinary SDK/MAVLink rate conversion is unchanged.
+Commands are limited to 30 degrees/s and camera travel limits.
 Correlation uses a 64×64 spatial filter and 16 scale levels. Low confidence
 freezes the learned appearance instead of teaching the tracker the occluder.
 Recovery requires a higher confidence than normal tracking. Coasting lasts
@@ -119,13 +125,16 @@ also verified. Thermal acquisition passes the direct SIYI/MAVLink test;
 Android's thermal-view drags did not emit AA in this session, so that specific
 client gesture remains unverified.
 
-Pre-commit checks on 30 September 2026 passed the tracker unit tests, backend
-overlay/capture tests and MT11 thermal acquisition. The MT11 zoom-scene test
-failed its five-second centering threshold on two runs: normalized center error
-fell from 0.145 to 0.071 and 0.066, against a required error below 0.04. The second
-run was isolated from the other tests. This remains an unresolved convergence
-limitation; the test has not been relaxed. Logs are in
-`/data/buildlogs/tracking-commit-20260930/`.
+The original 30 September MT11 zoom-scene runs failed the five-second centering
+threshold: normalized error fell from 0.145 to 0.071 and 0.066, against a required
+error below 0.04. The calibrated rate-pulse correction passes three consecutive
+zoom runs plus wide and thermal acquisition. The regression retains the original
+five-second threshold and additionally requires the rectangle to remain within
+0.04 of center for two seconds. Unit tests check integrated motion through the
+dead zone at both signs and variable control intervals, plus reset/stop handling.
+Logs are in `/data/buildlogs/zoom-centering-20260930/`; the analysis archive is
+`AP_CameraGimbal.port/analysis/MT11/zoom-centering-20260930/`.
+Short-pulse response still needs confirmation on physical MT11 hardware.
 
 Native builds and SITL establish API/build/UI interoperability, not native
 CPU capacity or SDK buffer correctness. Measure capture latency, CPU, memory,

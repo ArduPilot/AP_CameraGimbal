@@ -72,6 +72,10 @@
 /* MT11 bench BIN: normalized yaw speed 100 is approximately 100 deg/s. */
 #define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
 #define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f
+/* Minimum moving rates from the upright bench sweep. Tracking uses short
+ * pulses below these rates; ordinary SDK/MAVLink rate commands are unchanged. */
+#define APCAM_TRACKING_MIN_PITCH_RATE 6.0f
+#define APCAM_TRACKING_MIN_YAW_RATE 6.0f
 /* Isolated upright bench sweeps, 2026-09-15: both axes hold still at
  * +/-1..5; above the threshold motion is approximately 1 deg/s per command
  * unit. Pitch measured through +/-100, yaw has more noise and asymmetry.

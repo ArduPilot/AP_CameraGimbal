@@ -1,9 +1,11 @@
 #include "camera_app/image_tracker.h"
 #include "camera_app/tracking_pose.h"
+#include "camera_app/tracking_rate.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <chrono>
+#include <initializer_list>
 
 static ca_tracking_frame frame(unsigned n, int dx=0, bool occluded=false)
 {
@@ -20,6 +22,29 @@ static ca_tracking_frame frame(unsigned n, int dx=0, bool occluded=false)
 }
 int main()
 {
+    // The MT11 holds still below 6 deg/s. The integrated physical motion must
+    // follow a sub-threshold request without accumulating an integral bias.
+    for(float requested : {-.25f,-1.f,-2.f,-5.9f,.25f,1.f,2.f,5.9f,6.f,10.f}) {
+        ca_tracking_rate_pulses pulses;
+        float wanted=0, moved=0;
+        for(unsigned i=0;i<400;i++) {
+            const float dt=i%3 ? .05f : .08f;
+            const float output=pulses.apply(requested,6,dt);
+            assert(output==0 || std::fabs(output)>=6);
+            assert(output*requested>=0);
+            wanted+=requested*dt;
+            moved+=output*dt;
+            assert(std::fabs(moved-wanted)<.5f);
+        }
+        assert(pulses.apply(0,6,.05f)==0);
+        assert(pulses.apply(-requested,6,.05f)*requested<=0);
+        pulses.reset();
+        assert(pulses.apply(.1f,6,.05f)==0);
+        assert(pulses.apply(NAN,6,.05f)==0);
+        assert(pulses.apply(1,6,1)==0);
+        assert(pulses.apply(.1f,0,.05f)==.1f);
+    }
+
     // A delayed image must use the old measured pose, including across yaw
     // wrap. Missing/stale history must never invent a usable orientation.
     ca_tracking_pose_history history;

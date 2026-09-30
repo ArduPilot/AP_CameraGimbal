@@ -43,6 +43,7 @@ int APC_Tracking::start(ca_tracking_rect r, ca_tracking_owner owner)
     APC_LockGuard guard(_lock);
     _status={}; _status.rect=r; _status.owner=owner;
     _integral[0]=_integral[1]=0;
+    for(auto &rate : _rate_pulses) rate.reset();
     _status.state=CA_TRACK_ACQUIRING; _status.timestamp_ms=tracking_ms();
     ++_generation; _wake.signal();
     return 0;
@@ -54,6 +55,7 @@ void APC_Tracking::stop(ca_tracking_owner owner)
     if(_driving && _gimbal) (void)ca_backend_set_gimbal_rates(_gimbal,0,0);
     _driving=false;
     _integral[0]=_integral[1]=0;
+    for(auto &rate : _rate_pulses) rate.reset();
     _status={}; ++_generation; _wake.signal();
 }
 ca_tracking_status APC_Tracking::status()
@@ -142,22 +144,34 @@ void APC_Tracking::update(ca_backend *gimbal, bool manual, float hfov)
         if(_driving && !manual) (void)ca_backend_set_gimbal_rates(gimbal,0,0);
         _driving=false;
         _integral[0]=_integral[1]=0;
+        for(auto &rate : _rate_pulses) rate.reset();
     } else {
         const float limit=std::min(30.f,float(APCAM_GIMBAL_RATE_MAX))*.01745329252f;
         const float error[2]={control.pitch_error,control.yaw_error};
+        const float minimum[2]={APCAM_TRACKING_MIN_PITCH_RATE*.01745329252f,
+                                APCAM_TRACKING_MIN_YAW_RATE*.01745329252f};
         for(unsigned i=0;i<2;i++) {
-            // Overcome the measured MCU motor dead zone near the target.
+            // Calibrated pulses already realize sub-minimum average rates;
+            // do not retain the dead-zone integral that drives past center.
+            if(minimum[i]>0) { _integral[i]=0; continue; }
+            // Uncalibrated targets retain their existing dead-zone correction.
             // Never learn an integral from an unconfirmed/coasting rectangle.
             if(s.state==CA_TRACK_ACTIVE && fabsf(error[i])<.15f)
                 _integral[i]=std::clamp(_integral[i]+.8f*error[i]*dt,-.14f,.14f);
         }
         float pitch=std::clamp(s.pitch_rate+1.5f*control.pitch_error+_integral[0],-limit,limit);
         float yaw=std::clamp(s.yaw_rate+1.5f*control.yaw_error+_integral[1]-(aircraft?m.vehicle_yaw_rate_rad_s:0),-limit,limit);
+        pitch=_rate_pulses[0].apply(pitch,minimum[0],dt);
+        yaw=_rate_pulses[1].apply(yaw,minimum[1],dt);
         if((attitude.pitch_rad<=APCAM_GIMBAL_PITCH_MIN*.01745329252f && pitch<0) ||
-           (attitude.pitch_rad>=APCAM_GIMBAL_PITCH_MAX*.01745329252f && pitch>0)) { pitch=0; _integral[0]=0; }
+           (attitude.pitch_rad>=APCAM_GIMBAL_PITCH_MAX*.01745329252f && pitch>0)) {
+            pitch=0; _integral[0]=0; _rate_pulses[0].reset();
+        }
         if(!APCAM_GIMBAL_YAW_CONTINUOUS &&
            ((attitude.yaw_rad<=APCAM_GIMBAL_YAW_MIN*.01745329252f && yaw<0) ||
-            (attitude.yaw_rad>=APCAM_GIMBAL_YAW_MAX*.01745329252f && yaw>0))) { yaw=0; _integral[1]=0; }
+            (attitude.yaw_rad>=APCAM_GIMBAL_YAW_MAX*.01745329252f && yaw>0))) {
+            yaw=0; _integral[1]=0; _rate_pulses[1].reset();
+        }
         if(ca_backend_set_gimbal_rates(gimbal,pitch,yaw)<0) { stop(); (void)ca_backend_set_gimbal_rates(gimbal,0,0); }
         else _driving=true;
     }

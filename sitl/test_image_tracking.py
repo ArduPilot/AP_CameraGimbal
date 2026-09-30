@@ -104,6 +104,15 @@ def run(args, directory):
             error = math.hypot((last.rec_top_x+last.rec_bottom_x)/2-.5,
                                (last.rec_top_y+last.rec_bottom_y)/2-.5)
             assert error < .04 and error < initial*.6, (initial, error, last)
+            # Passing through the center during an oscillation is insufficient:
+            # a stationary selection must also remain centered afterwards.
+            settled_until=time.monotonic()+2
+            while time.monotonic()<settled_until:
+                client.request(0xa2)
+                last=receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status & 1)
+                settled_error=math.hypot((last.rec_top_x+last.rec_bottom_x)/2-.5,
+                                         (last.rec_top_y+last.rec_bottom_y)/2-.5)
+                assert settled_error<.04, ('settled',settled_error,last)
             assert command(M.MAV_CMD_CAMERA_STOP_TRACKING)==M.MAV_RESULT_ACCEPTED
             receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status==0)
             # MAVLink can acquire the same target and SIYI cancel controls the shared state.

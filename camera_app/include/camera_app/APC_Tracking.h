@@ -1,6 +1,7 @@
 #pragma once
 #include "camera_app/image_tracker.h"
 #include "camera_app/tracking_pose.h"
+#include "camera_app/tracking_rate.h"
 #include "apcam/APC_Resource.h"
 class APC_Media_Backend;
 struct ca_backend;
@@ -29,6 +30,7 @@ private:
     unsigned _generation=0;
     uint64_t _command_ms=0;
     float _integral[2] {};
+    ca_tracking_rate_pulses _rate_pulses[2];
     ca_tracking_status _status;
     ca_tracking_pose_history _poses;
 };
