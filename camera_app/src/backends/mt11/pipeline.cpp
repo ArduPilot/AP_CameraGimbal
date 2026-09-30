@@ -161,7 +161,7 @@ td_s32 ca_mt11_vpss_start(ot_vpss_grp group,
         sample_comm_vpss_get_default_chn_attr(&channels[channel]);
         channels[channel].width = sizes->width[channel];
         channels[channel].height = sizes->height[channel];
-        channels[channel].depth = channel == 0U ? 2U : 0U;
+        channels[channel].depth = channel == 0U ? 2U : channel == 1U ? 1U : 0U;
         if (channel != 0U) {
             /* SS928 auxiliary VPSS outputs do not accept segment
              * compression; only physical channel 0 does. */

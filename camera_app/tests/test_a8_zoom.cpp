@@ -8,7 +8,7 @@
 #include <initializer_list>
 
 static unsigned bound, configured;
-static m6_scl_port ports[CA_A8_VENC_COUNT];
+static m6_scl_port ports[CA_A8_VENC_COUNT+1];
 void ca_log(const char *, ...) {}
 
 static int bind_frame(unsigned short, m6_sys_bind *src, m6_sys_bind *dst,
@@ -34,7 +34,7 @@ static int bind_frame(unsigned short, m6_sys_bind *src, m6_sys_bind *dst,
 
 static int set_port(int dev, int chn, int port, m6_scl_port *config)
 {
-    assert(dev == 1 && chn == 0 && port >= 0 && port < 3);
+    assert(dev == 1 && chn == 0 && port >= 0 && port < 4);
     assert(config->pixFmt == M6_PIXFMT_YUV420SP);
     ports[port] = *config;
     configured++;
@@ -61,9 +61,12 @@ int main()
         assert(overlay.channel == 0 && overlay.port == i);
     }
     assert(bound == 5);
+    for (unsigned i=0;i<4;i++) p.port_enabled[i]=true;
     for (float zoom : {1.0f, 1.9f, 2.0f, 2.1f, 3.0f, 6.0f, 1.0f}) {
         configured = 0;
-        assert(ca_a8_set_zoom(zoom) == 0 && configured == 3);
+        assert(ca_a8_set_zoom(zoom) == 0 && configured == 4);
+        assert(ports[3].output.width==320 && ports[3].output.height==180);
+        assert(memcmp(&ports[3].crop, &ports[0].crop, sizeof(ports[0].crop)) == 0);
         for (unsigned i = 0; i < 3; i++) {
             assert(ports[i].output.width == widths[i]);
             assert(ports[i].output.height == heights[i]);

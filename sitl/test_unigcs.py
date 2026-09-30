@@ -81,7 +81,7 @@ class Client:
                 if len(self.buf) >= n:
                     raw, self.buf = self.buf[:n], self.buf[n:]
                     control, _, src, dst, _, op, payload = parse_mt11_private(raw)
-                    assert control == 10 and dst == 0xd0
+                    assert control in (8, 10) and dst == 0xd0
                     if op == cmd and src == source:
                         return payload
                     continue
@@ -338,8 +338,11 @@ def main():
                 raw = b'\xaa\x09\x03\x00\x10\x00'+command(0x94)+command(0x80)
                 for part in (raw[:3],raw[3:9],raw[9:]):
                     c.sock.sendall(part)
-                assert c.reply(0x94) == bytes((12,0,1,product_id))
+                assert c.reply(0x94) == bytes((12,0,1,product_id)) + (bytes((0,0,1,0x87)) if args.video_codec else b'')
                 assert c.reply(0x80) == bytes(5)
+                # MT11 starts on its wide RGB sensor, but its visible scene is
+                # still Zoom. Wide (01) makes Android hide the target button.
+                assert c.request(0x92) == (b'\x00\x02' if thermal else b'\x00\x00')
                 # A second client cannot claim the same MCU return route.
                 extra = Client(ports['private'])
                 assert extra.sock.recv(1) == b''
@@ -401,6 +404,8 @@ def main():
                     time.sleep(.05)
                 assert c.request(0xd1,b'\x0a') == b'\x0a\x14\x00'
                 assert public_request(public,2,0x18) == b'\x02\x00'
+                if thermal:
+                    assert c.request(0x92) == b'\x00\x02'
                 c.request(0x98,b'\x01')
                 time.sleep(1.1 if args.backend == "zr10" else .25)
                 assert struct.unpack_from('<H',c.request(0xd1,b'\x0a'),1)[0] > 20
@@ -449,7 +454,7 @@ def main():
                 captured=bytes.fromhex('5566aabb01000000000000802d977a34b7ad40eb')
                 old.sock.sendall(captured[:2]); old.sock.sendall(captured[2:])
                 assert len(old.reply(0x80))==5
-                assert old.request(0x94)==bytes((12,0,1,product_id))
+                assert old.request(0x94)==bytes((12,0,1,product_id)) + (bytes((0,0,1,0x87)) if args.video_codec else b'')
                 assert len(old.request(0x83,b'\x00'))==9
                 old.received.clear()
                 old.sock.sendall(long_command(0x94,control=0)+long_command(0x80))

@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "pipeline.h"
+#include "../siyi/tracking_frame.h"
 
 #include "camera_app/log.h"
 
@@ -62,7 +63,7 @@ struct a8_pipeline {
     struct ca_a8_pipeline_config config;
     bool venc_created[CA_A8_VENC_COUNT];
     bool venc_bound[CA_A8_VENC_COUNT];
-    bool port_enabled[CA_A8_VENC_COUNT];
+    bool port_enabled[CA_A8_VENC_COUNT+1];
     int venc_fd[CA_A8_VENC_COUNT];
     bool jpeg_created;
     bool jpeg_bound;
@@ -71,6 +72,9 @@ struct a8_pipeline {
 };
 
 static struct a8_pipeline pipe_state;
+static CA_MI_TrackingFrames tracking_frames;
+bool ca_a8_tracking_available() { return tracking_frames.available(); }
+bool ca_a8_tracking_frame(ca_tracking_frame &frame) { return tracking_frames.read(frame); }
 
 #define MI_CHECK(call)                                                      \
     do {                                                                    \
@@ -242,8 +246,8 @@ static int scl_port_config(struct a8_pipeline *p, unsigned port)
 
     memset(&config, 0, sizeof(config));
     config.crop = p->zoom_crop;
-    config.output.width = (unsigned short)p->config.streams[port].width;
-    config.output.height = (unsigned short)p->config.streams[port].height;
+    config.output.width = port==3 ? 320 : (unsigned short)p->config.streams[port].width;
+    config.output.height = port==3 ? 180 : (unsigned short)p->config.streams[port].height;
     config.mirror = p->inverted;
     config.flip = p->inverted;
     config.pixFmt = M6_PIXFMT_YUV420SP;
@@ -418,11 +422,16 @@ int ca_a8_pipeline_open(const struct ca_a8_pipeline_config *config)
         errno = saved_errno;
         return -1;
     }
+    if(scl_port_config(p,3)==0 && p->scl.fnEnablePort(SCL_DEV,SCL_CHN,3)==0) {
+        p->port_enabled[3]=true;
+        if(!tracking_frames.open(M6_SYS_MOD_SCL,SCL_DEV,true)) ca_log("A8 tracking frame depth unavailable");
+    } else ca_log("A8 tracking scaler output unavailable");
     return 0;
 }
 
 void ca_a8_pipeline_close(void)
 {
+    tracking_frames={};
     struct a8_pipeline *p = &pipe_state;
     m6_sys_bind source, destination;
 
@@ -453,7 +462,7 @@ void ca_a8_pipeline_close(void)
         (void)p->venc.fnDestroyDevice(M6_VENC_DEV_H26X_0);
     }
     if (p->stage >= STAGE_PORTS) {
-        for (unsigned port = 0; port < CA_A8_VENC_COUNT; port++) {
+        for (unsigned port = 0; port <= CA_A8_VENC_COUNT; port++) {
             if (p->port_enabled[port]) {
                 (void)p->scl.fnDisablePort(SCL_DEV, SCL_CHN, (int)port);
             }
@@ -671,8 +680,8 @@ int ca_a8_set_zoom(float ratio)
         crop.height = (unsigned short)height;
     }
     p->zoom_crop = crop;
-    for (unsigned port = 0; port < CA_A8_VENC_COUNT; port++) {
-        if (scl_port_config(p, port) < 0) return -1;
+    for (unsigned port = 0; port <= CA_A8_VENC_COUNT; port++) {
+        if (p->port_enabled[port] && scl_port_config(p, port) < 0) return -1;
     }
     return 0;
 }
@@ -686,8 +695,8 @@ int ca_a8_set_inverted(bool inverted)
         return -1;
     }
     p->inverted = inverted;
-    for (unsigned port = 0; port < CA_A8_VENC_COUNT; port++) {
-        if (scl_port_config(p, port) < 0) return -1;
+    for (unsigned port = 0; port <= CA_A8_VENC_COUNT; port++) {
+        if (p->port_enabled[port] && scl_port_config(p, port) < 0) return -1;
     }
     return 0;
 }

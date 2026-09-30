@@ -28,17 +28,19 @@ int ca_overlay_hw_set(struct ca_overlay_hw **out, const struct ca_overlay_channe
 {
     if (count>4) { errno=EINVAL; return -1; }
     bool enabled=false;
-    for (unsigned c=0;c<count;c++) enabled |= channels[c].cross || channels[c].thermal_box;
+    for (unsigned c=0;c<count;c++) enabled |= channels[c].cross || channels[c].thermal_box || channels[c].tracking;
     if (!enabled) { ca_overlay_hw_close(*out); *out=NULL; return 0; }
     if (!*out && !(*out=(struct ca_overlay_hw*)(calloc(1,sizeof(**out))))) return -1;
     struct ca_overlay_hw *hw=*out;
     for (unsigned c=0;c<count;c++) {
         const struct ca_overlay_channel *s=&channels[c], *old=&hw->previous[c];
         if (s->width==old->width && s->height==old->height && s->cross==old->cross &&
-            s->thermal_box==old->thermal_box && (!s->thermal_box || s->hfov==old->hfov)) continue;
+            s->thermal_box==old->thermal_box && (!s->thermal_box || s->hfov==old->hfov) &&
+            s->tracking==old->tracking && (!s->tracking || !memcmp(s->rect,old->rect,sizeof(s->rect)))) continue;
         struct ca_overlay_geometry g;
         struct ca_overlay_bitmap bits[CA_OVERLAY_REGIONS];
-        ca_overlay_geometry(&g,s->width,s->height,s->cross,s->thermal_box,s->hfov);
+        ca_overlay_geometry(&g,s->width,s->height,s->cross,s->thermal_box && !s->tracking,s->hfov);
+        if(s->tracking) ca_overlay_tracking(&g,s->width,s->height,s->rect);
         if (ca_overlay_bitmaps(bits,s->width,s->height,&g)<0) return -1;
         int error=0;
         for (unsigned r=0;r<CA_OVERLAY_REGIONS;r++) {
@@ -67,7 +69,9 @@ int ca_overlay_hw_set(struct ca_overlay_hw **out, const struct ca_overlay_channe
             display.attr.overlay_chn.point=(ot_point){(td_s32)(b->x),(td_s32)(b->y)};
             display.attr.overlay_chn.fg_alpha=128;
             display.attr.overlay_chn.bg_alpha=0;
-            display.attr.overlay_chn.layer=r;
+            // Tracking replaces the four thermal-FOV edges, so reuse their
+            // layer slots instead of exceeding the SDK's 0..7 layer range.
+            display.attr.overlay_chn.layer=r>=5 ? r-4 : r;
             error=hw->attached[c][r] ? ss_mpi_rgn_set_display_attr(handle(c,r),&chn,&display) :
                 ss_mpi_rgn_attach_to_chn(handle(c,r),&chn,&display);
             if (error) break;

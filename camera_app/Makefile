@@ -55,7 +55,7 @@ CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -D_FILE_OFFSET_BITS=64
-TARGET_LINK_FLAGS := -Wl,--wrap=fcntl
+TARGET_LINK_FLAGS := -Wl,--wrap=fcntl,--wrap=exp,--wrap=pow
 endif
 # header dependency tracking, so struct layout changes rebuild every user
 DEPFLAGS := -MMD -MP
@@ -117,7 +117,7 @@ MEDIA_LIBS := $(VENDOR_LIB_DIR)/libss_mpi.a $(VENDOR_LIB_DIR)/libsecurec.a \
 COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_server.cpp) src/main.cpp \
 	src/config.cpp \
 	src/log.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/protocol/manual_control.cpp \
-	src/media/autofocus.cpp src/media/media.cpp src/media/overlay.cpp \
+	src/media/autofocus.cpp src/media/media.cpp src/media/overlay.cpp src/media/tracking.cpp \
 	src/protocol/mavlink.cpp \
 	src/protocol/mavlink_server.cpp src/protocol/camera_definition.cpp src/protocol/camera_ftp.cpp \
 	src/protocol/support_mavlink.cpp \
@@ -391,13 +391,13 @@ $(AUTOFOCUS_TEST_TARGET): tests/test_autofocus.cpp src/media/autofocus.cpp
 
 $(HOST_TARGET): build/binlog_version.h $(COMMON_SOURCES) src/media/stub.cpp $(MAVLINK_DEPS)
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp,$^) -lm
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -DCAMERA_APP_HOST -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
 
 $(A8_HOST_TARGET): CAMERA_BACKEND=a8
 $(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src/backends/siyi/control.cpp
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) \
-		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp,$^)) -lm
+		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
@@ -759,7 +759,7 @@ ZR10_HOST_TARGET := tests/camera-app-zr10-host
 $(ZR10_HOST_TARGET): CAMERA_BACKEND=zr10
 $(ZR10_HOST_TARGET): build/binlog_version.h $(filter-out src/backends/mt11/control.cpp src/backends/a8/control.cpp src/backends/zr10/control.cpp,$(COMMON_SOURCES)) src/backends/zr10/control.cpp src/backends/siyi/control.cpp src/media/stub.cpp $(MAVLINK_DEPS)
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp,$^)) -lm
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
 
 .PHONY: zr10-test
 zr10-test: $(ZR10_HOST_TARGET)
@@ -820,9 +820,9 @@ build/z1mini/ax-capture: src/backends/z1mini/ax_capture.cpp Makefile src/media/o
 thermal-monitor-test: tests/test_thermal_monitor
 	$(PYTHON) -c 'import subprocess; subprocess.run(["./tests/test_thermal_monitor"], check=True, timeout=10)'
 
-tests/test_thermal_monitor: tests/test_thermal_monitor.cpp src/media/media.cpp include/camera_app/media.h include/camera_app/binlog.h include/camera_app/exposure.h
+tests/test_thermal_monitor: src/media/tracking.cpp build/host/tracking_dlib.o tests/test_thermal_monitor.cpp src/media/media.cpp include/camera_app/media.h include/camera_app/binlog.h include/camera_app/exposure.h
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.cpp src/media/media.cpp -lpthread -lm
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ tests/test_thermal_monitor.cpp src/media/media.cpp src/media/tracking.cpp build/host/tracking_dlib.o -lpthread -lm
 
 .PHONY: exposure-test
 exposure-test: a8-exposure-test thermal-monitor-test tests/test_exposure tests/test_exposure_native
@@ -850,10 +850,10 @@ tests/test_manual_control: tests/test_manual_control.cpp src/protocol/manual_con
 	$(HOST_CXX) -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_MT11 -I../include -Iinclude -o $@ $< -lm
 
 .PHONY: media-overlay-test
-media-overlay-test:
+media-overlay-test: build/host/tracking_dlib.o
 	mkdir -p build/tests
 	$(call progress,Linking $@)
-	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude tests/test_media_overlay.cpp -o build/tests/test_media_overlay -pthread -lm
+	$(HOST_CXX) -O2 -Wall -Wextra -Werror -std=gnu++17 -Wno-missing-field-initializers -ffunction-sections -fdata-sections -Wl,--gc-sections -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Iinclude tests/test_media_overlay.cpp src/media/tracking.cpp build/host/tracking_dlib.o -o build/tests/test_media_overlay -pthread -lm
 	./build/tests/test_media_overlay
 
 .PHONY: z1-overlay-race-test
@@ -946,3 +946,33 @@ build/tests/test_xop_buffer: tests/test_xop_buffer.cpp $(RTSP_ROOT)/net/BufferWr
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(HOST_CXX) -O1 -g -fsanitize=address -fno-omit-frame-pointer -std=c++11 -Wall -Wextra -Werror -I$(RTSP_ROOT) $(filter %.cpp,$^) -o $@
+
+# Isolate dlib exceptions from the rest of the firmware. Compile only its
+# correlation tracker and FFT, without optional GUI/BLAS/CUDA dependencies.
+DLIB_ROOT := $(abspath ../build/deps/dlib)
+DLIB_HEADER := $(DLIB_ROOT)/dlib/image_processing/correlation_tracker.h
+$(DLIB_HEADER):
+	sh ../tools/bootstrap_dlib.sh $(DLIB_ROOT)
+DLIB_FLAGS = -O2 -std=gnu++17 -fexceptions -fno-rtti -DDLIB_NO_GUI_SUPPORT -DDLIB_DISABLE_ASSERTS -Iinclude -isystem $(DLIB_ROOT)
+build/host/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
+	mkdir -p $(@D)
+	$(HOST_CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
+build/$(CAMERA_BACKEND)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
+	mkdir -p $(@D)
+	$(CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
+OBJECTS += build/$(CAMERA_BACKEND)/tracking_dlib.o
+$(TARGET): build/$(CAMERA_BACKEND)/tracking_dlib.o
+SITL_APP_OBJECTS += build/host/tracking_dlib.o
+$(SITL_TARGET): build/host/tracking_dlib.o
+$(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET): build/host/tracking_dlib.o
+Z1_HOST_OBJECTS += build/host/tracking_dlib.o
+$(Z1_HOST_TARGET): build/host/tracking_dlib.o
+-include build/host/tracking_dlib.d build/$(CAMERA_BACKEND)/tracking_dlib.d
+
+.PHONY: image-tracking-test
+image-tracking-test: build/tests/test_image_tracker
+	./build/tests/test_image_tracker
+test: image-tracking-test
+build/tests/test_image_tracker: tests/test_image_tracker.cpp include/camera_app/image_tracker.h include/camera_app/tracking_pose.h build/host/tracking_dlib.o
+	mkdir -p $(@D)
+	$(HOST_CXX) -O2 -std=gnu++17 -Wall -Wextra -Werror -Iinclude -o $@ $< build/host/tracking_dlib.o -lpthread -lm

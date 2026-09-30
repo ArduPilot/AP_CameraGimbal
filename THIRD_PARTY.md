@@ -77,3 +77,13 @@ from the public-domain IANA tzdata 2026d release. Its source archive SHA-256 is
 `0cb2aa8e333c3dc049badc42a0c61f21987b8cd44e107fa900bad764aacc7767`.
 See `timezones/LICENSE` and `timezones/README.md` for the source, regeneration
 procedure and current-rule coverage. No IANA implementation code is included.
+
+The image tracker uses dlib **20.0.1** (Boost Software License 1.0), pinned by
+`tools/bootstrap_dlib.sh` to release archive SHA-256
+`dab5b4ec4b68bd7dc128a1fb7900723f89d2da107e44cd5def7d38fc57252a9d`.
+Only the CPU correlation tracker and its FFT implementation are compiled;
+there are no neural-network weights, GUI, CUDA or BLAS dependencies.
+Source: <https://github.com/davisking/dlib/tree/v20.0.1>.
+The bundled KISS FFT is BSD-3-Clause, copyright Mark Borgerding 2003–2010.
+Both license notices are in `web/webroot/licenses`, copied into every camera
+package with the web assets.

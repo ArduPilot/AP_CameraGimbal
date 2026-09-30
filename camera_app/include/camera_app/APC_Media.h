@@ -2,6 +2,7 @@
 #include "camera_app/APC_Media_Backend.h"
 #include "apcam/APC_Camera.h"
 #include "apcam/APC_Resource.h"
+#include "camera_app/APC_Tracking.h"
 
 // Stable owner used by protocol callbacks while the underlying image pipeline
 // changes. Diagnostic workers are joined before replacement and destruction.
@@ -29,6 +30,8 @@ public:
     enum ca_media_lens lens() const;
     int set_thermal_main(bool thermal_main);
     bool thermal_main() const;
+    bool side_by_side() const { return _backend && _backend->side_by_side(); }
+    int set_side_by_side(bool enabled);
     int autofocus(uint16_t x, uint16_t y);
     int manual_focus(int direction);
     int set_focus_percent(float percent);
@@ -40,6 +43,7 @@ public:
     int get_thermal_palette(uint8_t *palette);
     int set_thermal_palette(uint8_t palette);
     int set_inverted(bool inverted);
+    APC_Tracking &tracking() { return _tracking; }
 private:
     struct LiveControls;
     int _open_backend(const ca_media_config *config);
@@ -51,6 +55,7 @@ private:
     void _monitor_exposure();
     const APC_Camera &_camera = APC_Camera::get_singleton();
     std::unique_ptr<APC_Media_Backend> _backend;
+    APC_Tracking _tracking;
     ca_media_config _config {};
     bool _inverted = false;
     uint8_t _cached_gain = 0, _cached_palette = 0;

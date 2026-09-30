@@ -125,7 +125,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
                           uint8_t *data[CA_SITL_STREAMS], size_t length[CA_SITL_STREAMS], bool key[CA_SITL_STREAMS],
-                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure, struct ca_sitl_raw_thermal *raw)
+                          uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure, struct ca_sitl_raw_thermal *raw, ca_tracking_frame *tracking)
 {
     struct ca_metadata metadata;
     struct timespec utc, now;
@@ -182,7 +182,10 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         if (added<0 || (size_t)added>=sizeof(request)-used) { errno=EOVERFLOW; return -1; }
         used+=added;
     }
-    added=snprintf(request+used,sizeof(request)-used,"],\"raw_thermal\":%s}\n", raw ? "true" : "false");
+    const auto &box=image->tracking.rect;
+    added=snprintf(request+used,sizeof(request)-used,"],\"raw_thermal\":%s,\"tracking_frame\":%s,"
+        "\"tracking_box\":[%u,%.6f,%.6f,%.6f,%.6f],\"combined\":%s}\n", raw ? "true" : "false",tracking?"true":"false",
+        unsigned(image->tracking.state),box.left,box.top,box.right,box.bottom,image->side_by_side?"true":"false");
     if (added<0 || (size_t)added>=sizeof(request)-used) { errno=EOVERFLOW; return -1; }
     used+=added;
     if (transfer(t->fd, request, used, true) < 0) return -1;
@@ -196,6 +199,14 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         if (!data[i] || transfer(t->fd, data[i], length[i], false) < 0) return -1;
     }
     if (transfer(t->fd, exposure, sizeof(*exposure), false) < 0) return -1;
+    if(tracking) {
+        uint32_t size[2];
+        if(transfer(t->fd,size,sizeof(size),false)<0) return -1;
+        tracking->width=ntohl(size[0]); tracking->height=ntohl(size[1]);
+        tracking->timestamp_ms=presentation_ms;
+        if(tracking->width!=CA_TRACK_WIDTH || tracking->height<16 || tracking->height>CA_TRACK_HEIGHT) { errno=EPROTO; return -1; }
+        if(transfer(t->fd,tracking->pixels,tracking->width*tracking->height,false)<0) return -1;
+    }
     if (raw) {
         uint32_t sizes[2];
         if (transfer(t->fd, sizes, sizeof(sizes), false) < 0) return -1;

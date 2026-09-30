@@ -110,3 +110,6 @@ int main(void)
     puts("PASS blocked thermal polling leaves the control cache responsive and joins before close");
     return 0;
 }
+
+// These media lifetime tests do not open a gimbal transport.
+int ca_backend_set_gimbal_rates(ca_backend *, float, float) { return 0; }

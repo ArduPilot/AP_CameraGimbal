@@ -37,6 +37,7 @@
 class APC_Media_ZR10;
 struct APC_Media_ZR10_State {
     struct ca_overlay_hw *overlay;
+    ca_tracking_status tracking;
     struct ca_media_config config;
     struct ca_zr10_pipeline_config pipeline;
     pthread_t thread;
@@ -82,6 +83,17 @@ public:
         return std::unique_ptr<APC_Media_Backend>(driver);
     }
     bool ready() const override;
+    bool tracking_available() const override { return ca_zr10_tracking_available(); }
+    bool tracking_frame(ca_tracking_frame &frame) override {
+        pthread_mutex_lock(&_state->lock);
+        const bool ok=ca_zr10_tracking_frame(frame);
+        pthread_mutex_unlock(&_state->lock);
+        return ok;
+    }
+    void tracking_overlay(const ca_tracking_status *status) override {
+        _state->tracking=status?*status:ca_tracking_status{};
+        (void)apply_overlay(&_state->config.settings);
+    }
     int set_recording(bool active) override;
     bool recording() const override;
     const char * recording_path() const override;
@@ -703,9 +715,16 @@ int APC_Media_ZR10::apply_overlay(const struct ca_config *settings)
     struct ca_overlay_channel channels[3]= {};
     enum ca_video_resolution resolutions[3]={settings->main_resolution,settings->sub_resolution,settings->recording_resolution};
     pthread_mutex_lock(&media->lock);
+    media->config.settings.osd_cross=settings->osd_cross;
+    media->config.settings.osd_recording=settings->osd_recording;
+    media->config.settings.osd_thermal_fov=settings->osd_thermal_fov;
     for (unsigned c=0;c<3;c++) {
         ca_video_resolution_size(resolutions[c],&channels[c].width,&channels[c].height);
         channels[c].cross=settings->osd_cross && (c<2 || settings->osd_recording);
+        if(c<2 && (media->tracking.state==CA_TRACK_ACTIVE || media->tracking.state==CA_TRACK_COASTING)) {
+            channels[c].tracking=true;
+            memcpy(channels[c].rect,&media->tracking.rect,sizeof(channels[c].rect));
+        }
     }
     int result=ca_overlay_hw_set(&media->overlay,channels,3);
     pthread_mutex_unlock(&media->lock);

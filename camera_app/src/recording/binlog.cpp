@@ -66,6 +66,8 @@ static const struct fmt_record formats[] = {
     FMT(CA_LOG_POS,ca_log_pos,"POS","QILLfffffBB","TimeUS,BootMS,Lat,Lng,Alt,RelAlt,VN,VE,VD,SS,SC"),
     FMT(CA_LOG_ATT,ca_log_att,"ATT","QIBffffffBB","TimeUS,TBoot,Src,Roll,Pitch,Yaw,RollRate,PitchRate,YawRate,SS,SC"),
     FMT(CA_LOG_GIMB,ca_log_gimb,"GIMB","QQffffff","TimeUS,SampleUS,Roll,Pitch,Yaw,RollRate,PitchRate,YawRate"),
+    FMT(CA_LOG_TRKF,ca_log_trkf,"TRKF","QQBfffffffff","TimeUS,FrameMS,St,Q,PE,YE,PF,YF,Roll,Pitch,Yaw,FOV"),
+    FMT(CA_LOG_TFRA,ca_log_tfra,"TFRA","QQQ","TimeUS,PTS,SdkPTS"),
     FMT(CA_LOG_PIDP,ca_log_pid,"PIDP","Qfffffffffff","TimeUS,Tar,Act,Rate,FF,Err,P,I,D,Out,DT,Age"),
     FMT(CA_LOG_PIDY,ca_log_pid,"PIDY","Qfffffffffff","TimeUS,Tar,Act,Rate,FF,Err,P,I,D,Out,DT,Age"),
     FMT(CA_LOG_MODE,ca_log_mode,"MODE","QIBBBBBB","TimeUS,FlightMode,Armed,Mode,Method,YawLock,Recording,SysId"),

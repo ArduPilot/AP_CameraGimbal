@@ -1,6 +1,7 @@
 #pragma once
 #include "camera_app/media.h"
 #include "camera_app/exposure.h"
+#include "camera_app/image_tracker.h"
 #include <memory>
 #include <cerrno>
 #include <cmath>
@@ -28,6 +29,8 @@ public:
     virtual enum ca_media_lens lens() const = 0;
     virtual int set_thermal_main(bool thermal_main) = 0;
     virtual bool thermal_main() const = 0;
+    virtual bool side_by_side() const { return false; }
+    virtual int set_side_by_side(bool enabled) { if(enabled) { errno=ENOTSUP; return -1; } return 0; }
     virtual int autofocus(uint16_t x, uint16_t y) = 0;
     virtual int manual_focus(int direction) = 0;
     virtual int set_focus_percent(float percent) = 0;
@@ -42,6 +45,11 @@ public:
     virtual int apply_overlay(const struct ca_config *settings) = 0;
     virtual int configure_raw_thermal(const ca_config *) { return 0; }
     virtual int apply_image(const struct ca_config *settings) = 0;
+    virtual bool tracking_available() const { return false; }
+    // Called by the tracking worker; bounded to 50ms, false if no new frame.
+    virtual bool tracking_frame(ca_tracking_frame &) { return false; }
+    // Main thread. nullptr removes the tracking box.
+    virtual void tracking_overlay(const ca_tracking_status *) {}
 protected:
     APC_Media_Backend() = default;
 };

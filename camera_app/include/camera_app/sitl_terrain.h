@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "camera_app/config.h"
 #include "camera_app/exposure.h"
+#include "camera_app/image_tracker.h"
 
 struct ca_sitl_raw_thermal {
     uint16_t pixels[640U*512U];
@@ -20,6 +21,8 @@ struct ca_sitl_image {
     unsigned capture_mask;
     unsigned capture_generation;
     float capture_fov[3];
+    ca_tracking_status tracking;
+    bool side_by_side;
 };
 
 #define CA_SITL_STREAMS 5U
@@ -35,7 +38,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *terrain, uint64_t pts, uint64_
                           const struct ca_sitl_image *image,
                           uint8_t *data[CA_SITL_STREAMS], size_t length[CA_SITL_STREAMS], bool key[CA_SITL_STREAMS],
                           uint8_t *photos[3], size_t photo_length[3], struct ca_exposure *exposure,
-                          struct ca_sitl_raw_thermal *raw = nullptr);
+                          struct ca_sitl_raw_thermal *raw = nullptr, ca_tracking_frame *tracking=nullptr);
 void ca_sitl_terrain_interrupt(struct ca_sitl_terrain *terrain);
 void ca_sitl_terrain_close(struct ca_sitl_terrain *terrain);
 

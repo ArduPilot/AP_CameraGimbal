@@ -22,6 +22,10 @@
 #include "camera_app/still.h"
 
 #include "ss_mpi_vpss.h"
+#include "ss_mpi_sys.h"
+#include "ss_mpi_vb.h"
+#include "ss_mpi_vgs.h"
+#include <algorithm>
 #include "ss_mpi_isp.h"
 
 #include <limits.h>
@@ -38,6 +42,10 @@ class APC_Media_MT11;
 struct APC_Media_MT11_State {
     struct ca_media_config config;
     struct ca_overlay_hw *overlay;
+    ca_tracking_status tracking;
+    atomic_bool combined;
+    pthread_t combined_thread;
+    bool combined_running;
     sample_vi_cfg vi_cfg[2];
     ot_venc_chn_attr venc_attr[4];
     pthread_t thread;
@@ -119,6 +127,9 @@ public:
         return std::unique_ptr<APC_Media_Backend>(driver);
     }
     bool ready() const override;
+    bool tracking_available() const override { return ready(); }
+    bool tracking_frame(ca_tracking_frame &frame) override;
+    void tracking_overlay(const ca_tracking_status *status) override;
     int set_recording(bool active) override;
     int configure_raw_thermal(const ca_config *settings) override {
         return ca_thermal_stream_configure(_state->thermal_stream, settings);
@@ -135,6 +146,8 @@ public:
     enum ca_media_lens lens() const override;
     int set_thermal_main(bool thermal_main) override;
     bool thermal_main() const override;
+    bool side_by_side() const override { return _state && _state->combined; }
+    int set_side_by_side(bool enabled) override;
     int autofocus(uint16_t x, uint16_t y) override;
     int manual_focus(int direction) override;
     int set_focus_percent(float percent) override;
@@ -401,6 +414,7 @@ static void thermal_frame(const uint8_t *display_yuyv,
 
 static void media_cleanup(struct APC_Media_MT11_State *media)
 {
+    (void)media->owner->set_side_by_side(false);
     atomic_store(&media->manual_focus_direction, 0);
     if (media->autofocus_thread_started) {
         atomic_store(&media->autofocus_cancel, true);
@@ -1924,6 +1938,9 @@ int APC_Media_MT11::apply_overlay(const struct ca_config *settings)
     auto *media = _state;
     struct ca_overlay_channel channels[4]= {};
     pthread_mutex_lock(&media->lock);
+    media->config.settings.osd_cross=settings->osd_cross;
+    media->config.settings.osd_recording=settings->osd_recording;
+    media->config.settings.osd_thermal_fov=settings->osd_thermal_fov;
     pthread_mutex_lock(&media->venc_lock);
     bool swap=atomic_load(&media->thermal_main);
     for (unsigned c=0;c<4;c++) {
@@ -1934,11 +1951,155 @@ int APC_Media_MT11::apply_overlay(const struct ca_config *settings)
             .cross=settings->osd_cross && (c<2 || settings->osd_recording),
             .thermal_box=settings->osd_thermal_fov && !thermal && (c<2 || settings->osd_recording),
             .hfov=media->owner->hfov(false)};
+        if(c==0 && (media->tracking.state==CA_TRACK_ACTIVE || media->tracking.state==CA_TRACK_COASTING)) {
+            channels[c].tracking=true;
+            memcpy(channels[c].rect,&media->tracking.rect,sizeof(channels[c].rect));
+        }
     }
     int result=ca_overlay_hw_set(&media->overlay,channels,4);
     pthread_mutex_unlock(&media->venc_lock);
     pthread_mutex_unlock(&media->lock);
     return result;
+}
+
+// Compose with the SDK scaler into one encoder buffer. Each sensor retains its
+// own aspect ratio; unused rows are black. Source VPSS frames are always released
+// before the next iteration, including every failed allocation/scaler/send path.
+static bool combined_frame(APC_Media_MT11_State *m, bool send)
+{
+    ot_video_frame_info input[2] {};
+    pthread_mutex_lock(&m->lock);
+    const ot_vpss_grp groups[2]={m->selected_group,CA_MT11_THERMAL_GROUP};
+    unsigned width=m->venc_attr[0].venc_attr.pic_width, height=m->venc_attr[0].venc_attr.pic_height;
+    pthread_mutex_unlock(&m->lock);
+    bool acquired[2] {};
+    for(unsigned i=0;i<2;i++) acquired[i]=ss_mpi_vpss_get_chn_frame(groups[i],1,&input[i],40)==TD_SUCCESS;
+    const unsigned stride=(width+63)&~63U;
+    const size_t size=size_t(stride)*height*3/2;
+    ot_vb_blk block=OT_VB_INVALID_HANDLE;
+    bool good=acquired[0] && acquired[1];
+    if(good) { block=ss_mpi_vb_get_blk(OT_VB_INVALID_POOL_ID,size,nullptr); good=block!=OT_VB_INVALID_HANDLE; }
+    if(good) {
+        const auto address=ss_mpi_vb_handle_to_phys_addr(block);
+        auto *pixels=static_cast<uint8_t *>(ss_mpi_sys_mmap(address,size));
+        good=pixels!=nullptr;
+        if(good) {
+            memset(pixels,16,stride*height); memset(pixels+stride*height,128,size-stride*height);
+            (void)ss_mpi_sys_munmap(pixels,size);
+            ot_video_frame_info output {};
+            output.pool_id=ss_mpi_vb_handle_to_pool_id(block); output.mod_id=OT_ID_VGS;
+            auto &v=output.video_frame;
+            v.width=width; v.height=height; v.field=OT_VIDEO_FIELD_FRAME;
+            v.pixel_format=OT_PIXEL_FORMAT_YVU_SEMIPLANAR_420;
+            v.video_format=OT_VIDEO_FORMAT_LINEAR; v.compress_mode=OT_COMPRESS_MODE_NONE;
+            v.dynamic_range=OT_DYNAMIC_RANGE_SDR8;
+            v.stride[0]=v.stride[1]=stride; v.phys_addr[0]=address; v.phys_addr[1]=address+stride*height;
+            v.pts=std::max(input[0].video_frame.pts,input[1].video_frame.pts);
+            for(unsigned i=0;i<2 && good;i++) {
+                ot_vgs_task_attr task {}; task.img_in=input[i]; task.img_out=output;
+                auto &tile=task.img_out.video_frame;
+                const auto &source=input[i].video_frame;
+                tile.width=(width/2)&~1U;
+                tile.height=std::min(height,unsigned(uint64_t(tile.width)*source.height/source.width))&~1U;
+                const unsigned y=((height-tile.height)/2)&~1U, x=i*(width/2);
+                tile.phys_addr[0]+=y*stride+x; tile.phys_addr[1]+=(y/2)*stride+x;
+                ot_vgs_handle job;
+                good=ss_mpi_vgs_begin_job(&job)==TD_SUCCESS;
+                if(good) {
+                    if(ss_mpi_vgs_add_scale_task(job,&task,OT_VGS_SCALE_COEF_NORM)!=TD_SUCCESS ||
+                       ss_mpi_vgs_end_job(job)!=TD_SUCCESS) {
+                        (void)ss_mpi_vgs_cancel_job(job); good=false;
+                    }
+                }
+            }
+            if(good && send) good=ss_mpi_venc_send_frame(0,&output,40)==TD_SUCCESS;
+        }
+    }
+    if(block!=OT_VB_INVALID_HANDLE) (void)ss_mpi_vb_release_blk(block);
+    for(unsigned i=0;i<2;i++) if(acquired[i]) (void)ss_mpi_vpss_release_chn_frame(groups[i],1,&input[i]);
+    return good;
+}
+int APC_Media_MT11::set_side_by_side(bool enabled)
+{
+    auto *m=_state;
+    if(!m) { errno=ENODEV; return -1; }
+    if(enabled==bool(m->combined)) return 0;
+    if(!enabled) {
+        m->combined=false;
+        if(m->combined_running) { pthread_join(m->combined_thread,nullptr); m->combined_running=false; }
+        const int result=sample_comm_vpss_bind_venc(m->selected_group,CA_MT11_RTSP_MAIN_CHN,0);
+        if(result!=TD_SUCCESS) { errno=EIO; return -1; }
+    } else {
+        if(set_thermal_main(false)<0) return -1;
+        // Probe both sources and scaler before changing the live encoder route.
+        if(!combined_frame(m,false)) { errno=EIO; return -1; }
+        if(sample_comm_vpss_un_bind_venc(m->selected_group,CA_MT11_RTSP_MAIN_CHN,0)!=TD_SUCCESS) { errno=EIO; return -1; }
+        m->combined=true;
+        const int error=pthread_create(&m->combined_thread,nullptr,[](void *opaque)->void* {
+            auto *m=static_cast<APC_Media_MT11_State *>(opaque);
+            unsigned failures=0;
+            while(m->combined) {
+                if(!combined_frame(m,true)) {
+                    if(++failures==1 || failures%100==0) ca_log("MT11 combined scene frame unavailable");
+                    usleep(20000);
+                } else failures=0;
+            }
+            return nullptr;
+        },m);
+        if(error) {
+            m->combined=false;
+            (void)sample_comm_vpss_bind_venc(m->selected_group,CA_MT11_RTSP_MAIN_CHN,0);
+            errno=error; return -1;
+        }
+        m->combined_running=true;
+    }
+    (void)ss_mpi_venc_request_idr(0,TD_TRUE);
+    return 0;
+}
+
+void APC_Media_MT11::tracking_overlay(const ca_tracking_status *status)
+{
+    _state->tracking=status?*status:ca_tracking_status{};
+    (void)apply_overlay(&_state->config.settings);
+}
+bool APC_Media_MT11::tracking_frame(ca_tracking_frame &out)
+{
+    auto *m=_state;
+    pthread_mutex_lock(&m->lock);
+    const ot_vpss_grp group=m->thermal_main?CA_MT11_THERMAL_GROUP:m->selected_group;
+    ot_video_frame_info frame {};
+    const int result=ss_mpi_vpss_get_chn_frame(group,CA_MT11_RTSP_SUB_CHN,&frame,0);
+    bool valid=false;
+    if(result==TD_SUCCESS) {
+        const auto &v=frame.video_frame;
+        if(v.width && v.height && v.stride[0]>=v.width && v.compress_mode==OT_COMPRESS_MODE_NONE) {
+            const size_t size=size_t(v.stride[0])*v.height;
+            auto *pixels=static_cast<uint8_t *>(ss_mpi_sys_mmap(v.phys_addr[0],size));
+            if(pixels) {
+                out.width=CA_TRACK_WIDTH;
+                // Preserve the thermal sensor aspect regardless of display
+                // scaler geometry before converting image errors to angles.
+                out.height=m->thermal_main ? out.width*APCAM_LENS3_HEIGHT/APCAM_LENS3_WIDTH :
+                    std::min(CA_TRACK_HEIGHT,unsigned(uint64_t(out.width)*v.height/v.width));
+                for(unsigned y=0;y<out.height;y++) for(unsigned x=0;x<out.width;x++)
+                    out.pixels[y*out.width+x]=pixels[(uint64_t(y)*v.height/out.height)*v.stride[0]+uint64_t(x)*v.width/out.width];
+                td_u64 sdk_pts=0;
+                const int pts_result=ss_mpi_sys_get_cur_pts(&sdk_pts);
+                const uint64_t now_us=ca_binlog_time_us();
+                // Visible VI timestamps use the SDK clock (not CLOCK_MONOTONIC).
+                // Our USB thermal injector explicitly stamps monotonic time.
+                const uint64_t clock_us=m->thermal_main ? now_us : sdk_pts;
+                const bool timed=(m->thermal_main || pts_result==TD_SUCCESS) &&
+                    v.pts<=clock_us && clock_us-v.pts<=now_us;
+                out.timestamp_ms=timed ? (now_us-(clock_us-v.pts))/1000 : 0;
+                CA_BINLOG(CA_LOG_TFRA,ca_log_tfra,.pts_us=v.pts,.sdk_us=sdk_pts);
+                valid=timed; (void)ss_mpi_sys_munmap(pixels,size);
+            }
+        }
+        (void)ss_mpi_vpss_release_chn_frame(group,CA_MT11_RTSP_SUB_CHN,&frame);
+    }
+    pthread_mutex_unlock(&m->lock);
+    return valid;
 }
 
 std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)

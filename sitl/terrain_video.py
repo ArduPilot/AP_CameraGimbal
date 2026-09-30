@@ -615,9 +615,11 @@ class Encoder:
         self.codec.time_base = Fraction(1, 90000)
         self.codec.framerate = Fraction(fps)
         self.codec.thread_count = 2
+        # UniGCS's Android RTP decoder mishandles separate AUD NALs (gray
+        # inter-frames and repeated codec resets). Native encoders omit them.
         self.codec.options = {'preset': 'ultrafast', 'tune': 'zerolatency', 'crf': '23',
                               'x265-params' if hevc else 'x264-params':
-                                  f'aud=1:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0' +
+                                  f'aud=0:repeat-headers=1:keyint={fps}:scenecut=0:bframes=0' +
                                   (':pools=none:frame-threads=1:log-level=error' if hevc else '')}
         self.codec.open()
 
@@ -695,8 +697,32 @@ def main():
                           bool(record.get('recording')) and record['thermal'][1]]
                 scene.controls.exposure = None
                 futures = []
+                tracking_pixels = None
                 for i in range(5):
                     pixels = scene.render(i, record, valid) if active[i] else None
+                    if i == 0 and record.get('combined'):
+                        import cv2
+                        visible, thermal = pixels, scene.render(1, record, valid)
+                        h, w = pixels.shape[:2]
+                        pixels = np.zeros_like(pixels)
+                        for slot, source in enumerate((visible, thermal)):
+                            sw, sh = w // 2, min(h, round((w // 2) * source.shape[0] / source.shape[1]))
+                            y = (h - sh) // 2
+                            pixels[y:y+sh, slot*sw:(slot+1)*sw] = cv2.resize(source, (sw, sh), interpolation=cv2.INTER_AREA)
+                    if pixels is not None and i == (1 if visible_sub else 0):
+                        import cv2
+                        if record.get('tracking_frame'):
+                            aspect = record['thermal_aspect'] if visible_sub else pixels.shape[1]/pixels.shape[0]
+                            height = min(256, round(320/aspect))
+                            tracking_pixels = cv2.resize(cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY),
+                                                         (320, height), interpolation=cv2.INTER_AREA)
+                        box = record.get('tracking_box', [0])
+                        if box[0] in (2, 3):
+                            h, w = pixels.shape[:2]
+                            pixels = pixels.copy()
+                            cv2.rectangle(pixels, (round(box[1]*w), round(box[2]*h)),
+                                          (round(box[3]*w), round(box[4]*h)),
+                                          (32, 128, 255) if box[0] == 2 else (255, 192, 32), 2)
                     if pixels is not None:
                         pixels = apply_overlay(pixels, record.get('overlays', [{}] * 5)[i])
                     if i == 0:  # RGB sensor, before other streams/still captures
@@ -706,6 +732,11 @@ def main():
                 for future in futures:
                     sock.sendall(future.result() if future else struct.pack('!II', 0, 0))
                 sock.sendall(exposure)
+                if record.get('tracking_frame'):
+                    if tracking_pixels is None:
+                        raise RuntimeError('tracking source unavailable')
+                    sock.sendall(struct.pack('!II', tracking_pixels.shape[1], tracking_pixels.shape[0]) +
+                                 tracking_pixels.tobytes())
                 if record.get('raw_thermal'):
                     if not terrain_mode or not record['thermal'][1]:
                         raise ValueError('raw terrain requested without a thermal terrain renderer')

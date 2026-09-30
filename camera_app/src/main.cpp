@@ -233,9 +233,11 @@ static void log_unknown_siyi(const struct ca_siyi_packet *packet)
            packet->payload_length, payload_hex);
 }
 
+struct siyi_request_context { ca_backend *backend; ca_media *media; };
 static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
 {
-    struct ca_backend *backend = (struct ca_backend*)(opaque);
+    auto &context = *static_cast<siyi_request_context *>(opaque);
+    auto *backend = context.backend;
     struct ca_siyi_packet packet;
     size_t consumed = 0U;
     if (ca_siyi_parse_one(raw, length, &packet, &consumed) != 1 ||
@@ -244,6 +246,12 @@ static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
         return -1;
     }
     if (!ca_siyi_opcode_known(packet.opcode)) log_unknown_siyi(&packet);
+    if (packet.opcode == 0x07 || packet.opcode == 0x08 || packet.opcode == 0x0e ||
+        packet.opcode == 0x40 ||
+        (packet.opcode == 0x0c && packet.payload_length == 1 &&
+         packet.payload[0] >= 3 && packet.payload[0] <= 5)) {
+        ca_media_tracking_stop(context.media);
+    }
     if (ca_backend_handle_siyi(backend, raw, length) < 0) {
         ca_log("opcode 0x%02x failed: %s", packet.opcode, strerror(errno));
         return -1;
@@ -597,8 +605,9 @@ int APC_CameraApp::run(int argc, char **argv)
             ca_log("SIYI server descriptor failed");
             return result;
         }
+        siyi_request_context siyi_context {_backend, _media};
         if (((items[0].revents & POLLIN) != 0 || items[0].fd < 0) &&
-            ca_siyi_server_handle(_server, handle_siyi_request, _backend) < 0) {
+            ca_siyi_server_handle(_server, handle_siyi_request, &siyi_context) < 0) {
             ca_log("SIYI server failed: %s", strerror(errno));
             return result;
         }
@@ -617,6 +626,7 @@ int APC_CameraApp::run(int argc, char **argv)
 #if APCAM_HAVE_SIYI
         ca_unigcs_update(_unigcs, _backend, _manual.active);
 #endif
+        ca_media_tracking_update(_media, _backend, _manual.active);
         _network_capture.configure(ca_media_settings(_media)->network_capture);
     }
     result = 0;
@@ -631,6 +641,7 @@ APC_CameraApp::~APC_CameraApp()
     _network_capture.close();
     ca_manual_control_close(&_manual);
     ca_mavlink_server_close(_mavlink_server);
+    ca_media_tracking_stop(_media);
 #if APCAM_HAVE_SIYI
     ca_unigcs_close(_unigcs);
 #endif

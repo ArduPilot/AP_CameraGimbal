@@ -347,7 +347,8 @@ Settings use existing media/backend operations. Image controls, palette,
 and automatic recording persist through the shared parameter
 metadata/INI machinery. Other live controls retain their existing persistence
 semantics. Unsupported operations are logged once per command and are not
-acknowledged as successful. AI availability is reported as off. The startup
+acknowledged as successful. Region-tracking availability follows the raw-frame
+path and worker. The startup
 catalogue query returns zero classes and an empty name list, so a client can
 complete the query without being told that stock tracking models are present.
 
@@ -356,8 +357,8 @@ the selected model's device ID, not the ArduPilot build version. `16/E1` preserv
 V1.0.5 layout, including its duplicate ISO byte. Encoder queries report current
 sizes/codecs/frame rates and the MT11 encoder's nominal bitrate policy; the
 SITL renderer does not use that hardware bitrate policy. Encoder *setters* are
-not enabled yet. RGB/thermal selection supports the implemented single-image
-modes, not compositing or independent secondary sensor selection.
+not enabled yet. MT11 supports RGB, thermal and side-by-side composition;
+independent secondary sensor selection is not exposed.
 
 The table below comes from the stock executable dispatch table, not guessed
 opcode correspondence with the public SDK. Stock SHA-256:
@@ -444,16 +445,45 @@ named handler. These mappings alone do not establish complete payload layouts.
 
 ## Remaining work before full GUI acceptance
 
-- Decode remaining native link-11 modes, rangefinder and telemetry subscriptions;
+- Decode remaining native link-11 modes and telemetry subscriptions;
   add stateful simulator handling with captured command/reply fixtures.
 - Verify the complete UniGCS GUI startup and exercise each implemented control.
 - Implement encoder setters, remaining image/composition controls, temperature
   point/rectangle requests, thermal shutter/calibration and storage operations.
-- Implement the underlying AI capabilities before exposing tracking/model
-  controls; protocol replies alone cannot provide these functions.
+- Object classification and model management remain unsupported; rectangle
+  tracking uses dlib without a classifier or pretrained weights.
 - Capture media browsing/download, network configuration and any additional
   services used by those GUI screens. The initial session only exercised
   discovery, private control and RTSP.
 
 The stock MT11 remains available for read-only queries and controlled captures.
 Testing the new application on hardware comes after the initial SITL GUI pass.
+
+## Rectangle tracking, scenes and range
+
+The shared [image tracker](image-tracking.md) supports UniGCS region selection
+and MAVLink rectangle commands. Camera-version query `16/94` appends an AI
+version and type `87` when the frame path is available. This exposes region
+tracking on A8/ZR10 without claiming the stock object-classifier features.
+MT11's model ID already enables its tracking UI; it receives the same extension.
+
+`16/A2` queries enable state; `16/A3 01` enables selection (`01 00` reply).
+`16/AA` takes enable plus four little-endian 16-bit encoder-pixel coordinates.
+Both drag directions are accepted. Its reply acknowledges a queued selection;
+`16/AC 00` is emitted only after image acquisition, `AC 01` on loss/cancel.
+`AA` with nine zero bytes cancels either protocol's target. A disconnect stops
+only a SIYI-owned target. Live video contains the rectangle overlay.
+
+MT11 `16/93` selects visible (`00 00`), thermal (`02 00`) or side-by-side
+(`03 00`); replies/`16/92` state are `00 02`, `02 00`, `03 02` respectively.
+The visible scene remains `00` (Zoom) when the MT11 uses its wide RGB sensor
+at low zoom. Scene `01` (Wide) is a different UniGCS UI and hides the target
+button; the physical RGB sensor must not determine the reported scene.
+The native combined view uses the SDK scaler with aspect-preserving padding.
+Tracking spanning two sensor images is rejected in combined mode.
+
+MT11 measure commands remain a transparent gimbal-MCU service: `11/BA`
+queries state/type, `11/BB 01/00` enables/disables ranging; subscribed `11/89`
+distance and `11/B0` coordinate notifications return to the requesting client.
+SITL implements that exchange, including stopping periodic updates when disabled.
+A8/ZR10 do not acquire nonexistent thermal sensors or lidar capabilities.

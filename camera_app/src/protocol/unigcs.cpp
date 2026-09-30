@@ -66,6 +66,7 @@ struct ca_unigcs {
     bool recording=false, reply_enabled=true;
     bool gimbal_requested[256] {};
     bool unsupported[256] {};
+    bool tracking_enabled=false, tracking_reported=false, tracking_pending=false;
 };
 
 static uint64_t now_ms()
@@ -79,6 +80,9 @@ static void put32(uint8_t *p,uint32_t v) { for(unsigned i=0;i<4;i++) p[i]=v>>(8*
 
 static void disconnect(ca_unigcs *s)
 {
+    ca_media_tracking_stop(s->media,CA_TRACK_OWNER_SIYI);
+    s->tracking_enabled=s->tracking_reported=false;
+    s->tracking_pending=false;
     if(APCAM_ZOOM_NATIVE_RATE && s->zoom_direction && s->backend)
         (void)ca_backend_set_zoom_rate(s->backend,0);
     if(s->focusing && s->media) (void)ca_media_manual_focus(s->media,0);
@@ -195,8 +199,9 @@ static void image_slots(ca_unigcs *s,uint8_t *p)
     (void)s;
     p[0]=p[1]=0;
 #else
-    p[0]=ca_media_thermal_main(s->media) ? 2 :
-        ca_media_lens(s->media)==CA_MEDIA_LENS_WIDE ? 1 : 0;
+    // MT11's visible scene is Zoom across both physical RGB sensors. Reporting
+    // Wide at low zoom selects a different UniGCS UI which hides tracking.
+    p[0]=ca_media_side_by_side(s->media) ? 3 : ca_media_thermal_main(s->media) ? 2 : 0;
     p[1]=p[0]==2 ? 0 : 2;
 #endif
 }
@@ -236,8 +241,10 @@ static void encoder(ca_unigcs *s,uint8_t id,uint8_t *out)
     out[0]=id;
     out[1]=id==0 ? 1 : ((id==1 ? cfg.main_codec : cfg.sub_codec)==CA_VIDEO_H265 ? 2 : 1);
 #ifdef CAMERA_APP_SITL
-    // The current simulator encodes its dedicated thermal source as H.264.
-    if(id==2 && thermal) out[1]=1;
+    // SITL routes the dedicated thermal encoder to either RTSP stream.
+    // That source and the visible substream both use the substream codec.
+    if(id!=0 && (thermal || ca_media_thermal_main(s->media)))
+        out[1]=cfg.sub_codec==CA_VIDEO_H265 ? 2 : 1;
 #endif
     put16(out+2,width); put16(out+4,height);
     put16(out+6,width>=3840 || height>=2160 ? 12000 : width>=1920 || height>=1080 ? 4096 : 2048);
@@ -258,7 +265,9 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         if(n) break;
         // Protocol compatibility version and model-specific product ID (not AP build ID).
         out[0]=12; out[2]=1; out[3]=product_id;
-        reply(s,0x94,out,4); return;
+        // AI type 87 exposes region tracking without the classifier/settings UI.
+        if(ca_media_tracking_available(s->media)) { out[6]=1; out[7]=0x87; }
+        reply(s,0x94,out,out[7]?8:4); return;
     case 0x80:
         if(n) break;
         out[0]=ca_media_recording(s->media) ? 1 : 0;
@@ -306,7 +315,11 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         image_slots(s,out); reply(s,0x92,out,2); return;
     case 0x93: {
 #if APCAM_HAVE_THERMAL
-        if(n!=2 || !((p[0]<=1 && p[1]==2) || (p[0]==2 && p[1]==0))) break;
+        if(n==2 && p[0]==3 && p[1]==0) {
+            if(ca_media_set_side_by_side(s->media,true)<0) break;
+            image_slots(s,out); reply(s,0x93,out,2); return;
+        }
+        if(n!=2 || !((p[0]<=1 && (p[1]==2 || p[1]==0)) || (p[0]==2 && p[1]==0))) break;
         const bool thermal=ca_media_thermal_main(s->media);
         int result=ca_media_set_thermal_main(s->media,p[0]==2);
         if(result==0 && p[0]!=2) result=ca_media_set_lens(s->media,p[0]==1 ? CA_MEDIA_LENS_WIDE : CA_MEDIA_LENS_ZOOM);
@@ -376,8 +389,39 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         reply(s,0xd2,out,2); return;
     case 0xa2:
         if(n) break;
-        // No AI tracker exists in our media backend.
+        out[0]=s->tracking_enabled;
         reply(s,0xa2,out,1); return;
+    case 0xa3:
+        if(n!=1 || p[0]>1) break;
+        if(p[0] && !ca_media_tracking_available(s->media)) { out[1]=1; }
+        else {
+            s->tracking_enabled=p[0]!=0;
+            if(!p[0]) ca_media_tracking_stop(s->media,CA_TRACK_OWNER_SIYI);
+        }
+        out[0]=s->tracking_enabled;
+        reply(s,0xa3,out,2); return;
+    case 0xaa: {
+        if(n!=9 || p[0]>1) break;
+        if(!p[0]) { ca_media_tracking_stop(s->media); out[0]=1; }
+        else if(!s->tracking_enabled) out[0]=2;
+        else if(!ca_media_tracking_available(s->media)) out[0]=7;
+        else if(ca_media_side_by_side(s->media)) out[0]=3;
+        else if(s->manual) out[0]=6;
+        else {
+            unsigned width=0,height=0;
+            uint8_t geometry[9]; encoder(s,1,geometry);
+            width=u16(geometry+2); height=u16(geometry+4);
+            const unsigned x0=u16(p+1),y0=u16(p+3),x1=u16(p+5),y1=u16(p+7);
+            if(!width || !height || x0>width || x1>width || y0>height || y1>height) out[0]=0;
+            else {
+                ca_tracking_rect rect={float(std::min(x0,x1))/width,float(std::min(y0,y1))/height,
+                    float(std::max(x0,x1))/width,float(std::max(y0,y1))/height};
+                out[0]=ca_media_tracking_start(s->media,rect,CA_TRACK_OWNER_SIYI)==0?1:8;
+                s->tracking_pending=out[0]==1;
+            }
+        }
+        reply(s,0xaa,out,1); return;
+    }
     case 0xd5:
         if(n!=1 || p[0]!=3) break;
         // Catalogue query: operation, model ID, class count, masks, and
@@ -439,6 +483,8 @@ static void request(void *opaque,const ca_private_frame *f)
     if(s->manual && !(f->payload_length==0 &&
        (f->command==0xa0 || f->command==0xb4 || f->command==0xc2))) return;
     s->gimbal_requested[f->command]=true;
+    if(f->command==0x9a || f->command==0x9b)
+        ca_media_tracking_stop(s->media);
     if(ca_backend_handle_private(s->backend,f)<0)
         ca_log("UniGCS gimbal forwarding failed: %s",strerror(errno));
 }
@@ -650,6 +696,13 @@ void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual)
         break;
     }
     if(s->client>=0 && now_ms()-s->last_request>=5000) disconnect(s);
+    const auto tracking=ca_media_tracking_status(s->media);
+    const bool tracked=tracking.owner==CA_TRACK_OWNER_SIYI &&
+        (tracking.state==CA_TRACK_ACTIVE || tracking.state==CA_TRACK_COASTING);
+    if(tracked!=s->tracking_reported || (s->tracking_pending && tracking.state==CA_TRACK_LOST)) {
+        const uint8_t state=tracked?0:1;
+        reply(s,0xac,&state,1); s->tracking_reported=tracked; s->tracking_pending=false;
+    }
     request_time(s);
     if(s->client>=0 && s->zoom_direction && now_ms()-s->zoom_tick>=50) {
         s->zoom_tick=now_ms();

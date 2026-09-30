@@ -83,6 +83,8 @@ void APC_Media::_monitor_exposure()
 }
 void APC_Media::_stop_controls_monitor()
 {
+    _tracking.stop();
+    _tracking.close();
     if (!_controls_running && !_exposure_running) return;
     {
         APC_LockGuard guard(_controls_lock);
@@ -98,6 +100,7 @@ void APC_Media::_stop_controls_monitor()
 void APC_Media::_start_controls_monitor()
 {
     if (!_backend || _controls_running || _exposure_running) return;
+    (void)_tracking.open(_backend.get());
     _controls_stop=false;
     _cached_thermal=false;
     int error = pthread_create(&_exposure_thread, nullptr, [](void *opaque) -> void * {
@@ -161,6 +164,7 @@ struct APC_Media::LiveControls {
     float lens_zoom[2];
     enum ca_media_lens lens;
     bool thermal_main;
+    bool side_by_side;
     int gain, palette;
 };
 
@@ -181,6 +185,7 @@ int APC_Media::_restore_controls(const LiveControls *state)
     }
     if (_camera.has_thermal()) {
         if (_backend->set_thermal_main(state->thermal_main) < 0) result = -1;
+        if (_backend->set_side_by_side(state->side_by_side) < 0) result = -1;
         if (state->gain >= 0 && _backend->set_thermal_gain((uint8_t)state->gain) < 0) result = -1;
         if (state->palette >= 0 && _backend->set_thermal_palette((uint8_t)state->palette) < 0) result = -1;
     }
@@ -210,6 +215,7 @@ int APC_Media::configure(const struct ca_config *settings)
             }
             state.lens = _backend->lens();
             state.thermal_main = _backend->thermal_main();
+            state.side_by_side = _backend->side_by_side();
             uint8_t value;
             if (_camera.has_thermal() && _backend->get_thermal_gain(&value) == 0) state.gain = value;
             if (_camera.has_thermal() && _backend->get_thermal_palette(&value) == 0) state.palette = value;
@@ -338,6 +344,8 @@ unsigned APC_Media::frame_rate(bool thermal) const
 int APC_Media::set_lens(enum ca_media_lens lens)
 {
     REQUIRE_IMPL;
+    if(_backend->side_by_side() && lens!=_backend->lens() && _backend->set_side_by_side(false)<0) return -1;
+    if(lens!=_backend->lens()) _tracking.stop();
     int result=_backend->set_lens(lens);
     int saved=errno;
     _apply_overlay_after_control("lens change");
@@ -349,6 +357,8 @@ enum ca_media_lens APC_Media::lens() const
 int APC_Media::set_thermal_main(bool thermal_main)
 {
     REQUIRE_IMPL;
+    if(_backend->side_by_side() && _backend->set_side_by_side(false)<0) return -1;
+    if(thermal_main!=_backend->thermal_main()) _tracking.stop();
     int result=_backend->set_thermal_main(thermal_main);
     int saved=errno;
     _apply_overlay_after_control("video source change");
@@ -357,6 +367,14 @@ int APC_Media::set_thermal_main(bool thermal_main)
 }
 bool APC_Media::thermal_main() const
 { return _backend && _backend->thermal_main(); }
+int APC_Media::set_side_by_side(bool enabled)
+{
+    REQUIRE_IMPL;
+    _tracking.stop();
+    const int result=_backend->set_side_by_side(enabled);
+    if(result==0) _apply_overlay_after_control("scene");
+    return result;
+}
 int APC_Media::autofocus(uint16_t x, uint16_t y)
 { REQUIRE_IMPL; return _backend->autofocus(x, y); }
 int APC_Media::manual_focus(int direction)
@@ -428,12 +446,28 @@ int APC_Media::set_thermal_palette(uint8_t palette)
 int APC_Media::set_inverted(bool inverted)
 {
     REQUIRE_IMPL;
+    if(inverted!=_inverted) _tracking.stop();
     if (_backend->set_inverted(inverted) < 0) return -1;
     _inverted = inverted;
     return 0;
 }
 
 // Legacy protocol entry points; new services can use APC_Media directly.
+bool ca_media_tracking_available(ca_media *media)
+{ return media && media->tracking().available(); }
+int ca_media_tracking_start(ca_media *media, ca_tracking_rect rect, ca_tracking_owner owner)
+{ if(!media) { errno=ENODEV; return -1; } if(media->side_by_side()) { errno=ENOTSUP; return -1; }
+  return media->tracking().start(rect,owner); }
+int ca_media_set_side_by_side(ca_media *media,bool enabled)
+{ if(!media) { errno=ENODEV; return -1; } return media->set_side_by_side(enabled); }
+bool ca_media_side_by_side(const ca_media *media)
+{ return media && media->side_by_side(); }
+void ca_media_tracking_stop(ca_media *media, ca_tracking_owner owner)
+{ if(media) media->tracking().stop(owner); }
+ca_tracking_status ca_media_tracking_status(ca_media *media)
+{ return media?media->tracking().status():ca_tracking_status{}; }
+void ca_media_tracking_update(ca_media *media, ca_backend *backend, bool manual)
+{ if(media) media->tracking().update(backend,manual,media->hfov(media->thermal_main())); }
 int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
 {
     if (!media) { errno = EINVAL; return -1; }

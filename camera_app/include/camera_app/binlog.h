@@ -15,7 +15,8 @@ enum ca_binlog_id { CA_LOG_PARM=129, CA_LOG_MSG, CA_LOG_POS, CA_LOG_ATT,
     CA_LOG_CAM, CA_LOG_VID, CA_LOG_GCMD, CA_LOG_STAT, CA_LOG_TIME, CA_LOG_ROI,
     CA_LOG_PRMA, CA_LOG_VEND, CA_LOG_AE, CA_LOG_SYS,
     CA_LOG_MAVC, CA_LOG_GMBC, CA_LOG_MAVP, CA_LOG_MAVH,
-    CA_LOG_SIIN, CA_LOG_SIOU, CA_LOG_XFIN, CA_LOG_XFOU };
+    CA_LOG_SIIN, CA_LOG_SIOU, CA_LOG_XFIN, CA_LOG_XFOU,
+    CA_LOG_TRKF, CA_LOG_TFRA };
 enum ca_packet_protocol { CA_PACKET_SIYI=1, CA_PACKET_MT11, CA_PACKET_SIYI_MCU,
                           CA_PACKET_XFROBOT, CA_PACKET_XFROBOT_MCU, CA_PACKET_SIYI_LONG };
 enum ca_packet_link { CA_PACKET_UDP=1, CA_PACKET_TCP, CA_PACKET_UART,
@@ -37,6 +38,12 @@ struct __attribute__((packed)) ca_log_msg { uint64_t time_us; char text[64]; };
 struct __attribute__((packed)) ca_log_pos { uint64_t time_us; uint32_t boot_ms; int32_t lat, lon; float alt, relalt, vn, ve, vd; uint8_t source_system, source_component; };
 struct __attribute__((packed)) ca_log_att { uint64_t time_us; uint32_t boot_ms; uint8_t source; float roll,pitch,yaw,rollrate,pitchrate,yawrate; uint8_t source_system, source_component; };
 struct __attribute__((packed)) ca_log_gimb { uint64_t time_us, sample_us; float roll,pitch,yaw,rollrate,pitchrate,yawrate; };
+struct __attribute__((packed)) ca_log_trkf {
+    uint64_t time_us, frame_ms;
+    uint8_t state;
+    float quality, pitch_error, yaw_error, pitch_rate, yaw_rate, roll, pitch, yaw, hfov;
+};
+struct __attribute__((packed)) ca_log_tfra { uint64_t time_us, pts_us, sdk_us; };
 struct __attribute__((packed)) ca_log_pid { uint64_t time_us; float target,actual,rate,ff,error,p,i,d,output,dt,age; };
 struct __attribute__((packed)) ca_log_mode { uint64_t time_us; uint32_t flight_mode; uint8_t armed,mode,method,yawlock,recording,system; };
 struct __attribute__((packed)) ca_log_cmd { uint64_t time_us; uint16_t command; uint8_t system,component,result; float p1,p2,p3,p4,p5,p6,p7; };

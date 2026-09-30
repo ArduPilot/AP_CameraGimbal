@@ -3,6 +3,7 @@
 #include "apcam/compiler.h"
 #include "apcam/atomic.h"
 #include "camera_app/exposure.h"
+#include "camera_app/image_tracker.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,6 +32,7 @@ APC_STATIC_ASSERT(sizeof(struct ca_z1_overlay_request) == 8, "overlay request AB
 /* Reject legacy one-byte toggles even when eight accumulate into a request. */
 #define CA_Z1_NATIVE_OVERLAY_VERSION 0xa5U
 #define CA_Z1_NATIVE_AE_MAGIC UINT32_C(0x31454143)
+#define CA_Z1_NATIVE_LUMA_MAGIC UINT32_C(0x314d554c)
 #define CA_Z1_NATIVE_MAX_FRAME (8U * 1024U * 1024U)
 struct ca_z1_native_header {
     uint32_t magic, size;
@@ -40,8 +42,10 @@ struct ca_z1_native_header {
 APC_STATIC_ASSERT(sizeof(struct ca_z1_native_header) == 24, "native frame ABI");
 typedef void (*ca_z1_native_frame_fn)(void *, const uint8_t *, size_t, uint64_t, bool, unsigned);
 typedef void (*ca_z1_native_exposure_fn)(void *, const struct ca_exposure *);
+typedef void (*ca_z1_native_tracking_fn)(void *, const ca_tracking_frame &);
 typedef int (*ca_z1_native_run_fn)(const atomic_bool *, ca_z1_native_frame_fn, void *);
 int ca_z1_native_receive(const char *helper, const atomic_bool *stop,
                          ca_z1_native_frame_fn publish, ca_z1_native_exposure_fn exposure, void *opaque,
-                         struct ca_z1_overlay_control *overlay, bool inverted);
+                         struct ca_z1_overlay_control *overlay, bool inverted,
+                         ca_z1_native_tracking_fn tracking=nullptr);
 #endif

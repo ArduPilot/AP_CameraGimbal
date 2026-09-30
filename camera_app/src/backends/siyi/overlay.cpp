@@ -28,74 +28,90 @@
 #endif
 struct ca_overlay_hw {
     MI_TYPE(rgn_impl) mi;
-    bool initialized, created[3], attached[3];
-    unsigned width[3], height[3];
+    bool initialized, created[3][CA_OVERLAY_REGIONS], attached[3][CA_OVERLAY_REGIONS];
+    unsigned width[3][CA_OVERLAY_REGIONS], height[3][CA_OVERLAY_REGIONS];
+    ca_overlay_channel previous[3];
 };
-static void clear(struct ca_overlay_hw *hw,unsigned c)
+static unsigned handle(unsigned c,unsigned r) { return c*CA_OVERLAY_REGIONS+r; }
+static void clear(struct ca_overlay_hw *hw,unsigned c,unsigned r)
 {
     MI_TYPE(sys_bind) dest=MI_DEST(c);
-    if (hw->attached[c]) (void)MI_CALL(hw,fnDetachChannel,c,&dest);
-    if (hw->created[c]) (void)MI_CALL(hw,fnDestroyRegion,c);
-    hw->attached[c]=hw->created[c]=false;
-    hw->width[c]=hw->height[c]=0;
+    const unsigned h=handle(c,r);
+    if(hw->attached[c][r]) (void)MI_CALL(hw,fnDetachChannel,h,&dest);
+    if(hw->created[c][r]) (void)MI_CALL(hw,fnDestroyRegion,h);
+    hw->attached[c][r]=hw->created[c][r]=false;
 }
 void ca_overlay_hw_close(struct ca_overlay_hw *hw)
 {
-    if (!hw) return;
-    for (unsigned c=0;c<3;c++) clear(hw,c);
-    if (hw->initialized) (void)MI_DEINIT(hw);
+    if(!hw) return;
+    for(unsigned c=0;c<3;c++) for(unsigned r=0;r<CA_OVERLAY_REGIONS;r++) clear(hw,c,r);
+    if(hw->initialized) (void)MI_DEINIT(hw);
     MI_TYPE(rgn_unload)(&hw->mi);
     free(hw);
 }
 int ca_overlay_hw_set(struct ca_overlay_hw **out,const struct ca_overlay_channel *channels,unsigned count)
 {
-    if (count>3) { errno=EINVAL; return -1; }
+    if(count>3) { errno=EINVAL; return -1; }
     bool enabled=false;
-    for (unsigned c=0;c<count;c++) enabled |= channels[c].cross;
-    if (!enabled) { ca_overlay_hw_close(*out); *out=NULL; return 0; }
+    for(unsigned c=0;c<count;c++) enabled |= channels[c].cross || channels[c].tracking;
+    if(!enabled) {
+        // Keep the SDK loaded until pipeline shutdown. On A8, repeated
+        // Init/DeInit/dlclose cycles leak /dev/mi_rgn descriptors and eventually
+        // assert in the vendor wrapper. Stale tracking frames can hide the box
+        // several times a second, so removing its regions must not unload RGN.
+        if(*out) {
+            for(unsigned c=0;c<3;c++) for(unsigned r=0;r<CA_OVERLAY_REGIONS;r++) clear(*out,c,r);
+            memset((*out)->previous,0,sizeof((*out)->previous));
+        }
+        return 0;
+    }
     int error=0;
-    struct ca_overlay_hw *hw;
-    if (!*out) {
-        struct ca_overlay_hw *hw=(struct ca_overlay_hw *)calloc(1,sizeof(*hw));
-        if (!hw) return -1;
-        *out=hw;
-        if ((error=MI_TYPE(rgn_load)(&hw->mi))) goto fail;
-        MI_TYPE(rgn_pal) palette= {};
-        if ((error=MI_CALL(hw,fnInit,&palette))) goto fail;
+    ca_overlay_hw *hw;
+    if(!*out) {
+        *out=static_cast<ca_overlay_hw *>(calloc(1,sizeof(ca_overlay_hw)));
+        if(!*out) return -1;
+        hw=*out;
+        if((error=MI_TYPE(rgn_load)(&hw->mi))) goto fail;
+        MI_TYPE(rgn_pal) palette {};
+        if((error=MI_CALL(hw,fnInit,&palette))) goto fail;
         hw->initialized=true;
     }
     hw=*out;
-    for (unsigned c=0;c<count;c++) {
-        const struct ca_overlay_channel *s=&channels[c];
-        if (!s->cross) { clear(hw,c); continue; }
-        if (hw->attached[c] && hw->width[c]==s->width && hw->height[c]==s->height) continue;
-        clear(hw,c);
+    for(unsigned c=0;c<count;c++) {
+        const auto &s=channels[c];
+        if(!memcmp(&s,&hw->previous[c],sizeof(s))) continue;
         struct ca_overlay_geometry g;
-        struct ca_overlay_bitmap bits[CA_OVERLAY_REGIONS];
-        ca_overlay_geometry(&g,s->width,s->height,true,false,0);
-        if (ca_overlay_bitmaps(bits,s->width,s->height,&g)<0) { error=-1; goto fail; }
-        struct ca_overlay_bitmap *b=&bits[0];
-        if (!b->pixels) { ca_overlay_free(bits); error=-ENOMEM; goto fail; }
-        MI_TYPE(rgn_cnf) config={.type=(MI_TYPE(rgn_type))0,.pixFmt=(MI_TYPE(rgn_pixfmt))0,.size={b->width,b->height}};
-        error=MI_CALL(hw,fnCreateRegion,c,&config);
-        if (!error) {
-            hw->created[c]=true;
-            MI_TYPE(rgn_bmp) bitmap={.pixFmt=(MI_TYPE(rgn_pixfmt))0,.size={b->width,b->height},.data=b->pixels};
-            error=MI_CALL(hw,fnSetBitmap,c,&bitmap);
-        }
-        if (!error) {
+        ca_overlay_bitmap bits[CA_OVERLAY_REGIONS];
+        ca_overlay_geometry(&g,s.width,s.height,s.cross,false,0);
+        if(s.tracking) ca_overlay_tracking(&g,s.width,s.height,s.rect);
+        if(ca_overlay_bitmaps(bits,s.width,s.height,&g)<0) { error=-1; goto fail; }
+        for(unsigned r=0;r<CA_OVERLAY_REGIONS;r++) {
+            auto &b=bits[r]; const unsigned h=handle(c,r);
+            if(!b.pixels) { clear(hw,c,r); continue; }
+            if(hw->created[c][r] && (hw->width[c][r]!=b.width || hw->height[c][r]!=b.height)) clear(hw,c,r);
+            if(!hw->created[c][r]) {
+                MI_TYPE(rgn_cnf) config={.type=(MI_TYPE(rgn_type))0,.pixFmt=(MI_TYPE(rgn_pixfmt))0,.size={b.width,b.height}};
+                error=MI_CALL(hw,fnCreateRegion,h,&config);
+                if(error) break;
+                hw->created[c][r]=true; hw->width[c][r]=b.width; hw->height[c][r]=b.height;
+            }
+            MI_TYPE(rgn_bmp) bitmap={.pixFmt=(MI_TYPE(rgn_pixfmt))0,.size={b.width,b.height},.data=b.pixels};
+            error=MI_CALL(hw,fnSetBitmap,h,&bitmap);
+            if(error) break;
             MI_TYPE(sys_bind) dest=MI_DEST(c);
-            MI_TYPE(rgn_chn) display={.show=1,.point={b->x,b->y}};
-            display.osd.bgFgAlpha[0]=0;
-            display.osd.bgFgAlpha[1]=255;
-            error=MI_CALL(hw,fnAttachChannel,c,&dest,&display);
-            if (!error) { hw->attached[c]=true; hw->width[c]=s->width; hw->height[c]=s->height; }
+            MI_TYPE(rgn_chn) display={.show=1,.point={b.x,b.y}};
+            display.osd.bgFgAlpha[0]=0; display.osd.bgFgAlpha[1]=255;
+            error=hw->attached[c][r]?MI_CALL(hw,fnSetChannelConfig,h,&dest,&display):
+                MI_CALL(hw,fnAttachChannel,h,&dest,&display);
+            if(error) break;
+            hw->attached[c][r]=true;
         }
         ca_overlay_free(bits);
-        if (error) goto fail;
+        if(error) goto fail;
+        hw->previous[c]=s;
     }
     return 0;
 fail:
-    ca_log("SigmaStar overlay failed: 0x%x",(unsigned)(error ? error : errno));
-    ca_overlay_hw_close(*out); *out=NULL; errno=EIO; return -1;
+    ca_log("SigmaStar overlay failed: 0x%x",unsigned(error?error:errno));
+    ca_overlay_hw_close(*out); *out=nullptr; errno=EIO; return -1;
 }

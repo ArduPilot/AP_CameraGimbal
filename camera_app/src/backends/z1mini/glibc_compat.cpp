@@ -9,6 +9,24 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+
+/* dlib uses double-precision exp/pow. The toolchain's libm defaults to
+ * GLIBC_2.29 implementations; the original ARM symbols have the same calling
+ * convention and are available on the camera's glibc 2.25.
+ */
+extern "C" double z1_old_exp(double);
+extern "C" double z1_old_pow(double, double);
+__asm__(".symver z1_old_exp,exp@GLIBC_2.4");
+__asm__(".symver z1_old_pow,pow@GLIBC_2.4");
+extern "C" double __wrap_exp(double value)
+{
+    return z1_old_exp(value);
+}
+extern "C" double __wrap_pow(double base, double exponent)
+{
+    return z1_old_pow(base, exponent);
+}
+
 extern "C" int z1_old_fcntl(int, int, ...);
 __asm__(".symver z1_old_fcntl,fcntl@GLIBC_2.4");
 extern "C" int __wrap_fcntl(int fd, int command, ...)

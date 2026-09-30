@@ -23,6 +23,7 @@
 #include "camera_app/video_fov.h"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <errno.h>
 #include <ifaddrs.h>
 #include <math.h>
@@ -136,6 +137,8 @@ struct ca_mavlink_server {
     uint64_t last_heartbeat_ms;
     uint64_t last_attitude_request_ms;
     uint64_t last_attitude_status_ms;
+    uint64_t last_image_tracking_ms;
+    uint32_t image_tracking_interval_ms;
     uint64_t last_telemetry_request_ms;
     uint64_t last_target_location_ms;
     uint64_t vehicle_attitude_updated_ms;
@@ -607,6 +610,8 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
     info.cam_definition_version = server->definition_version;
+    if(ca_media_tracking_available(server->media))
+        info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
     info.gimbal_device_id = server->gimbal_component_id;
 #if APCAM_HAVE_THERMAL
     info.flags |= CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE;
@@ -864,7 +869,7 @@ static void send_camera_fov(struct ca_mavlink_server *server, const struct route
 #endif
     status.hfov = ca_media_hfov(server->media, thermal);
     status.vfov = ca_video_vfov(status.hfov, width, height);
-    if (!(status.hfov > 0 && status.hfov < 180))
+    if (ca_media_side_by_side(server->media) || !(status.hfov > 0 && status.hfov < 180))
         status.hfov = status.vfov = NAN;
     else if (!(status.vfov > 0)) status.vfov = NAN;
     mavlink_message_t message;
@@ -1220,6 +1225,12 @@ static float bounded(float value, float limit)
 
 static void update_target_location(struct ca_mavlink_server *server, uint64_t now)
 {
+    const auto image=ca_media_tracking_status(server->media);
+    if(image.state==CA_TRACK_ACQUIRING || image.state==CA_TRACK_ACTIVE || image.state==CA_TRACK_COASTING) {
+        server->target_location_active=false;
+        stop_tracking_rate(server);
+        return;
+    }
     if (server->manual_control && *server->manual_control) return;
     bool rate = server->settings.tracking_method == CA_TRACK_RATE;
     unsigned interval = rate ? 50U : TARGET_LOCATION_INTERVAL_MS;
@@ -1484,12 +1495,46 @@ static void send_protocol_capabilities(struct ca_mavlink_server *server,
     (void)send_message(server, route, &message);
 }
 
+static void send_image_tracking(struct ca_mavlink_server *server, const struct route *route)
+{
+    const auto s=ca_media_tracking_status(server->media);
+    const bool active=s.state==CA_TRACK_ACTIVE || s.state==CA_TRACK_COASTING;
+    mavlink_camera_tracking_image_status_t status {};
+    status.tracking_status=active?CAMERA_TRACKING_STATUS_FLAGS_ACTIVE:
+        s.state==CA_TRACK_LOST?CAMERA_TRACKING_STATUS_FLAGS_ERROR:CAMERA_TRACKING_STATUS_FLAGS_IDLE;
+    if(s.state==CA_TRACK_COASTING) status.tracking_status|=CAMERA_TRACKING_STATUS_FLAGS_COASTING;
+    status.tracking_mode=active?CAMERA_TRACKING_MODE_RECTANGLE:CAMERA_TRACKING_MODE_NONE;
+    status.target_data=CAMERA_TRACKING_TARGET_DATA_IN_STATUS;
+    status.point_x=status.point_y=status.radius=NAN;
+    // A predicted rectangle may partly leave the image during coasting.
+    status.rec_top_x=active?std::clamp(s.rect.left,0.f,1.f):NAN;
+    status.rec_top_y=active?std::clamp(s.rect.top,0.f,1.f):NAN;
+    status.rec_bottom_x=active?std::clamp(s.rect.right,0.f,1.f):NAN;
+    status.rec_bottom_y=active?std::clamp(s.rect.bottom,0.f,1.f):NAN;
+    mavlink_message_t message;
+    mavlink_msg_camera_tracking_image_status_encode_status(server->system_id,server->camera_component_id,
+        &server->encode_status,&message,&status);
+    if(route) (void)send_message(server,route,&message); else broadcast_message(server,&message);
+}
+
 static uint8_t handle_camera_command(struct ca_mavlink_server *server,
                                      const struct route *route,
                                      const mavlink_message_t *message,
                                      uint16_t command, const float params[7])
 {
     switch (command) {
+    case MAV_CMD_CAMERA_TRACK_RECTANGLE: {
+        if(!ca_media_tracking_available(server->media)) return MAV_RESULT_UNSUPPORTED;
+        if(server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
+        const ca_tracking_rect rect={params[0],params[1],params[2],params[3]};
+        if(ca_media_tracking_start(server->media,rect,CA_TRACK_OWNER_MAVLINK)<0) return MAV_RESULT_DENIED;
+        server->target_location_active=false; stop_tracking_rate(server);
+        return MAV_RESULT_ACCEPTED;
+    }
+    case MAV_CMD_CAMERA_STOP_TRACKING:
+        ca_media_tracking_stop(server->media);
+        send_image_tracking(server,route);
+        return MAV_RESULT_ACCEPTED;
     case MAV_CMD_REQUEST_MESSAGE: {
         if (!isfinite(params[0]) || params[0] < 0 || params[0] > 16777215 ||
             floorf(params[0]) != params[0]) return MAV_RESULT_DENIED;
@@ -1502,6 +1547,7 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
 #endif
         unsigned instance = isfinite(params[1]) ? (unsigned)params[1] : 0U;
         if (requested == MAVLINK_MSG_ID_AUTOPILOT_VERSION) send_protocol_capabilities(server, route);
+        else if(requested==MAVLINK_MSG_ID_CAMERA_TRACKING_IMAGE_STATUS) send_image_tracking(server,route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_INFORMATION) send_camera_information(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_FOV_STATUS) send_camera_fov(server, route);
         else if (requested == MAVLINK_MSG_ID_CAMERA_SETTINGS) send_camera_settings(server, route);
@@ -1516,10 +1562,18 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         else return MAV_RESULT_UNSUPPORTED;
         return MAV_RESULT_ACCEPTED;
     }
-#if APCAM_HAVE_THERMAL
     case MAV_CMD_SET_MESSAGE_INTERVAL:
+        if(params[0]==MAVLINK_MSG_ID_CAMERA_TRACKING_IMAGE_STATUS) {
+            if(!isfinite(params[1]) || (params[1]<0 && params[1]!=-1) || params[1]>60000000) return MAV_RESULT_DENIED;
+            server->image_tracking_interval_ms=params[1]==-1?UINT32_MAX:params[1]==0?0:
+                std::max(50U,unsigned(params[1]/1000));
+            return MAV_RESULT_ACCEPTED;
+        }
+#if APCAM_HAVE_THERMAL
         if (params[0] != MAVLINK_MSG_ID_CAMERA_THERMAL_RANGE) return MAV_RESULT_UNSUPPORTED;
         return set_thermal_interval(server, params);
+#else
+        return MAV_RESULT_UNSUPPORTED;
 #endif
     case MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES:
         send_protocol_capabilities(server, route);
@@ -1866,6 +1920,7 @@ void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server)
 {
     /* Preserve the ROI for release, but discard its controller history. */
     if (!server) return;
+    ca_media_tracking_stop(server->media);
     stop_tracking_rate(server);
     server->last_target_location_ms=0;
     server->yaw_lock=false;
@@ -1920,6 +1975,7 @@ static uint8_t handle_command_int(struct ca_mavlink_server *server,
             server->target_lon_e7 = lon_e7;
             server->target_alt_amsl_m = alt_amsl_m;
             server->target_location_active = true;
+            ca_media_tracking_stop(server->media);
             server->yaw_lock = true;
             result = MAV_RESULT_ACCEPTED;
             if (changed) {
@@ -1946,6 +2002,7 @@ static uint8_t handle_gimbal_set_attitude(struct ca_mavlink_server *server,
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) return 255;
     if (server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
+    ca_media_tracking_stop(server->media);
     clear_target_location(server);
     if ((flags & (GIMBAL_DEVICE_FLAGS_RETRACT | GIMBAL_DEVICE_FLAGS_NEUTRAL)) !=
         0U) {
@@ -3067,6 +3124,11 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
     uint64_t now = monotonic_ms();
     reload_config(server, now);
+    const uint32_t tracking_interval=server->image_tracking_interval_ms?server->image_tracking_interval_ms:200;
+    if(have_peer(server) && tracking_interval!=UINT32_MAX && now-server->last_image_tracking_ms>=tracking_interval) {
+        server->last_image_tracking_ms=now;
+        send_image_tracking(server,nullptr);
+    }
 #if APCAM_HAVE_THERMAL
     unsigned thermal_index = thermal_stream_id(server) - 1U;
     uint32_t thermal_interval = server->thermal_interval_ms[thermal_index];

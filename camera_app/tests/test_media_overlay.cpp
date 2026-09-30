@@ -72,3 +72,6 @@ int main()
     assert(closed==opened-1); // The failed open never acquired a backend.
     puts("PASS media controls, overlay errors, recording guard, rollback and lifetime");
 }
+
+// These media lifetime tests do not open a gimbal transport.
+int ca_backend_set_gimbal_rates(ca_backend *, float, float) { return 0; }
