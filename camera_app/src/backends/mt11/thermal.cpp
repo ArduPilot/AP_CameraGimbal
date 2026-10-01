@@ -400,26 +400,46 @@ int ca_mt11_uvc_assembler_consume(struct ca_mt11_uvc_assembler *assembler,
     return 0;
 }
 
+// Rows are assembled in a cached buffer and copied out whole, because the
+// destination VB mapping is uncached and per-byte stores are very slow.
+#define YUYV_CHUNK 1024U
+
+static void yuyv_to_nv12(const uint8_t *source, uint32_t width,
+                         uint32_t height, uint8_t *y, size_t y_stride,
+                         uint8_t *uv, size_t uv_stride, bool rotate)
+{
+    uint8_t line[YUYV_CHUNK];
+
+    for (uint32_t row = 0; row < height; row++) {
+        const uint8_t *input = source + (size_t)row * width * 2U;
+        uint32_t out_row = rotate ? height - 1U - row : row;
+        uint8_t *output = y + (size_t)out_row * y_stride;
+        for (uint32_t c0 = 0; c0 < width; c0 += YUYV_CHUNK) {
+            uint32_t n = width - c0 < YUYV_CHUNK ? width - c0 : YUYV_CHUNK;
+            for (uint32_t k = 0; k < n; k++) {
+                line[rotate ? n - 1U - k : k] = input[(c0 + k) * 2U];
+            }
+            memcpy(output + (rotate ? width - c0 - n : c0), line, n);
+        }
+        if ((row & 1U) != 0U) continue;
+        output = uv + (size_t)(out_row / 2U) * uv_stride;
+        for (uint32_t c0 = 0; c0 < width; c0 += YUYV_CHUNK) {
+            uint32_t n = width - c0 < YUYV_CHUNK ? width - c0 : YUYV_CHUNK;
+            for (uint32_t k = 0; k < n; k += 2U) {
+                uint32_t d = rotate ? n - 2U - k : k;
+                line[d] = input[(c0 + k) * 2U + 1U];
+                line[d + 1U] = input[(c0 + k) * 2U + 3U];
+            }
+            memcpy(output + (rotate ? width - c0 - n : c0), line, n);
+        }
+    }
+}
+
 void ca_mt11_yuyv_to_nv12(const uint8_t *source, uint32_t width,
                           uint32_t height, uint8_t *y, size_t y_stride,
                           uint8_t *uv, size_t uv_stride)
 {
-    for (uint32_t row = 0; row < height; row++) {
-        const uint8_t *input = source + (size_t)row * width * 2U;
-        uint8_t *output = y + (size_t)row * y_stride;
-        for (uint32_t column = 0; column < width; column += 2U) {
-            output[column] = input[column * 2U];
-            output[column + 1U] = input[column * 2U + 2U];
-        }
-    }
-    for (uint32_t row = 0; row < height; row += 2U) {
-        const uint8_t *input = source + (size_t)row * width * 2U;
-        uint8_t *output = uv + (size_t)(row / 2U) * uv_stride;
-        for (uint32_t column = 0; column < width; column += 2U) {
-            output[column] = input[column * 2U + 1U];
-            output[column + 1U] = input[column * 2U + 3U];
-        }
-    }
+    yuyv_to_nv12(source, width, height, y, y_stride, uv, uv_stride, false);
 }
 
 void ca_mt11_yuyv_to_nv12_rotated_180(const uint8_t *source, uint32_t width,
@@ -427,23 +447,7 @@ void ca_mt11_yuyv_to_nv12_rotated_180(const uint8_t *source, uint32_t width,
                                       size_t y_stride, uint8_t *uv,
                                       size_t uv_stride)
 {
-    for (uint32_t row = 0; row < height; row++) {
-        const uint8_t *input = source + (size_t)row * width * 2U;
-        uint8_t *output = y + (size_t)(height - 1U - row) * y_stride;
-        for (uint32_t column = 0; column < width; column++) {
-            output[width - 1U - column] = input[column * 2U];
-        }
-    }
-    for (uint32_t row = 0; row < height; row += 2U) {
-        const uint8_t *input = source + (size_t)row * width * 2U;
-        uint8_t *output = uv +
-            (size_t)(height / 2U - 1U - row / 2U) * uv_stride;
-        for (uint32_t column = 0; column < width; column += 2U) {
-            uint32_t destination = width - 2U - column;
-            output[destination] = input[column * 2U + 1U];
-            output[destination + 1U] = input[column * 2U + 3U];
-        }
-    }
+    yuyv_to_nv12(source, width, height, y, y_stride, uv, uv_stride, true);
 }
 
 static int uvc_control(int fd, uint8_t request_type, uint8_t request,
