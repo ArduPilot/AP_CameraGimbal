@@ -46,6 +46,6 @@ td_s32 ca_mt11_thermal_vpss_start(
     const struct ca_mt11_output_sizes *sizes);
 void ca_mt11_thermal_vpss_stop(void);
 td_s32 ca_mt11_thermal_send_yuyv(const td_u8 *yuyv);
-td_s32 ca_mt11_set_inverted(td_bool inverted);
+td_s32 ca_mt11_set_inverted(td_bool inverted, ot_vpss_grp record_group);
 
 #endif

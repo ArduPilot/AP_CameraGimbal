@@ -378,7 +378,7 @@ td_s32 ca_mt11_thermal_send_yuyv(const td_u8 *yuyv)
     return result;
 }
 
-td_s32 ca_mt11_set_inverted(td_bool inverted)
+td_s32 ca_mt11_set_inverted(td_bool inverted, ot_vpss_grp record_group)
 {
     for (ot_vpss_grp group = CA_MT11_ZOOM_GROUP;
          group <= CA_MT11_WIDE_GROUP; group++) {
@@ -393,7 +393,11 @@ td_s32 ca_mt11_set_inverted(td_bool inverted)
                 attr.flip_en = inverted;
                 result = ss_mpi_vpss_set_chn_attr(group, channel, &attr);
             }
-            td_s32 enable_result = ss_mpi_vpss_enable_chn(group, channel);
+            // the record channel stays disabled unless recording on this group
+            td_s32 enable_result = channel == CA_MT11_RECORD_CHN &&
+                                           group != record_group
+                                       ? TD_SUCCESS
+                                       : ss_mpi_vpss_enable_chn(group, channel);
             if (result != TD_SUCCESS) return result;
             if (enable_result != TD_SUCCESS) return enable_result;
         }

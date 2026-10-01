@@ -67,6 +67,8 @@ struct APC_Media_MT11_State {
     td_bool record_rgb_bound;
     td_bool record_thermal_bound;
     td_bool venc_started[4];
+    // record VENCs and the RGB record VPSS channel run only while recording
+    bool record_path_active;
     bool thread_started;
     bool autofocus_thread_started;
     bool manual_focus_thread_started;
@@ -207,6 +209,43 @@ static bool video_key_frame(enum ca_video_codec codec, const uint8_t *data,
     return false;
 }
 
+static td_s32 set_record_path_locked(struct APC_Media_MT11_State *media,
+                                     bool active)
+{
+    const ot_venc_start_param start = {.recv_pic_num = -1};
+    td_s32 result = TD_SUCCESS;
+
+    if (active == media->record_path_active) return TD_SUCCESS;
+    pthread_mutex_lock(&media->venc_lock);
+    if (active) {
+        result = ss_mpi_vpss_enable_chn(media->selected_group, CA_MT11_RECORD_CHN);
+        for (unsigned channel = CA_MT11_RGB_RECORD_VENC;
+             result == TD_SUCCESS && channel <= CA_MT11_THERMAL_RECORD_VENC;
+             channel++) {
+            result = ss_mpi_venc_start_chn(channel, &start);
+            if (result == TD_SUCCESS) media->venc_started[channel] = TD_TRUE;
+        }
+    }
+    if (!active || result != TD_SUCCESS) {
+        for (unsigned channel = CA_MT11_RGB_RECORD_VENC;
+             channel <= CA_MT11_THERMAL_RECORD_VENC; channel++) {
+            if (!media->venc_started[channel]) continue;
+            (void)ss_mpi_venc_stop_chn(channel);
+            // drop queued streams so the next recording starts clean
+            (void)ss_mpi_venc_reset_chn(channel);
+            media->venc_started[channel] = TD_FALSE;
+        }
+        (void)ss_mpi_vpss_disable_chn(media->selected_group, CA_MT11_RECORD_CHN);
+    }
+    media->record_path_active = active && result == TD_SUCCESS;
+    pthread_mutex_unlock(&media->venc_lock);
+    if (result != TD_SUCCESS) {
+        ca_log("record path %s failed: 0x%x", active ? "start" : "stop",
+               (unsigned)result);
+    }
+    return result;
+}
+
 static void consume_frame(struct APC_Media_MT11_State *media, unsigned channel,
                           uint8_t *data, size_t length, uint64_t pts)
 {
@@ -251,6 +290,7 @@ static void consume_frame(struct APC_Media_MT11_State *media, unsigned channel,
         }
         (void)ca_thermal_stream_recording(media->thermal_stream, false, nullptr);
         atomic_store(&media->recording, false);
+        (void)set_record_path_locked(media, false);
     }
     pthread_mutex_unlock(&media->lock);
 }
@@ -665,9 +705,17 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
     }
     media->record_thermal_bound = TD_TRUE;
     stage = "VENC startup";
-    for (unsigned channel = 0; channel < CA_MT11_VENC_COUNT; channel++) {
+    for (unsigned channel = CA_MT11_MAIN_VENC; channel <= CA_MT11_SUB_VENC;
+         channel++) {
         if (ss_mpi_venc_start_chn(channel, &start) != TD_SUCCESS) goto fail;
         media->venc_started[channel] = TD_TRUE;
+    }
+    // the 4K record output is idle until recording starts
+    for (ot_vpss_grp group = CA_MT11_ZOOM_GROUP; group <= CA_MT11_WIDE_GROUP;
+         group++) {
+        if (ss_mpi_vpss_disable_chn(group, CA_MT11_RECORD_CHN) != TD_SUCCESS) {
+            goto fail;
+        }
     }
     stage = "RTSP startup";
     if (ca_rtsp_open(&media->rtsp, config->rtsp_port, "video1",
@@ -763,8 +811,12 @@ int APC_Media_MT11::set_recording(bool active)
             errno = saved_errno;
             return -1;
         }
-        if (ca_thermal_stream_recording(media->thermal_stream, true, media->recording_path[0]) < 0) {
+        bool record_path = set_record_path_locked(media, true) == TD_SUCCESS;
+        if (!record_path) errno = EIO;
+        if (!record_path ||
+            ca_thermal_stream_recording(media->thermal_stream, true, media->recording_path[0]) < 0) {
             int saved = errno;
+            (void)set_record_path_locked(media, false);
             for (unsigned i=0; i<2; i++) {
                 (void)ca_mp4_close(media->mp4[i]); media->mp4[i] = nullptr;
                 (void)unlink(media->recording_path[i]);
@@ -787,6 +839,7 @@ int APC_Media_MT11::set_recording(bool active)
             media->mp4[channel] = NULL;
         }
         atomic_store(&media->recording, false);
+        (void)set_record_path_locked(media, false);
         media->recording_wait_keyframe[0] = false;
         media->recording_wait_keyframe[1] = false;
         ca_log("recording stopped RGB=%s thermal=%s",
@@ -1088,7 +1141,11 @@ int APC_Media_MT11::set_inverted(bool inverted)
         return -1;
     }
     if (atomic_load(&media->inverted) == inverted) return 0;
-    result = ca_mt11_set_inverted(inverted ? TD_TRUE : TD_FALSE);
+    pthread_mutex_lock(&media->lock);
+    result = ca_mt11_set_inverted(inverted ? TD_TRUE : TD_FALSE,
+                                  media->record_path_active
+                                      ? media->selected_group : -1);
+    pthread_mutex_unlock(&media->lock);
     if (result != TD_SUCCESS) {
         ca_log("output orientation change failed: 0x%x", (unsigned)result);
         errno = EIO;
@@ -1117,6 +1174,9 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
             old_group, CA_MT11_RECORD_CHN, CA_MT11_RGB_RECORD_VENC);
         td_s32 bind_rtsp = TD_FAILURE;
         td_s32 bind_record = TD_FAILURE;
+        // while recording, the new group's record channel must come up
+        // before the switch is committed
+        td_s32 enable_record = TD_FAILURE;
         if (unbind_rtsp == TD_SUCCESS && unbind_record == TD_SUCCESS) {
             bind_rtsp = sample_comm_vpss_bind_venc(group, rtsp_chn,
                                                     rtsp_venc);
@@ -1124,14 +1184,21 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
                 bind_record = sample_comm_vpss_bind_venc(
                     group, CA_MT11_RECORD_CHN, CA_MT11_RGB_RECORD_VENC);
             }
+            if (bind_record == TD_SUCCESS) {
+                enable_record = media->record_path_active
+                    ? ss_mpi_vpss_enable_chn(group, CA_MT11_RECORD_CHN)
+                    : TD_SUCCESS;
+            }
         }
         if (unbind_rtsp != TD_SUCCESS || unbind_record != TD_SUCCESS ||
-            bind_rtsp != TD_SUCCESS || bind_record != TD_SUCCESS) {
+            bind_rtsp != TD_SUCCESS || bind_record != TD_SUCCESS ||
+            enable_record != TD_SUCCESS) {
             ca_log("RGB lens switch VPSS %d->%d failed: rtsp unbind=0x%x "
-                   "record unbind=0x%x rtsp bind=0x%x record bind=0x%x",
+                   "record unbind=0x%x rtsp bind=0x%x record bind=0x%x "
+                   "record enable=0x%x",
                    old_group, group, (unsigned)unbind_rtsp,
                    (unsigned)unbind_record, (unsigned)bind_rtsp,
-                   (unsigned)bind_record);
+                   (unsigned)bind_record, (unsigned)enable_record);
             if (bind_rtsp == TD_SUCCESS) {
                 (void)sample_comm_vpss_un_bind_venc(group, rtsp_chn,
                                                      rtsp_venc);
@@ -1145,6 +1212,9 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
                 old_group, CA_MT11_RECORD_CHN, CA_MT11_RGB_RECORD_VENC);
             errno = EIO;
             return -1;
+        }
+        if (media->record_path_active) {
+            (void)ss_mpi_vpss_disable_chn(old_group, CA_MT11_RECORD_CHN);
         }
         media->selected_group = group;
     }
