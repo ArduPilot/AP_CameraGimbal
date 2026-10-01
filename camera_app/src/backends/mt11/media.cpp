@@ -69,6 +69,8 @@ struct APC_Media_MT11_State {
     td_bool venc_started[4];
     // record VENCs and the RGB record VPSS channel run only while recording
     bool record_path_active;
+    // only the selected RGB VPSS group runs; the other starts for photos
+    bool group_running[2];
     bool thread_started;
     bool autofocus_thread_started;
     bool manual_focus_thread_started;
@@ -207,6 +209,21 @@ static bool video_key_frame(enum ca_video_codec codec, const uint8_t *data,
         }
     }
     return false;
+}
+
+static td_s32 set_group_running_locked(struct APC_Media_MT11_State *media,
+                                       ot_vpss_grp group, bool running)
+{
+    if (media->group_running[group] == running) return TD_SUCCESS;
+    td_s32 result = running ? ss_mpi_vpss_start_grp(group)
+                            : ss_mpi_vpss_stop_grp(group);
+    if (result == TD_SUCCESS) {
+        media->group_running[group] = running;
+    } else {
+        ca_log("VPSS group %d %s failed: 0x%x", group,
+               running ? "start" : "stop", (unsigned)result);
+    }
+    return result;
 }
 
 static td_s32 set_record_path_locked(struct APC_Media_MT11_State *media,
@@ -617,6 +634,7 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
     for (int path = 0; path < 2; path++) {
         if (ca_mt11_vpss_start(path, &sizes) != TD_SUCCESS) goto fail;
         media->vpss_started[path] = TD_TRUE;
+        media->group_running[path] = true;
     }
     stage = "factory ISP scene startup";
     if (ca_mt11_scene_start(MT11_FACTORY_SCENE_DIR) != TD_SUCCESS) goto fail;
@@ -709,6 +727,10 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
          channel++) {
         if (ss_mpi_venc_start_chn(channel, &start) != TD_SUCCESS) goto fail;
         media->venc_started[channel] = TD_TRUE;
+    }
+    if (set_group_running_locked(media, CA_MT11_ZOOM_GROUP, false) !=
+        TD_SUCCESS) {
+        goto fail;
     }
     // the 4K record output is idle until recording starts
     for (ot_vpss_grp group = CA_MT11_ZOOM_GROUP; group <= CA_MT11_WIDE_GROUP;
@@ -919,7 +941,17 @@ static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp gr
     const char *stage = "VENC creation";
     td_s32 code;
     int result = -1;
+    bool woken = false;
+    td_u64 wake_pts = 0;
 
+    if (group != CA_MT11_THERMAL_GROUP) {
+        pthread_mutex_lock(&media->lock);
+        if (!media->group_running[group]) {
+            (void)ss_mpi_sys_get_cur_pts(&wake_pts);
+            woken = set_group_running_locked(media, group, true) == TD_SUCCESS;
+        }
+        pthread_mutex_unlock(&media->lock);
+    }
     jpeg_attributes(&attr, width, height);
     code = ss_mpi_venc_create_chn(CA_MT11_STILL_VENC, &attr);
     if (code != TD_SUCCESS) goto mpi_fail;
@@ -932,6 +964,15 @@ static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp gr
     code = ss_mpi_vpss_get_chn_frame(group, channel, &frame, 1000);
     if (code != TD_SUCCESS) goto mpi_fail;
     frame_acquired = true;
+    // skip frames queued before a stopped group was woken
+    for (unsigned stale = 0; woken && frame.video_frame.pts < wake_pts &&
+                             stale < 8U; stale++) {
+        (void)ss_mpi_vpss_release_chn_frame(group, channel, &frame);
+        frame_acquired = false;
+        code = ss_mpi_vpss_get_chn_frame(group, channel, &frame, 1000);
+        if (code != TD_SUCCESS) goto mpi_fail;
+        frame_acquired = true;
+    }
     if (clock_gettime(CLOCK_REALTIME, &captured_at) < 0) goto done;
     stage = "JPEG frame submission";
     code = ss_mpi_venc_send_frame(CA_MT11_STILL_VENC, &frame, 1000);
@@ -1003,6 +1044,13 @@ done:
         }
         if (started) (void)ss_mpi_venc_stop_chn(CA_MT11_STILL_VENC);
         if (created) (void)ss_mpi_venc_destroy_chn(CA_MT11_STILL_VENC);
+        if (woken) {
+            pthread_mutex_lock(&media->lock);
+            if (group != media->selected_group) {
+                (void)set_group_running_locked(media, group, false);
+            }
+            pthread_mutex_unlock(&media->lock);
+        }
         errno = saved_errno;
     }
     return result;
@@ -1163,6 +1211,10 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
 
     if (group != media->selected_group) {
         ot_vpss_grp old_group = media->selected_group;
+        if (set_group_running_locked(media, group, true) != TD_SUCCESS) {
+            errno = EIO;
+            return -1;
+        }
         bool thermal_main = atomic_load(&media->thermal_main);
         ot_vpss_chn rtsp_chn = thermal_main ? CA_MT11_RTSP_SUB_CHN
                                              : CA_MT11_RTSP_MAIN_CHN;
@@ -1210,6 +1262,7 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
             (void)sample_comm_vpss_bind_venc(old_group, rtsp_chn, rtsp_venc);
             (void)sample_comm_vpss_bind_venc(
                 old_group, CA_MT11_RECORD_CHN, CA_MT11_RGB_RECORD_VENC);
+            (void)set_group_running_locked(media, group, false);
             errno = EIO;
             return -1;
         }
@@ -1217,6 +1270,7 @@ static int select_lens_locked(struct APC_Media_MT11_State *media, enum ca_media_
             (void)ss_mpi_vpss_disable_chn(old_group, CA_MT11_RECORD_CHN);
         }
         media->selected_group = group;
+        (void)set_group_running_locked(media, old_group, false);
     }
     media->lens = lens;
     float hfov = lens == CA_MEDIA_LENS_ZOOM
