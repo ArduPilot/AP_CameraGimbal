@@ -19,10 +19,6 @@ class Line(C.Structure):
     _fields_ = [(n, C.c_int) for n in ('x0', 'y0', 'x1', 'y1')] + [('region', C.c_uint), ('dashed', C.c_bool)]
 
 
-class Geometry(C.Structure):
-    _fields_ = [('lines', Line * 8), ('count', C.c_uint), ('scale', C.c_float)]
-
-
 class Bitmap(C.Structure):
     _fields_ = [(n, C.c_uint) for n in ('x', 'y', 'width', 'height')] + [('pixels', C.POINTER(C.c_uint16))]
 
@@ -31,22 +27,44 @@ class Overlays(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix='overlay-test-')
+        cls.addClassCleanup(cls.tmp.cleanup)
         path = Path(cls.tmp.name) / 'overlay.so'
+        # Query the native capacities before allocating anything passed to C.
+        # Tracking added lines/regions; stale ctypes arrays corrupt Python's heap.
+        layout_source = path.with_suffix('.cpp')
+        layout_source.write_text('''#include "camera_app/overlay.h"
+extern "C" void overlay_test_layout(unsigned out[5]) {
+    out[0] = CA_OVERLAY_LINES;
+    out[1] = CA_OVERLAY_REGIONS;
+    out[2] = sizeof(struct ca_overlay_geometry);
+    out[3] = sizeof(struct ca_overlay_line);
+    out[4] = sizeof(struct ca_overlay_bitmap);
+}
+''')
         subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-shared', '-fPIC', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
                         '-DAPCAM_TARGET=APCAM_TARGET_MT11', str(ROOT/'camera_app/src/media/overlay.cpp'),
-                        '-lm', '-o', str(path)], check=True)
+                        str(layout_source), '-lm', '-o', str(path)], check=True)
         cls.lib = C.CDLL(str(path))
+        cls.lib.overlay_test_layout.argtypes = [C.POINTER(C.c_uint)]
+        cls.lib.overlay_test_layout.restype = None
+        layout = (C.c_uint * 5)()
+        cls.lib.overlay_test_layout(layout)
+        class Geometry(C.Structure):
+            _fields_ = [('lines', Line * layout[0]), ('count', C.c_uint), ('scale', C.c_float)]
+        assert list(layout)[2:] == [C.sizeof(Geometry), C.sizeof(Line), C.sizeof(Bitmap)], 'ctypes overlay ABI mismatch'
+        cls.Geometry = Geometry
+        cls.Bitmaps = Bitmap * layout[1]
         cls.lib.ca_overlay_geometry.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.c_bool, C.c_bool, C.c_float]
+        cls.lib.ca_overlay_geometry.restype = None
+        cls.lib.ca_overlay_tracking.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.POINTER(C.c_float)]
+        cls.lib.ca_overlay_tracking.restype = None
         cls.lib.ca_overlay_bitmaps.argtypes = [C.POINTER(Bitmap), C.c_uint, C.c_uint, C.POINTER(Geometry)]
         cls.lib.ca_overlay_free.argtypes = [C.POINTER(Bitmap)]
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmp.cleanup()
+        cls.lib.ca_overlay_free.restype = None
 
     def geometry(self, w=1280, h=720, cross=True, box=True, fov=88):
-        g = Geometry()
+        g = self.Geometry()
         self.lib.ca_overlay_geometry(C.byref(g), w, h, cross, box, fov)
         return g
 
@@ -102,7 +120,7 @@ class Overlays(unittest.TestCase):
                     g = self.geometry(w, h, fov=fov)
                     source = np.full((h, w, 3), 110, dtype=np.uint8)
                     expected = source.copy()
-                    bitmaps = (Bitmap * 5)()
+                    bitmaps = self.Bitmaps()
                     self.assertEqual(self.lib.ca_overlay_bitmaps(bitmaps, w, h, C.byref(g)), 0)
                     try:
                         total = 0
@@ -124,6 +142,24 @@ class Overlays(unittest.TestCase):
                         self.assertTrue(np.all(actual[h//2, w//2] == 110), 'Cross has an open centre')
                     finally:
                         self.lib.ca_overlay_free(bitmaps)
+
+    def test_tracking_regions(self):
+        g = self.geometry()
+        self.lib.ca_overlay_tracking(C.byref(g), 1280, 720, (C.c_float * 4)(.1, .1, .3, .3))
+        self.assertEqual(g.count, 12)
+        self.assertEqual([line.region for line in g.lines[8:12]], [5, 6, 7, 8])
+        bitmaps = self.Bitmaps()
+        self.assertEqual(self.lib.ca_overlay_bitmaps(bitmaps, 1280, 720, C.byref(g)), 0)
+        try:
+            self.assertTrue(all(b.pixels for b in bitmaps))
+            for b in bitmaps[5:9]:
+                self.assertLessEqual(b.x+b.width, 1280)
+                self.assertLessEqual(b.y+b.height, 720)
+                pixels = np.ctypeslib.as_array(b.pixels, shape=(b.width*b.height,))
+                self.assertIn(0x821f, pixels)
+        finally:
+            self.lib.ca_overlay_free(bitmaps)
+        self.assertTrue(all(not b.pixels for b in bitmaps))
 
 
 if __name__ == '__main__':

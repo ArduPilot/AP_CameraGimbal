@@ -74,10 +74,14 @@ remote = Path(os.environ['TEST_REMOTE'])
 source = Path(os.environ['TEST_SOURCE'])
 assert (remote / 'bin/mt11-web.new').read_text() == 'new web binary'
 assert not (remote / 'webroot/stale.js').exists()
-for asset in source.iterdir():
-    installed = remote / 'webroot' / asset.name
-    assert installed.read_bytes() == asset.read_bytes()
-    assert installed.stat().st_mode & 0o777 == 0o644
+for asset in source.rglob('*'):
+    installed = remote / 'webroot' / asset.relative_to(source)
+    if asset.is_dir():
+        assert installed.is_dir()
+        assert installed.stat().st_mode & 0o777 == 0o755
+    else:
+        assert installed.read_bytes() == asset.read_bytes()
+        assert installed.stat().st_mode & 0o777 == 0o644
 assert (remote / 'webroot').stat().st_mode & 0o777 == 0o755
 (remote / 'restart').touch()
 ''')
