@@ -516,16 +516,23 @@ static int submit_urb(struct ca_mt11_thermal *thermal,
 static void *thermal_thread(void *opaque)
 {
     struct ca_mt11_thermal *thermal = (struct ca_mt11_thermal*)(opaque);
+    unsigned failures = 0;
     while (!atomic_load(&thermal->stop)) {
         struct usbdevfs_urb *completed = NULL;
         struct thermal_urb *entry;
         struct timespec received_at;
         if (ioctl(thermal->fd, USBDEVFS_REAPURB, &completed) < 0) {
             if (!atomic_load(&thermal->stop) && errno != EINTR) {
-                ca_log("thermal USB reap failed: %s", strerror(errno));
+                // a disconnected core fails every call; don't spin or flood the log
+                if (failures++ % 100U == 0U) {
+                    ca_log("thermal USB reap failed (%u): %s", failures,
+                           strerror(errno));
+                }
+                (void)usleep(100000);
             }
             continue;
         }
+        failures = 0;
         if (clock_gettime(CLOCK_REALTIME, &received_at) < 0) {
             ca_log("thermal USB timestamp failed: %s", strerror(errno));
             received_at.tv_sec = time(NULL);
