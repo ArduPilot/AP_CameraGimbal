@@ -304,11 +304,12 @@ int APC_CameraApp::run(int argc, char **argv)
     /* NULL lets each backend pick its own gimbal UART */
     const char *uart_device = environment_string("CAMERA_APP_UART", NULL);
     const char *external_uart_device =
-        environment_string("CAMERA_APP_EXTERNAL_UART", "/dev/ttyAMA4");
+        environment_string("CAMERA_APP_EXTERNAL_UART",
+                           APCAM_HAVE_EXTERNAL_UART ? "/dev/ttyAMA4" : NULL);
     const char *config_path =
         environment_string("CAMERA_APP_CONFIG", CA_CONFIG_DEFAULT_PATH);
     unsigned port = environment_port("CAMERA_APP_PORT", DEFAULT_PORT);
-    struct ca_backend_config config;
+    struct ca_backend_config config = {};
     struct ca_config app_config;
     char config_error[192] = "";
     int i;
@@ -449,6 +450,10 @@ int APC_CameraApp::run(int argc, char **argv)
             return result;
         }
     }
+    config.uart_emit = [](void *opaque, const uint8_t *data, size_t length) {
+        ca_mavlink_server_feed_mcu(*static_cast<ca_mavlink_server **>(opaque), data, length);
+    };
+    config.uart_opaque = &_mavlink_server;
     config.private_emit = ca_unigcs_emit;
     config.private_opaque = _unigcs;
 #endif

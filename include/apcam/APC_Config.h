@@ -55,7 +55,9 @@ private:
     };
     inline static constexpr ca_config_option uart_protocol_options[] = {
         {"none", CA_UART_NONE},
-#if APCAM_HAVE_EXTERNAL_UART
+#if APCAM_HAVE_SIYI
+        // Retain saved configurations and explicitly supplied test/adapter
+        // UARTs even when the physical connector is not owned by Linux.
         {"siyi", CA_UART_SIYI},
 #endif
         {"mavlink", CA_UART_MAVLINK},

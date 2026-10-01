@@ -701,6 +701,7 @@ test: timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1
 	./$(MT11_IMX586_TEST_TARGET)
 	python3 tests/test_integration.py ./$(HOST_TARGET)
 	python3 tests/test_a8_attitude.py ./$(A8_HOST_TARGET)
+	python3 tests/test_a8_delegated.py ./$(A8_HOST_TARGET)
 	ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10 \
 		-t 2.3 -c:v libx264 -x264-params aud=1:bframes=0:slices=4 \
 		-pix_fmt yuv420p -f h264 -y tests/test.h264
@@ -765,6 +766,14 @@ $(ZR10_HOST_TARGET): build/binlog_version.h $(filter-out src/backends/mt11/contr
 zr10-test: $(ZR10_HOST_TARGET)
 	python3 tests/test_zr10.py ./$(ZR10_HOST_TARGET)
 	python3 tests/test_zr10_pipeline.py
+
+.PHONY: mcu-uart-test
+mcu-uart-test: $(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET)
+	$(PYTHON) tests/test_mcu_uart.py ./$(A8_HOST_TARGET) a8
+	$(PYTHON) tests/test_mcu_uart.py ./$(ZR10_HOST_TARGET) zr10
+	$(PYTHON) tests/test_mcu_uart.py ./$(HOST_TARGET) mt11
+
+test: mcu-uart-test
 
 # Optional target-runtime verification using a separately extracted stock rootfs.
 ZR10_QEMU ?= qemu-arm

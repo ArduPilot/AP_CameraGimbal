@@ -229,3 +229,8 @@ int ca_backend_set_zoom(struct ca_backend *backend, float ratio)
 { (void)backend; (void)ratio; errno = ENOTSUP; return -1; }
 int ca_backend_set_zoom_rate(struct ca_backend *backend, float rate)
 { (void)backend; (void)rate; errno = ENOTSUP; return -1; }
+
+int ca_backend_write_external_uart(struct ca_backend *backend, const uint8_t *data, size_t length)
+{
+    (void)backend; (void)data; (void)length; errno = ENOTSUP; return -1;
+}

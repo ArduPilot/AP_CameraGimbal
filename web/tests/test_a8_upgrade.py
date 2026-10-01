@@ -62,6 +62,11 @@ with tempfile.TemporaryDirectory(prefix='a8-upgrade-test-') as directory:
         assert b'>Restart camera app</button>' in page
         assert b'Restart ArduPilot camera app' not in page
         csrf = re.search(rb'name=csrf value="([a-f0-9]{64})"', page).group(1).decode()
+        status, parameters = request('/parameters')
+        assert status == 200
+        assert b'name="uart_protocol"' not in parameters
+        assert b'The external UART is handled by the gimbal controller.' in parameters
+        assert b'cannot select its protocol or disable its input' in parameters
         canonical = 'SIYI_4K_MINI_UpgradeSD.bin'
         legacy = 'A8_FW_ArduPilot_v1.0_test.bin'
         rejected = ['ZR10_UpgradeSD.bin', '../' + canonical, canonical + '.tmp',

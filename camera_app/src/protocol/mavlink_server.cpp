@@ -65,7 +65,7 @@ struct mavlink_client {
     struct ca_mavlink_parser parser;
 };
 
-enum route_kind { ROUTE_TCP, ROUTE_UDP, ROUTE_UART, ROUTE_PROXY };
+enum route_kind { ROUTE_TCP, ROUTE_UDP, ROUTE_UART, ROUTE_MCU, ROUTE_PROXY };
 
 struct route {
     enum route_kind kind;
@@ -91,6 +91,11 @@ struct ca_mavlink_server {
     int listener_fd;
     int uart_fd;
     struct ca_mavlink_parser uart_parser;
+    struct ca_mavlink_parser mcu_parser;
+    bool have_mcu_peer;
+    uint8_t mcu_output[CA_MAVLINK_UART_OUTPUT];
+    size_t mcu_output_length;
+    uint64_t mcu_last_write_ms;
     uint8_t uart_output[CA_MAVLINK_UART_OUTPUT];
     size_t uart_output_offset;
     size_t uart_output_length;
@@ -231,6 +236,7 @@ static size_t route_send_room(struct ca_mavlink_server *server, const struct rou
 {
     if (route->kind == ROUTE_PROXY) return SIZE_MAX;
     if (route->kind == ROUTE_UART) return sizeof(server->uart_output) - server->uart_output_length;
+    if (route->kind == ROUTE_MCU) return sizeof(server->mcu_output) - server->mcu_output_length;
 #ifdef SIOCOUTQ
     int fd = route->kind == ROUTE_UDP ? server->udp_fd : server->clients[route->client].fd;
     int buffer = 0, queued = 0;
@@ -289,6 +295,7 @@ static bool route_valid(const struct ca_mavlink_server *server,
 {
     if (route->kind == ROUTE_UDP) return server->udp_fd >= 0;
     if (route->kind == ROUTE_UART) return server->uart_fd >= 0;
+    if (route->kind == ROUTE_MCU) return server->have_mcu_peer;
     if (route->kind == ROUTE_PROXY) return false;
     return route->client < CA_MAVLINK_CLIENTS &&
            server->clients[route->client].fd >= 0;
@@ -296,7 +303,7 @@ static bool route_valid(const struct ca_mavlink_server *server,
 
 static bool have_peer(const struct ca_mavlink_server *server)
 {
-    if (server->support || server->have_udp_peer || server->uart_fd >= 0) return true;
+    if (server->support || server->have_udp_peer || server->uart_fd >= 0 || server->have_mcu_peer) return true;
     for (unsigned i = 0; i < CA_MAVLINK_CLIENTS; i++) {
         if (server->clients[i].fd >= 0) return true;
     }
@@ -373,6 +380,37 @@ static int queue_uart(struct ca_mavlink_server *server, const uint8_t *data,
     return result;
 }
 
+/* Keep complete MAVLink packets queued separately. The MCU also transmits
+ * its own MAVLink messages; pausing halfway through ours lets those messages
+ * interleave on the external UART. */
+static int queue_mcu(struct ca_mavlink_server *server, const uint8_t *data, size_t length)
+{
+    if (length + 2U > sizeof(server->mcu_output) - server->mcu_output_length) {
+        errno = ENOBUFS;
+        return -1;
+    }
+    server->mcu_output[server->mcu_output_length++] = uint8_t(length);
+    server->mcu_output[server->mcu_output_length++] = uint8_t(length >> 8U);
+    memcpy(server->mcu_output + server->mcu_output_length, data, length);
+    server->mcu_output_length += length;
+    return 0;
+}
+
+static void flush_mcu(struct ca_mavlink_server *server, uint64_t now)
+{
+    // 255 bytes take just over 22 ms at 115200 baud, 8N1.
+    if (!server->mcu_output_length || now - server->mcu_last_write_ms < 25U) return;
+    size_t length = server->mcu_output[0] | (size_t(server->mcu_output[1]) << 8U);
+    server->mcu_last_write_ms = now;
+    if (ca_backend_write_external_uart(server->backend, server->mcu_output + 2U, length) < 0) {
+        // Do not continue a potentially partially written MAVLink stream.
+        server->mcu_output_length = 0;
+        return;
+    }
+    server->mcu_output_length -= length + 2U;
+    memmove(server->mcu_output, server->mcu_output + length + 2U, server->mcu_output_length);
+}
+
 static void close_client(struct ca_mavlink_server *server, unsigned slot);
 
 static int send_route(struct ca_mavlink_server *server,
@@ -384,6 +422,8 @@ static int send_route(struct ca_mavlink_server *server,
         errno = ENOTCONN;
         return -1;
     }
+    if (route->kind == ROUTE_MCU)
+        return queue_mcu(server, data, length);
     if (route->kind == ROUTE_UDP) {
         do {
             sent = sendto(server->udp_fd, data, length, 0,
@@ -426,6 +466,9 @@ static int send_message(struct ca_mavlink_server *server,
     uint8_t packet[MAVLINK_MAX_PACKET_LEN];
     size_t length;
     if (server->system_id == 0U) return 0;
+    /* The MCU already provides the UART gimbal component. Only publish our
+     * camera service here, avoiding competing identities and duplicate ACKs. */
+    if (route->kind == ROUTE_MCU && message->compid == server->gimbal_component_id) return 0;
     if (route->kind == ROUTE_PROXY) {
         ca_mavlink_restamp(message, tx_status(server, message->compid));
         ca_support_mavlink_send(server->support, message);
@@ -454,6 +497,10 @@ static void broadcast_message(struct ca_mavlink_server *server,
     }
     if (server->have_udp_peer) {
         (void)send_message(server, &server->last_udp, message);
+    }
+    if (server->have_mcu_peer) {
+        const struct route route = {.kind = ROUTE_MCU};
+        (void)send_message(server, &route, message);
     }
     if (server->uart_fd >= 0) {
         const struct route route = {.kind = ROUTE_UART};
@@ -1201,7 +1248,7 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
         command.target_system = server->autopilot_system_id;
         command.target_component = server->autopilot_component_id;
         (void)mavlink_msg_command_long_encode_status(
-            server->system_id, server->gimbal_component_id,
+            server->system_id, route->kind == ROUTE_MCU ? server->camera_component_id : server->gimbal_component_id,
             &server->encode_status, &message, &command);
         (void)send_message(server, route, &message);
     }
@@ -1687,8 +1734,8 @@ static uint8_t handle_command_long(struct ca_mavlink_server *server,
                                 const struct route *route,
                                 const mavlink_message_t *message)
 {
-    /* MAVLink 2 trims the trailing zero confirmation byte. */
-    if (message->len < 32U) return 255;
+    /* MAVLink 2 may trim confirmation and both broadcast target bytes. */
+    if (message->len < 30U) return 255;
     mavlink_command_long_t request;
     mavlink_msg_command_long_decode(message, &request);
     float params[7] = {request.param1, request.param2, request.param3,
@@ -1697,6 +1744,11 @@ static uint8_t handle_command_long(struct ca_mavlink_server *server,
     uint16_t command = request.command;
     uint8_t target_system = request.target_system;
     uint8_t target_component = request.target_component;
+    if (route->kind == ROUTE_MCU &&
+        (target_component == server->gimbal_component_id ||
+         (command == MAV_CMD_REQUEST_MESSAGE &&
+          (params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION ||
+           params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS)))) return 255;
     if (target_matches(server, target_system, target_component,
                        server->gimbal_component_id)) {
         if (command == MAV_CMD_REQUEST_MESSAGE &&
@@ -2633,7 +2685,7 @@ static void handle_camera_ftp(struct ca_mavlink_server *server,
     reply.target_component = message->compid;
     /* card downloads need multi-packet bursts to be usable; keep them short
      * on the UART so gimbal control traffic is not delayed */
-    server->ftp.burst_packets = route->kind == ROUTE_UART ? 8U : 64U;
+    server->ftp.burst_packets = (route->kind == ROUTE_UART || route->kind == ROUTE_MCU) ? 8U : 64U;
     ca_camera_ftp_reply(&server->ftp, server->definition_xml, server->definition_length,
                         message->sysid, message->compid, monotonic_ms(), request.payload, reply.payload);
     mavlink_message_t response;
@@ -2806,12 +2858,14 @@ static void process_message(struct ca_mavlink_server *server,
         handle_attitude(server, message);
     } else if (message->msgid == MAVLINK_MSG_ID_SYSTEM_TIME) {
         handle_system_time(server, message);
-    } else if (message->msgid == MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE) {
+    } else if (message->msgid == MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE &&
+               route->kind != ROUTE_MCU) {
         log_gimbal_setpoint(message, handle_gimbal_set_attitude(server, message));
     } else if (message->msgid ==
                MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE) {
         handle_autopilot_state_for_gimbal(server, message);
-    } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_INT) {
+    } else if (message->msgid == MAVLINK_MSG_ID_COMMAND_INT && route->kind != ROUTE_MCU) {
+        // The COMMAND_INT handlers below implement the gimbal service.
         log_mavlink_command(message, handle_command_int(server, route, message));
     }
 }
@@ -2824,6 +2878,7 @@ static void feed(struct ca_mavlink_server *server,
         mavlink_message_t message;
         int result = ca_mavlink_parse_byte(parser, data[i], &message);
         if (result == 1) {
+            if (route->kind == ROUTE_MCU) server->have_mcu_peer = true;
             process_message(server, route, &message);
             if (message.msgid == MAVLINK_MSG_ID_HEARTBEAT &&
                 message.sysid == server->system_id &&
@@ -2835,6 +2890,14 @@ static void feed(struct ca_mavlink_server *server,
             ca_support_mavlink_send(server->support, &message);
         }
     }
+}
+
+void ca_mavlink_server_feed_mcu(struct ca_mavlink_server *server,
+                                const uint8_t *data, size_t length)
+{
+    if (!server) return;
+    const struct route route = {.kind = ROUTE_MCU};
+    feed(server, &server->mcu_parser, &route, data, length);
 }
 
 static void close_client(struct ca_mavlink_server *server, unsigned slot)
@@ -3053,6 +3116,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     if (ca_support_mavlink_open(&server->support, &config->settings.support) < 0)
         ca_log("SupportProxy MAVLink startup failed: %s", strerror(errno));
     ca_mavlink_parser_init(&server->udp_parser);
+    ca_mavlink_parser_init(&server->mcu_parser);
     *result = server;
     return 0;
 fail: {
@@ -3123,6 +3187,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
         process_message(server, &proxy_route, &incoming);
     }
     uint64_t now = monotonic_ms();
+    flush_mcu(server, now);
     reload_config(server, now);
     const uint32_t tracking_interval=server->image_tracking_interval_ms?server->image_tracking_interval_ms:200;
     if(have_peer(server) && tracking_interval!=UINT32_MAX && now-server->last_image_tracking_ms>=tracking_interval) {

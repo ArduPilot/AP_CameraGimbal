@@ -4955,6 +4955,13 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                     append_parameter_field(&page, config, parameter, submitted);
             }
             page.append("</div>");
+#if !APCAM_HAVE_EXTERNAL_UART && APCAM_HAVE_SIYI
+            if (tab == TAB_SYSTEM) {
+                page.append("<p class=help>");
+                page.append_html(T(S_H_UART_MCU));
+                page.append("</p>");
+            }
+#endif
             if (tab == TAB_NETWORK) {
                 char capture_message[512];
                 bool failed;
