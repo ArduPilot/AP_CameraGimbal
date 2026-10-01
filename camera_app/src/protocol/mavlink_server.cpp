@@ -613,7 +613,8 @@ static bool route_local_ipv4(const struct ca_mavlink_server *server,
     int probe = -1;
     int fd;
 
-    if (route->kind == ROUTE_UART) {
+    // Serial routes have no IP peer from which to infer a local address.
+    if (route->kind == ROUTE_UART || route->kind == ROUTE_MCU) {
         return interface_ipv4(address);
     }
     if (route->kind == ROUTE_TCP) {

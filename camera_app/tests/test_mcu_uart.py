@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise fragmented MCU UART MAVLink 1/2, reply routing and SIYI coexistence."""
 import os
+import ipaddress
 from pathlib import Path
 import pty
 import select
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 from pymavlink.dialects.v10 import ardupilotmega as v1
 from pymavlink.dialects.v20 import ardupilotmega as v2
 from test_a8_attitude import a8_frame, crc16, crc8, reserve_port, siyi, terminate, wait_path
@@ -115,6 +117,15 @@ with tempfile.TemporaryDirectory(prefix='mcu-uart-') as directory:
                 data = command(mod,512,259)
                 send(data[:7]); send(data[7:19]); send(data[19:])
                 assert take('CAMERA_INFORMATION').model_name
+                ack=take('COMMAND_ACK'); assert ack.command==512 and ack.result==0
+                # MCU UART has no IP peer: advertise a camera interface, not
+                # the wildcard fallback from a failed UDP route lookup.
+                send(command(mod,512,269,1))
+                stream=take('VIDEO_STREAM_INFORMATION')
+                uri=urlsplit(stream.uri)
+                assert uri.scheme=='rtsp' and uri.path=='/video1', stream
+                address=ipaddress.IPv4Address(uri.hostname)
+                assert not address.is_unspecified and not address.is_loopback, stream
                 ack=take('COMMAND_ACK'); assert ack.command==512 and ack.result==0
             # No camera-info response may leak onto the TCP client.
             np=v2.MAVLink(None); seen=[]
