@@ -24,15 +24,16 @@ bool APC_Tracking::open(APC_Media_Backend *media)
     const int error=pthread_create(&_thread,nullptr,[](void *p)->void* {
         static_cast<APC_Tracking *>(p)->run(); return nullptr;
     },this);
-    if(error) { ca_image_tracker_destroy(_engine); _engine=nullptr; return false; }
+    if(error) { close(); return false; }
     _running=true;
     return true;
 }
 void APC_Tracking::close()
 {
-    if(!_running) return;
-    { APC_LockGuard guard(_lock); _quit=true; _status={}; ++_generation; _wake.signal(); }
-    pthread_join(_thread,nullptr); _running=false;
+    if(_running) {
+        { APC_LockGuard guard(_lock); _quit=true; _status={}; ++_generation; _wake.signal(); }
+        pthread_join(_thread,nullptr); _running=false;
+    }
     ca_image_tracker_destroy(_engine); _engine=nullptr; _media=nullptr;
 }
 int APC_Tracking::start(ca_tracking_rect r, ca_tracking_owner owner)

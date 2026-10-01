@@ -127,13 +127,16 @@ client gesture remains unverified.
 
 The original 30 September MT11 zoom-scene runs failed the five-second centering
 threshold: normalized error fell from 0.145 to 0.071 and 0.066, against a required
-error below 0.04. The calibrated rate-pulse correction passes three consecutive
-zoom runs plus wide and thermal acquisition. The regression retains the original
+error below 0.04. The calibrated rate-pulse correction initially passed three
+consecutive zoom runs plus wide and thermal acquisition. A subsequent six-run
+review reproduced three failures of the two-second settling check, so zoom
+settling remains unresolved. The regression retains the original
 five-second threshold and additionally requires the rectangle to remain within
 0.04 of center for two seconds. Unit tests check integrated motion through the
 dead zone at both signs and variable control intervals, plus reset/stop handling.
-Logs are in `/data/buildlogs/zoom-centering-20260930/`; the analysis archive is
-`AP_CameraGimbal.port/analysis/MT11/zoom-centering-20260930/`.
+Historical hardware measurements are in the separate analysis archive;
+use `--runtime <directory>` with the commands above to retain reproducible
+SITL process logs, session details and BIN logs locally.
 Short-pulse response still needs confirmation on physical MT11 hardware.
 
 Native builds and SITL establish API/build/UI interoperability, not native

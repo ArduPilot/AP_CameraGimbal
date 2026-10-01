@@ -958,8 +958,11 @@ build/tests/test_xop_buffer: tests/test_xop_buffer.cpp $(RTSP_ROOT)/net/BufferWr
 
 # Isolate dlib exceptions from the rest of the firmware. Compile only its
 # correlation tracker and FFT, without optional GUI/BLAS/CUDA dependencies.
-DLIB_ROOT := $(abspath ../build/deps/dlib)
+DLIB_ROOT ?= $(abspath ../build/deps/dlib)
 DLIB_HEADER := $(DLIB_ROOT)/dlib/image_processing/correlation_tracker.h
+# This belongs to a verified dependency tree, not Make's generated outputs.
+.PRECIOUS: $(DLIB_HEADER)
+generated: $(DLIB_HEADER)
 $(DLIB_HEADER):
 	sh ../tools/bootstrap_dlib.sh $(DLIB_ROOT)
 DLIB_FLAGS = -O2 -std=gnu++17 -fexceptions -fno-rtti -DDLIB_NO_GUI_SUPPORT -DDLIB_DISABLE_ASSERTS -Iinclude -isystem $(DLIB_ROOT)
@@ -971,17 +974,33 @@ build/$(CAMERA_BACKEND)/tracking_dlib.o: src/media/tracking_dlib.cpp include/cam
 	$(CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
 OBJECTS += build/$(CAMERA_BACKEND)/tracking_dlib.o
 $(TARGET): build/$(CAMERA_BACKEND)/tracking_dlib.o
-SITL_APP_OBJECTS += build/host/tracking_dlib.o
-$(SITL_TARGET): build/host/tracking_dlib.o
+$(SITL_OBJDIR)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
+	mkdir -p $(@D)
+	$(HOST_CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
+SITL_APP_OBJECTS += $(SITL_OBJDIR)/tracking_dlib.o
+$(SITL_TARGET): $(SITL_OBJDIR)/tracking_dlib.o
 $(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET): build/host/tracking_dlib.o
 Z1_HOST_OBJECTS += build/host/tracking_dlib.o
 $(Z1_HOST_TARGET): build/host/tracking_dlib.o
--include build/host/tracking_dlib.d build/$(CAMERA_BACKEND)/tracking_dlib.d
+-include build/host/tracking_dlib.d build/$(CAMERA_BACKEND)/tracking_dlib.d $(SITL_OBJDIR)/tracking_dlib.d
 
 .PHONY: image-tracking-test
 image-tracking-test: build/tests/test_image_tracker
 	./build/tests/test_image_tracker
+image-tracking-test: tracking-lifetime-test mt11-overlay-test
 test: image-tracking-test
 build/tests/test_image_tracker: tests/test_image_tracker.cpp include/camera_app/image_tracker.h include/camera_app/tracking_pose.h include/camera_app/tracking_rate.h build/host/tracking_dlib.o
 	mkdir -p $(@D)
 	$(HOST_CXX) -O2 -std=gnu++17 -Wall -Wextra -Werror -Iinclude -o $@ $< build/host/tracking_dlib.o -lpthread -lm
+
+.PHONY: tracking-lifetime-test mt11-overlay-test
+tracking-lifetime-test: build/tests/test_tracking_lifetime
+	./build/tests/test_tracking_lifetime
+build/tests/test_tracking_lifetime: tests/test_tracking_lifetime.cpp tests/test_media_backend.h src/media/tracking.cpp include/camera_app/APC_Tracking.h build/host/tracking_dlib.o
+	mkdir -p $(@D)
+	$(HOST_CXX) -O1 -g -fsanitize=address -fno-omit-frame-pointer -std=gnu++17 -Wall -Wextra -Werror -Iinclude -I../include -DAPCAM_TARGET=APCAM_TARGET_MT11 -Wl,--wrap=pthread_create -o $@ $(filter %.cpp %.o,$^) -lpthread -lm
+mt11-overlay-test: build/tests/test_mt11_overlay
+	./build/tests/test_mt11_overlay
+build/tests/test_mt11_overlay: tests/test_mt11_overlay.cpp src/backends/mt11/overlay.cpp src/media/overlay.cpp include/camera_app/overlay.h
+	mkdir -p $(@D)
+	$(HOST_CXX) -O2 -std=gnu++17 -Wall -Wextra -Werror -Wno-missing-field-initializers -Iinclude -I../include -I$(SS928_MPP_ROOT)/include/hisilicon -DAPCAM_TARGET=APCAM_TARGET_MT11 -o $@ $(filter %.cpp,$^)

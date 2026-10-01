@@ -307,6 +307,13 @@ const char * APC_Media::recording_path() const
 int APC_Media::set_zoom(float zoom)
 {
     REQUIRE_IMPL;
+    if (isfinite(zoom) && zoom >= 1 && zoom <= APCAM_ZOOM_MAX) {
+        // System zoom can switch RGB sensors or leave thermal view. Stop the
+        // compositor before the backend rebinds VENC, and discard the old track.
+        if (_backend->side_by_side() && _backend->set_side_by_side(false)<0) return -1;
+        const auto lens=apcam_uses_zoom_lens(zoom) ? CA_MEDIA_LENS_ZOOM : CA_MEDIA_LENS_WIDE;
+        if (_backend->thermal_main() || lens!=_backend->lens()) _tracking.stop();
+    }
     int result=_backend->set_zoom(zoom);
     int saved=errno;
     _apply_overlay_after_control("zoom");

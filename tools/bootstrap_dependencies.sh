@@ -85,4 +85,5 @@ else
     trap - EXIT HUP INT TERM
 fi
 
+sh "$(dirname "$0")/bootstrap_dlib.sh" "$destination/dlib"
 echo "Dependencies ready in $destination"

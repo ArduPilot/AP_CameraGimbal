@@ -19,6 +19,7 @@ CROSS_COMPILE ?= aarch64-linux-gnu-
 DEPS_ROOT ?= $(CURDIR)/build/deps
 SS928_MPP_ROOT ?= $(abspath $(DEPS_ROOT)/ss928-mpp)
 MINIMP4_ROOT ?= $(abspath $(DEPS_ROOT)/minimp4)
+DLIB_ROOT ?= $(abspath $(DEPS_ROOT)/dlib)
 MT11_KERNEL ?= packaging/mt11/base/kernel
 MT11_ROOTFS ?= packaging/mt11/base/rootfs
 MT11_UPDATE_CONFIG ?= packaging/mt11/base/config.json
@@ -61,6 +62,7 @@ export MT11_ROOT_PASSWORD
 export MT11_ROOT_PASSWORD_HASH_FILE
 export SS928_MPP_ROOT
 export MINIMP4_ROOT
+export DLIB_ROOT
 
 # Recursive Make inherits exported roots as environment variables. Compare
 # paths, not variable origins, so release builds still fetch default sources.

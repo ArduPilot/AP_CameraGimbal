@@ -2000,7 +2000,11 @@ static bool combined_frame(APC_Media_MT11_State *m, bool send)
                 auto &tile=task.img_out.video_frame;
                 const auto &source=input[i].video_frame;
                 tile.width=(width/2)&~1U;
-                tile.height=std::min(height,unsigned(uint64_t(tile.width)*source.height/source.width))&~1U;
+                // The thermal VPSS frame is stretched to the encoder aspect;
+                // restore the sensor's geometry when fitting its tile.
+                const unsigned source_width=i==1 ? APCAM_LENS3_WIDTH : source.width;
+                const unsigned source_height=i==1 ? APCAM_LENS3_HEIGHT : source.height;
+                tile.height=std::min(height,unsigned(uint64_t(tile.width)*source_height/source_width))&~1U;
                 const unsigned y=((height-tile.height)/2)&~1U, x=i*(width/2);
                 tile.phys_addr[0]+=y*stride+x; tile.phys_addr[1]+=(y/2)*stride+x;
                 ot_vgs_handle job;

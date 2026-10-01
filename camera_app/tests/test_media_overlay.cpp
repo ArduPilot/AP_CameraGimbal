@@ -6,6 +6,8 @@
 static bool overlay_live, recording_active, fail_open;
 static unsigned closed, opened, log_count;
 static int control_result, overlay_result;
+static bool combined, thermal;
+static enum ca_media_lens selected=CA_MEDIA_LENS_WIDE;
 void ca_log(const char *, ...) { log_count++; }
 bool ca_binlog_active() { return false; }
 uint64_t ca_binlog_time_us() { return 0; }
@@ -20,7 +22,16 @@ public:
     int set_recording(bool active) override { recording_active=active; return 0; }
     int apply_overlay(const ca_config *) override
     { overlay_live=overlay_result==0; errno=ENOSPC; return overlay_result; }
-    int set_zoom(float) override { return control(); }
+    bool tracking_available() const override { return true; }
+    bool side_by_side() const override { return combined; }
+    int set_side_by_side(bool enable) override { combined=enable; return 0; }
+    enum ca_media_lens lens() const override { return selected; }
+    bool thermal_main() const override { return thermal; }
+    int set_zoom(float z) override {
+        assert(!combined); // VENC must not have two producers during rebinding.
+        if(control_result==0) { selected=apcam_uses_zoom_lens(z)?CA_MEDIA_LENS_ZOOM:CA_MEDIA_LENS_WIDE; thermal=false; }
+        return control();
+    }
     int set_lens(enum ca_media_lens) override { return control(); }
     int set_thermal_main(bool) override { return control(); }
 };
@@ -54,6 +65,21 @@ int main()
         }
     }
     control_result=overlay_result=0;
+    const ca_tracking_rect rect {.1f,.1f,.3f,.3f};
+    assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
+    assert(ca_media_set_zoom(media,2)==0);
+    assert(ca_media_tracking_status(media).state==CA_TRACK_ACQUIRING);
+    assert(ca_media_set_zoom(media,5)==0);
+    assert(ca_media_tracking_status(media).state==CA_TRACK_IDLE);
+    assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
+    assert(ca_media_set_zoom(media,1)==0);
+    assert(ca_media_tracking_status(media).state==CA_TRACK_IDLE);
+    thermal=true;
+    assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
+    assert(ca_media_set_zoom(media,1)==0);
+    assert(!thermal && ca_media_tracking_status(media).state==CA_TRACK_IDLE);
+    combined=true;
+    assert(ca_media_set_zoom(media,5)==0 && !combined);
     ca_config next=config.settings;
     next.main_resolution=CA_VIDEO_1080P;
     assert(next.main_resolution!=config.settings.main_resolution);
