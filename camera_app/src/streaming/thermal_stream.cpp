@@ -59,8 +59,24 @@ struct ca_thermal_stream {
     std::string video_path, record_path;
     uint64_t record_generation = 0, record_start = 0, record_epoch = 0;
     uint64_t record_previous = 0, next_record = 0;
-
+    // publish skips all per-frame work unless something consumes frames
+    std::atomic<unsigned> streaming_clients{0};
+    std::atomic<bool> record_open{false};
+    int wake[2] = {-1, -1};
+    ~ca_thermal_stream() { for (int fd:wake) if (fd >= 0) close(fd); }
 };
+
+static void wake_worker(ca_thermal_stream *s)
+{
+    const char b = 0;
+    if (s->wake[1] >= 0) (void)!write(s->wake[1], &b, 1);
+}
+
+static bool frames_wanted(const ca_thermal_stream *s)
+{
+    return s->streaming_clients.load() != 0 || s->record_open.load() ||
+           (s->proxy && enabled.load());
+}
 struct ThermalClient {
     int fd;
     std::string request;
@@ -98,12 +114,21 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     if (n<0 || size_t(n)>=sizeof(json)) return;
     memcpy(s->pixels.data(),pixels,640U*512U*sizeof(uint16_t));
     s->json.assign(json,size_t(n)); s->capture_us=now;
+    wake_worker(s);
 }
 
 void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
                                const timespec *captured_at, uint8_t gain, bool rotated)
 {
     if (!s || !pixels || !captured_at) return;
+    if (!frames_wanted(s)) {
+        // frame_id still counts every sensor frame; drop the cached frame so
+        // a new consumer never starts from a stale one
+        std::lock_guard<std::mutex> guard(s->lock);
+        ++s->sequence;
+        s->json.clear();
+        return;
+    }
     ca_metadata metadata;
     ca_metadata_snapshot(&metadata); // freeze telemetry with pixels, never at client-read time
     const uint64_t now = mono_us();
@@ -152,6 +177,7 @@ static int close_recording(ca_thermal_stream *s)
     int saved = errno;
     if (close(s->record_fd) < 0 && result == 0) { result = -1; saved = errno; }
     s->record_fd = -1;
+    s->record_open = false;
     ++s->record_generation;
     ca_log("raw thermal recording stopped: %s%s", s->record_path.c_str(),
            result < 0 ? " (flush failed)" : "");
@@ -178,6 +204,7 @@ static int open_recording(ca_thermal_stream *s)
         return -1;
     }
     ++s->record_generation;
+    s->record_open = true;
     s->record_start = mono_us();
     s->record_epoch = s->record_previous = s->next_record = 0;
     ca_log("raw thermal recording started: %s (%u fps)", s->record_path.c_str(), s->record_fps);
@@ -235,9 +262,19 @@ static void *thermal_worker(void *opaque)
     uint64_t previous=0, next_encode=0, epoch=0, encoded_sequence=0;
     unsigned stream_fps = public_fps.load();
     Bytes encoded;
+    std::vector<pollfd> waits;
     while (!s->stop.load()) {
-        pollfd waitfd{s->listener,POLLIN,0};
-        poll(&waitfd,1,10);
+        // Frames, recording changes and close all signal the wake pipe; the
+        // timeout only polices stalled clients.
+        waits.assign(1, pollfd{s->wake[0],POLLIN,0});
+        if (s->listener >= 0) waits.push_back(pollfd{s->listener,POLLIN,0});
+        for (const auto &c:clients) {
+            waits.push_back(pollfd{c.fd,short(POLLIN | (c.pending ? POLLOUT : 0)),0});
+        }
+        poll(waits.data(),waits.size(),clients.empty() ? -1 : 500);
+        char drain[64];
+        while (read(s->wake[0],drain,sizeof(drain)) > 0) {}
+        if (s->stop.load()) break;
         while (s->listener >= 0) {
             int fd=accept4(s->listener,nullptr,nullptr,SOCK_NONBLOCK|SOCK_CLOEXEC);
             if (fd<0) break;
@@ -263,6 +300,15 @@ static void *thermal_worker(void *opaque)
                     thermal_mkv::append(*out,s->header); c.pending=out;
                     c.streaming=true; c.progress_us=now;
                 }
+            } else {
+                // discard anything a streaming client sends, or poll() stays
+                // readable and the worker spins
+                char buffer[256];
+                ssize_t n;
+                while ((n=recv(c.fd,buffer,sizeof(buffer),0)) > 0) {}
+                if (n==0 || (errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR)) {
+                    close(c.fd); c.fd=-1; continue;
+                }
             }
             if (c.pending) {
                 const auto &b=*c.pending;
@@ -273,15 +319,15 @@ static void *thermal_worker(void *opaque)
                 } else if (n==0 || (errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR)) {
                     close(c.fd); c.fd=-1; continue;
                 }
-            } else if (c.streaming) {
-                char b; ssize_t n=recv(c.fd,&b,1,MSG_PEEK);
-                if (n==0) { close(c.fd); c.fd=-1; continue; }
             }
             if ((!c.streaming || c.pending) && now-c.progress_us>2000000) { close(c.fd); c.fd=-1; }
         }
         for (size_t i=0;i<clients.size();) {
             if (clients[i].fd<0) clients.erase(clients.begin()+i); else i++;
         }
+        unsigned streaming=0;
+        for (const auto &c:clients) streaming += c.streaming;
+        s->streaming_clients = streaming;
         if (stream_fps != public_fps.load()) {
             stream_fps = public_fps.load();
             next_encode = 0;
@@ -367,6 +413,13 @@ int ca_thermal_stream_open(ca_thermal_stream **result,unsigned rtsp_port,bool si
     if (!s) { errno=ENOMEM; return -1; }
     s->simulated=simulated; s->pixels.resize(640U*512U);
     if (!s->codec.open()) { delete s; errno=ENOTSUP; return -1; }
+    if (pipe(s->wake) < 0 || fcntl(s->wake[0],F_SETFL,O_NONBLOCK) < 0 ||
+        fcntl(s->wake[1],F_SETFL,O_NONBLOCK) < 0 ||
+        fcntl(s->wake[0],F_SETFD,FD_CLOEXEC) < 0 ||
+        fcntl(s->wake[1],F_SETFD,FD_CLOEXEC) < 0) {
+        int error=errno;
+        delete s; errno=error; return -1;
+    }
     s->header=thermal_mkv::header(s->codec.context->extradata,s->codec.context->extradata_size,0);
     s->record_fps = settings->raw_record_fps;
     if (port) {
@@ -392,6 +445,7 @@ void ca_thermal_stream_close(ca_thermal_stream *s)
 {
     if (!s) return;
     public_port=0; available=false; s->stop=true;
+    wake_worker(s);
     if (s->started) pthread_join(s->thread,nullptr);
     ca_support_video_close(s->proxy);
     (void)ca_thermal_stream_recording(s, false, nullptr);
