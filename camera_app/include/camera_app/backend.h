@@ -49,6 +49,9 @@ struct ca_backend_config {
     const char *uart_device;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    /* Raw external UART bytes delegated by the SIYI MCU. */
+    ca_siyi_emit_fn uart_emit;
+    void *uart_opaque;
     ca_private_emit_fn private_emit;
     void *private_opaque;
     ca_recording_set_fn recording_set;
@@ -100,6 +103,8 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
                            const uint8_t *packet, size_t length);
 /* SIYI private network-to-MCU route; A8/ZR10 convert v3 fields to v2 UART. */
 int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *frame);
+/* Return bytes to the MCU-owned external UART, independently of uart.protocol. */
+int ca_backend_write_external_uart(struct ca_backend *backend, const uint8_t *data, size_t length);
 void ca_backend_periodic(struct ca_backend *backend);
 int ca_backend_request_gimbal_attitude(struct ca_backend *backend);
 bool ca_backend_gimbal_attitude(const struct ca_backend *backend,

@@ -2,6 +2,8 @@
 #define CAMERA_APP_MAVLINK_SERVER_H
 
 #include "camera_app/config.h"
+#include <stddef.h>
+#include <stdint.h>
 
 struct ca_backend;
 struct ca_media;
@@ -29,6 +31,8 @@ int ca_mavlink_server_open(struct ca_mavlink_server **server,
 int ca_mavlink_server_fd(const struct ca_mavlink_server *server);
 int ca_mavlink_server_handle(struct ca_mavlink_server *server);
 void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server);
+void ca_mavlink_server_feed_mcu(struct ca_mavlink_server *server,
+                                const uint8_t *data, size_t length);
 void ca_mavlink_server_periodic(struct ca_mavlink_server *server);
 void ca_mavlink_server_close(struct ca_mavlink_server *server);
 

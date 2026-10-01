@@ -27,7 +27,8 @@
 #define APCAM_HAVE_OPTICAL_ZOOM 1
 #define APCAM_HAVE_FOCUS 0
 #define APCAM_HAVE_IMAGE_CONTROLS 0
-#define APCAM_HAVE_EXTERNAL_UART 1
+/* Assume the external connector is MCU-owned, as on A8 and MT11. */
+#define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 0
 #define APCAM_HAVE_SOC_TEMPERATURE 0
 #define APCAM_VENDOR_PORT 37260

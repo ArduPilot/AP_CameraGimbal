@@ -27,7 +27,8 @@
 #define APCAM_HAVE_OPTICAL_ZOOM 1
 #define APCAM_HAVE_FOCUS 1
 #define APCAM_HAVE_IMAGE_CONTROLS 1
-#define APCAM_HAVE_EXTERNAL_UART 1
+/* The external connector is handled by the gimbal MCU, not Linux UART4. */
+#define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 1
 #define APCAM_HAVE_SOC_TEMPERATURE 1
 #define APCAM_VENDOR_PORT 37260

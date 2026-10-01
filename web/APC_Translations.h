@@ -127,6 +127,7 @@ enum string_id {
     S_P_UART_PROTOCOL,
     S_H_UART_PROTOCOL_MT11,
     S_H_UART_PROTOCOL_A8,
+    S_H_UART_MCU,
     S_P_MAVLINK_CAMERA_COMPID,
     S_H_MAVLINK_CAMERA_COMPID,
     S_OPT_CAMERA_COMP1,
@@ -679,6 +680,7 @@ static constexpr Translations translations = [] {
     result[S_P_UART_PROTOCOL] = {"UART4 protocol", "UART4 协议", "UART4 プロトコル"};
     result[S_H_UART_PROTOCOL_MT11] = {"External /dev/ttyAMA4 flight-controller link at 230400 baud, 8 data bits, no parity and one stop bit.", "通过 /dev/ttyAMA4 连接外部飞控，230400 波特率、8 数据位、无校验、1 停止位。", "/dev/ttyAMA4 経由の外部フライトコントローラー接続。230400 baud、データ 8 ビット、パリティなし、ストップ 1 ビット。"};
     result[S_H_UART_PROTOCOL_A8] = {"External flight-controller UART link at 230400 baud, 8 data bits, no parity and one stop bit.", "外部飞控 UART 连接，230400 波特率、8 数据位、无校验、1 停止位。", "外部フライトコントローラーとの UART 接続。230400 baud、データ 8 ビット、パリティなし、ストップ 1 ビット。"};
+    result[S_H_UART_MCU] = {"The external UART is handled by the gimbal controller. This firmware cannot select its protocol or disable its input. The raw uart.protocol setting does not control that connector.", "外部 UART 由云台控制器处理。本固件无法选择其协议或禁用其输入。原始配置中的 uart.protocol 设置不控制该接口。", "外部 UART はジンバルコントローラーが処理します。このファームウェアではプロトコルの選択や入力の無効化はできません。生の設定の uart.protocol はこの端子を制御しません。"};
     result[S_P_MAVLINK_CAMERA_COMPID] = {"MAVLink camera component ID", "MAVLink 相机组件 ID", "MAVLink カメラコンポーネント ID"};
     result[S_H_MAVLINK_CAMERA_COMPID] = {"Select Camera 1–6 (IDs 100–105); the matching gimbal uses ID 154, 171, 172, 173, 174 or 175. Use a different camera ID for each camera on the same vehicle.", "选择相机 1–6（ID 100–105），对应的云台 ID 为 154、171、172、173、174 或 175。同一载具上的每台相机应使用不同的相机 ID。", "カメラ 1–6（ID 100–105）を選択。対応するジンバル ID は 154、171、172、173、174、175 です。同じ機体の各カメラには異なる ID を設定してください。"};
     result[S_OPT_CAMERA_COMP1] = {"Camera 1 (100)", "相机 1 (100)", "カメラ 1 (100)"};

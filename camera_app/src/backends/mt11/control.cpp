@@ -38,12 +38,15 @@ struct ca_backend {
     const bool *manual_control, *manual_command;
     int uart_fd;
     bool datagram_transport;
+    bool reply_to_mcu;
     uint16_t private_sequence;
     uint16_t public_sequence;
     uint8_t gimbal_mode;
     struct ca_private_parser parser;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    ca_siyi_emit_fn uart_emit;
+    void *uart_opaque;
     ca_private_emit_fn private_emit;
     void *private_opaque;
     ca_recording_set_fn recording_set;
@@ -297,7 +300,13 @@ static void emit_local(struct ca_backend *backend, uint8_t opcode,
     size_t length = ca_siyi_build(packet, sizeof(packet), 2,
                                   backend->public_sequence++, opcode,
                                   payload, payload_length);
-    if (length != 0U) backend->emit(backend->emit_opaque, packet, length);
+    if (length != 0U) {
+        if (backend->reply_to_mcu) {
+            (void)send_private(backend, 0x0a, 0x35, packet, (uint16_t)length);
+        } else {
+            backend->emit(backend->emit_opaque, packet, length);
+        }
+    }
 }
 
 static void emit_feedback(struct ca_backend *backend, uint8_t feedback)
@@ -397,6 +406,19 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
         frame->link != MT11_LINK) {
         return;
     }
+    if (frame->command == 0x3fU) {
+        if ((frame->control == 0x08U || frame->control == 0x09U) && backend->uart_emit)
+            backend->uart_emit(backend->uart_opaque, frame->payload, frame->payload_length);
+        return;
+    }
+    if (frame->command == 0x35U) {
+        if (frame->control == 0x08U || frame->control == 0x09U) {
+            backend->reply_to_mcu = true;
+            (void)ca_backend_handle_siyi(backend, frame->payload, frame->payload_length);
+            backend->reply_to_mcu = false;
+        }
+        return;
+    }
     if (frame->command == MT11_TUNNEL) {
         struct ca_siyi_packet packet;
         size_t consumed;
@@ -408,6 +430,9 @@ static void handle_private(void *opaque, const struct ca_private_frame *frame)
             return;
         }
         if (packet.opcode == 0x0aU && packet.payload_length >= 4U) {
+            if (packet.payload_length >= 5U && packet.payload[4] <= 2U) {
+                backend->gimbal_mode = packet.payload[4];
+            }
             memcpy(copy, frame->payload, frame->payload_length);
             (void)ca_siyi_rewrite_payload_byte(
                 copy, frame->payload_length, 3,
@@ -520,6 +545,8 @@ int ca_backend_open(struct ca_backend **result,
     backend->emit_opaque = config->emit_opaque;
     backend->private_emit = config->private_emit;
     backend->private_opaque = config->private_opaque;
+    backend->uart_emit = config->uart_emit;
+    backend->uart_opaque = config->uart_opaque;
     backend->recording_set = config->recording_set;
     backend->recording_get = config->recording_get;
     backend->recording_opaque = config->recording_opaque;
@@ -600,6 +627,14 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     }
     if (ca_backend_manual_blocked(backend->manual_control,backend->manual_command,
                                   packet.opcode,packet.payload,packet.payload_length)) return 0;
+    if (backend->reply_to_mcu && packet.opcode == 0x0aU && packet.payload_length == 0U) {
+        uint8_t status[8] = {};
+        status[3] = backend->recording_get(backend->recording_opaque) ? 1U : 0U;
+        status[4] = backend->gimbal_mode;
+        status[5] = backend->mounting_direction;
+        emit_local(backend, packet.opcode, status, sizeof(status));
+        return 0;
+    }
     if (packet.opcode == 0x0cU && packet.payload_length == 1U &&
         packet.payload[0] == 2U) {
         emit_feedback(backend, toggle_recording(backend));
@@ -870,6 +905,8 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         emit_local(backend, packet.opcode, response, sizeof(response));
         return 0;
     }
+    /* Never send an unhandled delegated request back for the MCU to forward again. */
+    if (backend->reply_to_mcu) { errno = ENOTSUP; return -1; }
     if (packet.opcode == 0x0cU && packet.payload_length == 1U &&
         packet.payload[0] >= 3U && packet.payload[0] <= 5U) {
         backend->gimbal_mode = (uint8_t)(packet.payload[0] - 3U);
@@ -881,6 +918,17 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode, packet.payload, packet.payload_length);
     return send_private(backend, 0x08, MT11_TUNNEL, packet_data,
                         (uint16_t)length);
+}
+
+int ca_backend_write_external_uart(struct ca_backend *backend, const uint8_t *data, size_t length)
+{
+    while (length) {
+        size_t count = length > 255U ? 255U : length;
+        if (send_private(backend, 0x0a, 0x35, data, (uint16_t)count) < 0) return -1;
+        data += count;
+        length -= count;
+    }
+    return 0;
 }
 
 int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *frame)

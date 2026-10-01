@@ -656,7 +656,8 @@ try:
     assert b'name="position_targeting"' in body
     assert b'name="osd_cross"' in body and b'name="osd_thermal_fov"' in body
     assert b'value="true" selected' in body
-    assert b'name="uart_protocol"' in body and b'>None</option>' in body
+    assert b'name="uart_protocol"' not in body
+    assert b'The external UART is handled by the gimbal controller.' in body
     assert b'<option value="while_armed">While Armed</option>' in body
     assert b'<select required name="timezone" id="timezone">' in body
     assert b'<option selected value="GMT-10">GMT-10</option>' in body
@@ -666,7 +667,6 @@ try:
         "timezone": "Asia/Kathmandu",
         "photo_scope": "all",
         "orientation": "auto",
-        "uart_protocol": "mavlink",
         "mavlink_system_id": "42",
         "mavlink_camera_component_id": "105",
         "mavlink_tcp_port": "14600",
@@ -722,8 +722,7 @@ try:
     assert status == 200 and b"Parameters saved" in body
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
-    assert saved_config.count("[uart]") == 1
-    assert 'protocol = "mavlink"' in saved_config
+    assert "[uart]" not in saved_config
     assert 'system_id = "42"' in saved_config
     assert 'camera_component_id = "105"' in saved_config
     assert 'tcp_port = "14600"' in saved_config

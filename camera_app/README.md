@@ -302,14 +302,62 @@ correction, rate limits, motor quantisation and lag still apply. At an undefined
 bearing (within 10 cm horizontally of the ROI, or at a geographic pole), rate
 tracking stops instead of producing a singular rate.
 
-`uart.protocol` selects `none`, `siyi` or `mavlink` for the external
-flight-controller connection on `/dev/ttyAMA4`. The selected protocol uses
-230400 baud, 8 data bits, no parity and one stop bit. This UART selection is
-independent of the network listeners: SIYI remains available on TCP/UDP 37260,
-and the configured MAVLink TCP/UDP listeners remain available. The setting
-takes effect when `camera-app` restarts. A UART I/O failure disables only the
-UART transport until that restart; camera operation and network transports
-continue running.
+On A8 and MT11, the external connector is handled by the gimbal MCU;
+ZR10 is assumed to use the same arrangement pending a hardware check.
+Read-only SIYI queries on A8 and MT11 respond at 115200 baud, 8N1, even when
+`uart.protocol` selects another protocol. MT11 Linux UART4 receives no bytes
+from that connector; A8 has no `/dev/ttyAMA4` device.
+`uart.protocol = none` therefore does **not** disable the external connector
+or prevent the MCU from reacting to a connected flight controller. These
+cameras' web UIs omit the protocol selector and explain the limitation.
+Existing INI values remain readable; an explicitly supplied
+`CAMERA_APP_EXTERNAL_UART` can still select a separate Linux serial device
+or a test PTY (230400 baud, 8N1). Network listeners remain independent.
+
+The A8, MT11 and ZR10 backends handle MCU-forwarded camera-local SIYI SDK
+requests to Linux through private `6b/35` frames. These use the same camera handlers as network requests (including
+configuration, A8 digital zoom, photo capture and recording), with replies returned
+to the MCU as `6b/35` acknowledgements (outer flags `0x0a`). The `6b/16`
+network tunnel does not return replies to the external UART. Replies stay on
+the MCU path rather than going to a
+network client. Unsupported delegated requests are not sent back as requests,
+preventing a forwarding loop. This path works independently of `uart.protocol`;
+it does not disable or select the MCU's external serial protocol.
+
+Raw external UART bytes arrive through `6b/3f`. A dedicated stream parser
+accepts MAVLink 1 and MAVLink 2 across private-frame boundaries and dispatches
+camera commands through the existing MAVLink service. Replies and camera
+telemetry return as raw bytes in `6b/35` acknowledgements: A8 hardware testing
+found that `6b/3f` replies lose camera responses, whereas `6b/35` delivers them.
+A bounded queue paces complete MAVLink packets for 115200 baud. Packets longer
+than 255 bytes use consecutive private frames without a pause inside the
+MAVLink packet, which could allow native MCU telemetry to interleave.
+SIYI bytes in this raw stream do
+not execute SDK commands; delegated `6b/35` requests execute them once.
+The MCU continues to own the UART gimbal component: Linux neither repeats
+its gimbal controls nor publishes a competing gimbal identity on this route.
+Camera requests still use the configured camera component (normally 100),
+including capture, recording, zoom, tracking, parameters and MAVFTP.
+
+A8 uses private v2 framing (MCU `0x2e`, camera `0x2c`); MT11 uses private v3
+(camera `0x34`). A8 hardware tests through CubeOrange serial passthrough
+verified MAVLink 1/2 camera discovery, capture, recording, zoom, SIYI
+coexistence, native MCU gimbal discovery and a complete MAVFTP camera
+definition download. The stock MCU gates incoming MAVLink forwarding on
+received heartbeats. Direct clients should send a heartbeat every second
+and allow several seconds for forwarding to start, including after an idle
+timeout. The default automatic system ID also requires an autopilot
+heartbeat before the camera service can reply; standalone clients can
+instead configure a nonzero MAVLink system ID. SIYI requests do not need
+this handshake.
+The complete hardware test used ArduPilot SITL to supply the telemetry
+requested by the MCU. Heartbeat-only trials also worked, but occasionally
+lost replies while native MCU request bursts remained unserviced; reliable
+standalone operation under that traffic pattern is not yet established.
+MT11's delegated SIYI input is captured on hardware; its new MAVLink return
+path has host coverage only. ZR10 uses the A8 arrangement by
+assumption. `make mcu-uart-test` exercises all three backends with fragmented
+MAVLink, FTP reply splitting, SIYI coexistence and independent network routes.
 
 When the ArduPilot camera app is running, the web Parameters and Raw config tabs edit
 `/app/camera.ini`; when the vendor is running they continue to edit

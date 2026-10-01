@@ -163,6 +163,8 @@ with tempfile.TemporaryDirectory(prefix="zr10-web-") as directory:
         assert request("/healthz") == (200, b"camera_app=stopped\ncamera_kind=none\n")
         assert request("/", authenticated=False)[0] == 401
         status, page = request("/parameters")
+        assert b'name="uart_protocol"' not in page
+        assert b'The external UART is handled by the gimbal controller.' in page
         assert status == 200 and b"2560x1440" in page
         assert b"3840x2160" not in page
         fields = ParameterForm(page).values

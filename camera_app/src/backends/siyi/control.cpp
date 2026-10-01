@@ -69,8 +69,8 @@ struct ca_backend {
     const bool *manual_control, *manual_command;
     int uart_fd;
     bool datagram_transport;
-#if APCAM_TARGET == APCAM_TARGET_ZR10
     bool reply_to_mcu;
+#if APCAM_TARGET == APCAM_TARGET_ZR10
     uint64_t zoom_query_ms;
 #endif
     uint16_t link_sequence;
@@ -80,6 +80,8 @@ struct ca_backend {
     size_t rx_length;
     ca_siyi_emit_fn emit;
     void *emit_opaque;
+    ca_siyi_emit_fn uart_emit;
+    void *uart_opaque;
     ca_private_emit_fn private_emit;
     void *private_opaque;
     ca_recording_set_fn recording_set;
@@ -277,9 +279,12 @@ static void emit_local(struct ca_backend *backend, uint8_t opcode,
                                   backend->public_sequence++, opcode,
                                   payload, payload_length);
     if (length != 0U) {
-#if APCAM_TARGET == APCAM_TARGET_ZR10
-        if (backend->reply_to_mcu) { (void)send_tunnel(backend, packet, length);return; }
-#endif
+        if (backend->reply_to_mcu) {
+            /* The external-UART return path is a 6b/35 acknowledgement.
+             * 6b/16 is the network SDK tunnel and does not reach that UART. */
+            (void)send_link(backend, A8_LINK_FLAG_REPLY, 0x35, packet, length);
+            return;
+        }
         backend->emit(backend->emit_opaque, packet, length);
     }
 }
@@ -454,16 +459,23 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
     if (frame[8] != A8_LINK_CAMERA || (frame[1] & 0x1cU) != 8U) return;
 #endif
     switch (sub) {
-#if APCAM_TARGET == APCAM_TARGET_ZR10
+    case 0x3f:
+        if (frame[8] == A8_LINK_CAMERA &&
+            (frame[1] == A8_LINK_FLAG_PLAIN || frame[1] == A8_LINK_FLAG_REQUEST) &&
+            backend->uart_emit) {
+            backend->uart_emit(backend->uart_opaque, payload, payload_length);
+        }
+        break;
     case 0x35: {
         /* MCU delegates camera-local SDK operations to Linux. Responses go
          * back through its tunnel, without recursively forwarding requests. */
+        if (frame[8] != A8_LINK_CAMERA ||
+            (frame[1] != A8_LINK_FLAG_PLAIN && frame[1] != A8_LINK_FLAG_REQUEST)) break;
         backend->reply_to_mcu = true;
         (void)ca_backend_handle_siyi(backend, payload, payload_length);
         backend->reply_to_mcu = false;
         break;
     }
-#endif
     case A8_SUB_ATTITUDE:
         if (payload_length >= 6U) update_attitude(backend, payload, 3U, false);
         break;
@@ -545,6 +557,8 @@ int ca_backend_open(struct ca_backend **result,
     backend->manual_control=config->manual_control;
     backend->private_emit=config->private_emit;
     backend->private_opaque=config->private_opaque;
+    backend->uart_emit=config->uart_emit;
+    backend->uart_opaque=config->uart_opaque;
     backend->manual_command=config->manual_command;
     backend->datagram_transport = strncmp(device, "udp://", 6U) == 0;
     backend->uart_fd = backend->datagram_transport
@@ -602,6 +616,20 @@ int ca_backend_open(struct ca_backend **result,
     ca_log("%s backend opened %s%s", SIYI_BACKEND_NAME, device,
            backend->datagram_transport ? "" : " at 230400 8N1");
     *result = backend;
+    return 0;
+}
+
+int ca_backend_write_external_uart(struct ca_backend *backend, const uint8_t *data, size_t length)
+{
+    /* 6b/35 ACKs write raw bytes to the external UART, including MAVLink.
+     * A8's stock 6b/3f return path drops camera replies; 35 was verified with
+     * MAVLink 1/2 and multi-frame FTP while the MCU emits its own telemetry. */
+    while (length) {
+        size_t count = length > A8_LINK_MAX_PAYLOAD ? A8_LINK_MAX_PAYLOAD : length;
+        if (send_link(backend, A8_LINK_FLAG_REPLY, 0x35, data, count) < 0) return -1;
+        data += count;
+        length -= count;
+    }
     return 0;
 }
 
@@ -939,9 +967,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     default:
         break;
     }
-#if APCAM_TARGET == APCAM_TARGET_ZR10
     if (backend->reply_to_mcu) { errno=ENOTSUP;return -1; }
-#endif
     /* everything else is the gimbal MCU's business */
     return send_tunnel(backend, packet_data, length);
 }
