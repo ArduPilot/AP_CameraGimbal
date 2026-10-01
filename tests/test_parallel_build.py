@@ -81,6 +81,29 @@ sys.exit(17)
     def test_thermal_submake_shares_the_outer_job_limit(self):
         self.assertGreater(self.thermal_submake(10), 1)
 
+    def test_sitl_tracker_objects_are_owned_by_each_variant(self):
+        for name in ('src/media/tracking_dlib.cpp', 'include/camera_app/image_tracker.h'):
+            path = self.root/'camera_app'/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('int tracker_fixture;\n' if name.endswith('.cpp') else '')
+        dlib = self.root/'custom-deps/dlib'
+        header = dlib/'dlib/image_processing/correlation_tracker.h'
+        header.parent.mkdir(parents=True)
+        header.touch()
+        processes = []
+        for backend in ('mt11','a8','zr10','z1mini'):
+            objdir = 'build/'+backend+'-sitl'
+            target = objdir+'/tracking_dlib.o'
+            processes.append((target, subprocess.Popen(
+                ['make', '-C', str(self.root/'camera_app'), target,
+                 'CAMERA_BACKEND='+backend, 'SITL_OBJDIR='+objdir, 'DLIB_ROOT='+str(dlib)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
+        for target, process in processes:
+            output = process.communicate(timeout=15)[0]
+            self.assertEqual(process.returncode, 0, output)
+            self.assertTrue((self.root/'camera_app'/target).is_file())
+        self.assertFalse((self.root/'camera_app/build/host/tracking_dlib.o').exists())
+
     def test_serial_parent_keeps_thermal_submake_serial(self):
         self.assertEqual(self.thermal_submake(1), 1)
 

@@ -127,6 +127,10 @@ with tempfile.TemporaryDirectory(prefix='mcu-uart-') as directory:
                 address=ipaddress.IPv4Address(uri.hostname)
                 assert not address.is_unspecified and not address.is_loopback, stream
                 ack=take('COMMAND_ACK'); assert ack.command==512 and ack.result==0
+            # Host media has no tracking source, so it must not add periodic
+            # idle tracking status traffic to the paced external UART.
+            pump(.3)
+            assert not any(m.get_type()=='CAMERA_TRACKING_IMAGE_STATUS' for m in messages)
             # No camera-info response may leak onto the TCP client.
             np=v2.MAVLink(None); seen=[]
             try:

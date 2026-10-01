@@ -43,9 +43,13 @@ int ca_overlay_hw_set(struct ca_overlay_hw **out, const struct ca_overlay_channe
         if(s->tracking) ca_overlay_tracking(&g,s->width,s->height,s->rect);
         if (ca_overlay_bitmaps(bits,s->width,s->height,&g)<0) return -1;
         int error=0;
+        // Tracking and thermal edges share layer slots. Release the outgoing
+        // set before attaching replacements in either direction.
+        for (unsigned r=0;r<CA_OVERLAY_REGIONS;r++)
+            if (!bits[r].pixels) clear(hw,c,r);
         for (unsigned r=0;r<CA_OVERLAY_REGIONS;r++) {
             struct ca_overlay_bitmap *b=&bits[r];
-            if (!b->pixels) { clear(hw,c,r); continue; }
+            if (!b->pixels) continue;
             /* The centre cross does not change when the RGB lens zooms. */
             if (r==0 && hw->attached[c][r] && old->cross==s->cross &&
                 old->width==s->width && old->height==s->height) continue;

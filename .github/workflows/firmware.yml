@@ -109,6 +109,12 @@ jobs:
           camera_app/tests/test_thermal
       - name: Test ISP decoding, native IPC and background polling
         run: make -C camera_app exposure-test manual-control-test
+      - name: Test image tracker lifetime, geometry and MT11 overlay transitions
+        run: make -C camera_app image-tracking-test media-overlay-test
+      - name: Test MCU UART MAVLink and delegated SIYI camera commands
+        run: |
+          make -C camera_app mcu-uart-test
+          python3 camera_app/tests/test_a8_delegated.py camera_app/tests/camera-app-a8-host
       - name: Test exclusive manual gimbal control and restart
         run: |
           make -C camera_app host

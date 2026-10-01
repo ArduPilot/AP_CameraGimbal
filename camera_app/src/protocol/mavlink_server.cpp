@@ -3191,7 +3191,8 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     flush_mcu(server, now);
     reload_config(server, now);
     const uint32_t tracking_interval=server->image_tracking_interval_ms?server->image_tracking_interval_ms:200;
-    if(have_peer(server) && tracking_interval!=UINT32_MAX && now-server->last_image_tracking_ms>=tracking_interval) {
+    if(ca_media_tracking_available(server->media) && have_peer(server) &&
+       tracking_interval!=UINT32_MAX && now-server->last_image_tracking_ms>=tracking_interval) {
         server->last_image_tracking_ms=now;
         send_image_tracking(server,nullptr);
     }

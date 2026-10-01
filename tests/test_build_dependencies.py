@@ -32,8 +32,9 @@ class BuildDependenciesTest(unittest.TestCase):
         bootstrap = tools / 'bootstrap_dependencies.sh'
         bootstrap.write_text('''#!/bin/sh
 set -eu
-mkdir -p "$1/ss928-mpp" "$1/minimp4"
+mkdir -p "$1/ss928-mpp" "$1/minimp4" "$1/dlib/dlib/image_processing"
 touch "$1/minimp4/minimp4.h"
+touch "$1/dlib/dlib/image_processing/correlation_tracker.h"
 echo bootstrap >> calls
 ''')
         bootstrap.chmod(0o755)
@@ -49,8 +50,10 @@ echo bootstrap >> calls
 .PHONY: generated
 generated:
 \t@test -f "$(MINIMP4_ROOT)/minimp4.h"
+\t@test -f "$(DLIB_ROOT)/dlib/image_processing/correlation_tracker.h"
 all:
 	@test -f "$(MINIMP4_ROOT)/minimp4.h"
+	@test -f "$(DLIB_ROOT)/dlib/image_processing/correlation_tracker.h"
 	@echo compile >> ../calls
 ''')
         # Like build_release.py, this child receives exported dependency roots.
@@ -62,7 +65,7 @@ recursive:
 
     def make(self, *args, extra_env=None, expect_success=True):
         env = os.environ.copy()
-        for key in ['SS928_MPP_ROOT', 'MINIMP4_ROOT', 'DEPS_ROOT',
+        for key in ['SS928_MPP_ROOT', 'MINIMP4_ROOT', 'DLIB_ROOT', 'DEPS_ROOT',
                     'MAKEFLAGS', 'MFLAGS', 'MAKELEVEL']:
             env.pop(key, None)
         env.update(extra_env or {})
@@ -109,6 +112,7 @@ recursive:
         self.assertEqual(self.make('recursive', 'DEPS_ROOT=custom-deps'),
                          ['bootstrap', 'compile', 'compile'])
         self.assertTrue((self.repo / 'custom-deps/minimp4/minimp4.h').is_file())
+        self.assertTrue((self.repo / 'custom-deps/dlib/dlib/image_processing/correlation_tracker.h').is_file())
 
     def prepare_sitl(self, fail=False):
         # The real top-level graph runs four backend submakes. Delay the shared
@@ -193,6 +197,12 @@ class CachedRTSPSourcesTest(unittest.TestCase):
                         hashlib.sha256(header.read_bytes()).hexdigest(), script, flags=re.M)
         self.script = self.root / 'bootstrap.sh'
         self.script.write_text(script)
+        shutil.copyfile(ROOT / 'tools/bootstrap_dlib.sh', self.root / 'bootstrap_dlib.sh')
+        dlib = self.root / 'deps/dlib'
+        tracker = dlib / 'dlib/image_processing/correlation_tracker.h'
+        tracker.parent.mkdir(parents=True)
+        tracker.write_text('// cached dlib fixture\n')
+        (dlib / '.apcam-version').write_text('20.0.1\n')
 
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.mpp), *args], text=True)
@@ -296,6 +306,61 @@ os.execv({shutil.which('git')!r}, ['git'] + args)
         recovered = self.run_download(env)
         self.assertEqual(recovered.returncode, 0, recovered.stdout)
         self.bootstrap()
+
+
+
+class DlibBootstrapTest(unittest.TestCase):
+    def setUp(self):
+        import tarfile
+        temporary = tempfile.TemporaryDirectory(prefix='apcam-dlib-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        source = self.root / 'source/dlib/image_processing/correlation_tracker.h'
+        source.parent.mkdir(parents=True)
+        source.write_text('// pinned tracker fixture\n')
+        self.archive = self.root / 'dlib.tar.gz'
+        with tarfile.open(self.archive, 'w:gz') as archive:
+            archive.add(self.root / 'source', arcname='dlib-20.0.1')
+        script = (ROOT / 'tools/bootstrap_dlib.sh').read_text()
+        script = re.sub(r'^sha=.*$', 'sha=' + hashlib.sha256(self.archive.read_bytes()).hexdigest(), script, flags=re.M)
+        self.script = self.root / 'bootstrap.sh'
+        self.script.write_text(script)
+        self.cache = self.root / 'deps/dlib'
+        wrappers = self.root / 'bin'
+        wrappers.mkdir()
+        curl = wrappers / 'curl'
+        curl.write_text(f'''#!{sys.executable}
+import os, shutil, sys, time
+from pathlib import Path
+with open(os.environ['DOWNLOADS'], 'a') as log: log.write('download\\n')
+time.sleep(.2)
+if os.environ.get('FAIL_DOWNLOAD'): sys.exit(22)
+shutil.copyfile(os.environ['ARCHIVE'], sys.argv[-1])
+''')
+        curl.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(wrappers)+os.pathsep+os.environ['PATH'],
+                        ARCHIVE=str(self.archive), DOWNLOADS=str(self.root/'downloads'))
+
+    def test_parallel_bootstrap_publishes_once(self):
+        processes = [subprocess.Popen(['sh', str(self.script), str(self.cache)], env=self.env,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                     for _ in range(4)]
+        for process in processes:
+            output = process.communicate(timeout=15)[0]
+            self.assertEqual(process.returncode, 0, output)
+        self.assertEqual((self.root/'downloads').read_text().splitlines(), ['download'])
+        self.assertTrue((self.cache/'dlib/image_processing/correlation_tracker.h').is_file())
+        self.assertFalse((self.cache/'source').exists())
+        self.assertEqual((self.cache/'.apcam-version').read_text().strip(), '20.0.1')
+
+    def test_failed_download_can_retry_without_partial_cache(self):
+        command = ['sh', str(self.script), str(self.cache)]
+        failed = subprocess.run(command, env=self.env | {'FAIL_DOWNLOAD': '1'}, capture_output=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse(self.cache.exists())
+        self.assertFalse(list(self.cache.parent.glob('.dlib.*')))
+        subprocess.run(command, env=self.env, check=True, capture_output=True)
+        self.assertTrue((self.cache/'dlib/image_processing/correlation_tracker.h').is_file())
 
 
 if __name__ == '__main__':
