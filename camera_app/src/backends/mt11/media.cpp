@@ -29,6 +29,7 @@
 #include "ss_mpi_isp.h"
 
 #include <limits.h>
+#include <poll.h>
 #include <math.h>
 #include <pthread.h>
 #include "apcam/atomic.h"
@@ -315,8 +316,17 @@ static void consume_frame(struct APC_Media_MT11_State *media, unsigned channel,
 static void *capture_thread(void *opaque)
 {
     struct APC_Media_MT11_State *media = (struct APC_Media_MT11_State*)(opaque);
+    struct pollfd waits[CA_MT11_VENC_COUNT];
+    bool blocking = true;
+    for (unsigned channel = 0; channel < CA_MT11_VENC_COUNT; channel++) {
+        waits[channel] = {ss_mpi_venc_get_fd(channel), POLLIN, 0};
+        blocking = blocking && waits[channel].fd >= 0;
+    }
+    if (!blocking) ca_log("VENC fds unavailable; polling encoders");
     while (!atomic_load(&media->stop)) {
         bool consumed = false;
+        // sleep until an encoder has a stream rather than polling at 200 Hz
+        if (blocking && poll(waits, CA_MT11_VENC_COUNT, 100) <= 0) continue;
         for (unsigned channel = 0; channel < CA_MT11_VENC_COUNT; channel++) {
             ot_venc_chn_status status = {};
             ot_venc_stream stream = {};
@@ -373,7 +383,7 @@ static void *capture_thread(void *opaque)
                 free(frame);
             }
         }
-        if (!consumed) {
+        if (!consumed && !blocking) {
             const struct timespec delay = {.tv_sec = 0, .tv_nsec = 5000000};
             (void)nanosleep(&delay, NULL);
         }
