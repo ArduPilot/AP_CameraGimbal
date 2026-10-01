@@ -267,6 +267,26 @@ def main():
                 slow.close()
                 for receiver in readers: receiver.close()
             print('PASS concurrent readers and incomplete HTTP client timeout',flush=True)
+            # A streaming client that keeps sending must not make the worker
+            # spin on a permanently readable socket.
+            def camera_cpu_while_streaming(extra):
+                client=socket.create_connection(('127.0.0.1',raw),timeout=3)
+                try:
+                    client.sendall(b'GET /thermal.mkv HTTP/1.1\r\nHost: test\r\n\r\n')
+                    client.recv(65536)
+                    # sent once streaming, so it is not part of the request
+                    if extra: client.sendall(extra)
+                    fields=open(f'/proc/{camera.pid}/stat').read().rsplit(')',1)[1].split()
+                    start=int(fields[11])+int(fields[12])
+                    deadline=time.monotonic()+3
+                    while time.monotonic()<deadline: client.recv(65536)
+                    fields=open(f'/proc/{camera.pid}/stat').read().rsplit(')',1)[1].split()
+                    return (int(fields[11])+int(fields[12])-start)/os.sysconf('SC_CLK_TCK')
+                finally: client.close()
+            quiet=camera_cpu_while_streaming(b'')
+            chatty=camera_cpu_while_streaming(b'unexpected client bytes')
+            assert chatty<quiet+1.0, (quiet,chatty)
+            print(f'PASS streaming client input does not spin the worker ({quiet:.2f}s vs {chatty:.2f}s CPU)',flush=True)
             if args.terrain:
                 print('PASS terrain renderer to C++ bridge to FFV1 to MAVProxy, bit-exact native pixels', flush=True)
                 return
