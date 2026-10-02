@@ -19,7 +19,7 @@ CHECKS = r"""
     const assert = (ok, message) => { if (!ok) throw new Error(message); };
     const tabs = [...document.querySelectorAll('#parameter-tabs [role=tab]')];
     const panels = [...form.querySelectorAll('.parameter-panel')];
-    assert(tabs.length === 4 && panels.length === 4, 'four parameter tabs');
+    assert(tabs.length === 5 && panels.length === 5, 'five parameter tabs');
     const active = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true');
     const switchTo = name => document.getElementById('tab-' + name).click();
     assert(active().id === 'tab-system', 'default System tab');
@@ -27,10 +27,45 @@ CHECKS = r"""
     const categories = {timezone: 'system', orientation: 'system', mavlink_system_id: 'system',
       network_capture: 'network', mavlink_tcp_port: 'network', network_primary_address: 'network', network_secondary_address: 'network',
       brightness: 'video', autorecord: 'video', main_resolution: 'video',
-      proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy'};
+      proxy_host: 'supportproxy', proxy_video1_port: 'supportproxy', survey_lens: 'survey', survey_overlap: 'survey'};
     for (const [name, category] of Object.entries(categories)) {
       assert(field(name).closest('.parameter-panel').id === 'parameters-' + category, 'wrong category: ' + name);
     }
+    switchTo('survey');
+    const pattern = field('survey_pattern');
+    assert(pattern.value === 'both', 'default survey pattern');
+    assert([...pattern.options].map(o => o.value).join(',') === 'both,left_right,fore_aft,fore_only', 'survey pattern choices');
+    for (const value of ['left_right','fore_aft','fore_only','both']) {
+      pattern.value = value;
+      pattern.dispatchEvent(new Event('change', {bubbles: true}));
+      assert(document.getElementById('survey-pattern-grid').hidden === (value !== 'both'), 'pattern grid visibility');
+      assert(document.getElementById('survey-pattern-description').textContent.length > 10, 'pattern description');
+    }
+    const uploadButton = document.getElementById('terrain-upload');
+    assert(uploadButton && uploadButton.type === 'button', 'terrain upload is independent of parameter save');
+    uploadButton.click();
+    assert(document.getElementById('terrain-upload-status').textContent.includes('Choose'), 'missing terrain file prompt');
+    const transfer = new DataTransfer();
+    const terrainFile = new File(['test ZIP'], 'terrain.zip');
+    transfer.items.add(terrainFile);
+    document.getElementById('terrain-file').files = transfer.files;
+    const originalXHR = window.XMLHttpRequest;
+    let sent;
+    window.XMLHttpRequest = class {
+      constructor() { this.upload = {}; this.headers = {}; }
+      open(method, path) { assert(method === 'POST' && path === '/survey/terrain', 'terrain upload route'); }
+      setRequestHeader(name, value) { this.headers[name] = value; }
+      send(body) {
+        sent = body;
+        assert(this.headers['X-CSRF-Token'] === form.elements.namedItem('csrf').value, 'terrain CSRF token');
+        this.responseText = 'Terrain installed'; this.onload(); this.onloadend();
+      }
+    };
+    uploadButton.click();
+    window.XMLHttpRequest = originalXHR;
+    assert(sent instanceof File && sent.name === 'terrain.zip', 'terrain file must be sent directly');
+    assert(!uploadButton.disabled && document.getElementById('terrain-upload-status').textContent === 'Terrain installed', 'terrain completion');
+    switchTo('system');
     field('brightness').value = '63';
     for (const name of ['network', 'video', 'supportproxy', 'system']) switchTo(name);
     assert(field('brightness').value === '63', 'tab change discarded edits');
@@ -39,7 +74,7 @@ CHECKS = r"""
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
     assert(active().id === 'tab-network' && document.activeElement === active(), 'arrow navigation');
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'End', bubbles: true}));
-    assert(active().id === 'tab-supportproxy', 'End navigation');
+    assert(active().id === 'tab-survey', 'End navigation');
     active().dispatchEvent(new KeyboardEvent('keydown', {key: 'Home', bubbles: true}));
     assert(active().id === 'tab-system', 'Home navigation');
     let blocked;
@@ -108,6 +143,8 @@ CHECKS = r"""
     rejected({mavlink_system_id: '256'}, 'mavlink_system_id');
     rejected({mavlink_system_id: '1.5'}, 'mavlink_system_id');
     rejected({brightness: '101'}, 'brightness');
+    rejected({survey_overlap: '91'}, 'survey_overlap');
+    rejected({survey_burst: '0'}, 'survey_burst');
     reset();
     field('proxy_enabled').value = 'false';
     field('proxy_host').value = '';

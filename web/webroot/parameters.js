@@ -132,6 +132,7 @@
     validate();
   });
   form.addEventListener('submit', event => {
+    if (event.submitter && event.submitter.name === 'survey_mode') return;
     attempted = true;
     const bad = validate();
     if (bad) {
@@ -188,4 +189,62 @@
     if (captureStatus) setTimeout(refreshCapture, 2000);
   }
   refreshCapture();
+})();
+
+(() => {
+  const status = document.getElementById('survey-status');
+  if (!status) return;
+  async function poll() {
+    try {
+      const response = await fetch('/survey/status', {cache: 'no-store'});
+      if (!response.ok) throw new Error('Status unavailable');
+      const s = await response.json();
+      status.textContent = `${s.state}\nCaptured: ${s.captured || 0}  Skipped: ${s.skipped || 0}  Unsettled: ${s.unsettled || 0}\nLeg: ${s.leg || 0}  Cycle: ${s.cycle || 0}  Position: ${s.slot || 0}/${s.positions || 9}\nSweep: ${s.cycle_seconds || 0}s  Row spacing: ${s.row_spacing_m || 0}m\nNominal along-track overlap: ${s.nominal_overlap_pct || 0}%  Terrain: ${s.terrain_source || "flight controller"}  Report age: ${s.terrain_age_ms || 0}ms`;
+    } catch (e) { status.textContent = e.message; }
+    setTimeout(poll, 1000);
+  }
+  poll();
+})();
+
+(() => {
+  const button = document.getElementById('terrain-upload');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    const file = document.getElementById('terrain-file').files[0];
+    const status = document.getElementById('terrain-upload-status');
+    if (!file) { status.textContent = 'Choose a terrain ZIP first.'; return; }
+    if (file.size > 512 * 1024 * 1024) { status.textContent = 'ZIP exceeds 512 MiB.'; return; }
+    const request = new XMLHttpRequest();
+    request.open('POST', '/survey/terrain');
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    request.setRequestHeader('X-CSRF-Token', document.querySelector('input[name=csrf]').value);
+    button.disabled = true;
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) status.textContent = `Uploading terrain: ${Math.round(100 * event.loaded / event.total)}%`;
+    };
+    request.upload.onload = () => { status.textContent = 'Validating and installing terrain on SD card…'; };
+    request.onload = () => { status.textContent = request.responseText; };
+    request.onerror = () => { status.textContent = 'Terrain upload connection failed.'; };
+    request.onloadend = () => { button.disabled = false; };
+    status.textContent = 'Uploading terrain…';
+    // Send the File directly; never read it into a browser-sized ArrayBuffer.
+    request.send(file);
+  });
+})();
+
+(() => {
+  const pattern = document.getElementById('survey_pattern');
+  if (!pattern) return;
+  const descriptions = {
+    both: 'Front-left → front-centre → front-right → down-right → down-centre → down-left → rear-left → rear-centre → rear-right.',
+    left_right: 'Left → right, repeating. No centre or fore/aft views. Forward and rear distance settings are unused.',
+    fore_aft: 'Front-centre → rear-centre, repeating. No centre or lateral views.',
+    fore_only: 'Straight ahead: far → middle → near, at 3×, 2× and 1× forward distance, rounded to ground rows. Three pitch angles with no lateral sweep. Rear distance is unused.'
+  };
+  function update() {
+    document.getElementById('survey-pattern-description').textContent = descriptions[pattern.value];
+    document.getElementById('survey-pattern-grid').hidden = pattern.value !== 'both';
+  }
+  pattern.addEventListener('change', update);
+  update();
 })();

@@ -158,6 +158,14 @@ public:
     int set_focus_percent(float percent) override;
     bool thermal_range(struct ca_thermal_range *range) override;
     int capture_photo(enum ca_photo_scope scope) override;
+    float survey_hfov(unsigned lens) const override {
+        if(lens==0) return CA_THERMAL_HFOV_DEG;
+        if(lens==1) return ca_lens1_hfov(_state->digital_ratio[CA_MT11_WIDE_GROUP]);
+        return ca_zoom_lens_hfov(_state->e5739?ca_e5739_zoom(_state->e5739):1,
+                                 _state->digital_ratio[CA_MT11_ZOOM_GROUP]);
+    }
+    bool survey_available(unsigned lens) const override { return lens<=2; }
+    int capture_survey(const ca_survey_request &, ca_survey_result &, const std::atomic<uint64_t> &) override;
     int get_thermal_gain(uint8_t *gain) override;
     int set_thermal_gain(uint8_t gain) override;
     int get_thermal_palette(uint8_t *palette) override;
@@ -939,7 +947,7 @@ static void jpeg_attributes(ot_venc_chn_attr *attr, td_u32 width,
 
 static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp group,
                               ot_vpss_chn channel, td_u32 width,
-                              td_u32 height, char suffix)
+                              td_u32 height, char suffix, ca_survey_result *survey=nullptr)
 {
     ot_venc_chn_attr attr;
     ot_venc_start_param start = {.recv_pic_num = 1};
@@ -990,6 +998,13 @@ static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp gr
         frame_acquired = true;
     }
     if (clock_gettime(CLOCK_REALTIME, &captured_at) < 0) goto done;
+    if(survey) {
+        survey->captured_at=captured_at;
+        timespec mono; clock_gettime(CLOCK_MONOTONIC,&mono);
+        survey->frame_ms=uint64_t(mono.tv_sec)*1000+mono.tv_nsec/1000000;
+        if(survey->frame_ms>survey->request.deadline_ms ||
+           !ca_metadata_at(survey->frame_ms,&survey->pose)) { errno=ETIMEDOUT; goto done; }
+    }
     stage = "JPEG frame submission";
     code = ss_mpi_venc_send_frame(CA_MT11_STILL_VENC, &frame, 1000);
     if (code != TD_SUCCESS) goto mpi_fail;
@@ -1034,9 +1049,13 @@ static int capture_group_jpeg(struct APC_Media_MT11_State *media, ot_vpss_grp gr
     }
     if (ca_still_write_jpeg(media->config.capture_root, suffix, jpeg,
                             jpeg_length, &captured_at, path,
-                            sizeof(path)) < 0) {
+                            sizeof(path), survey?&survey->pose:nullptr) < 0) {
         ca_log("%c JPEG write failed: %s", suffix, strerror(errno));
         goto done;
+    }
+    if(survey) {
+        if(strlen(path)>=sizeof(survey->path)) { errno=ENAMETOOLONG; goto done; }
+        memcpy(survey->path,path,strlen(path)+1);
     }
     ca_log("%c JPEG capture saved: %s (%zu bytes)", suffix, path,
            jpeg_length);
@@ -2249,4 +2268,18 @@ bool APC_Media_MT11::tracking_frame(ca_tracking_frame &out)
 std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
 {
     return APC_Media_MT11::create(config);
+}
+
+int APC_Media_MT11::capture_survey(const ca_survey_request &request, ca_survey_result &result,
+                                 const std::atomic<uint64_t> &generation)
+{
+    if(request.lens==0) return ca_thermal_stream_capture(_state->thermal_stream,_state->config.capture_root,request,result,generation);
+    if(generation.load()!=request.generation) { errno=ECANCELED; return -1; }
+    unsigned width,height;
+    ca_video_resolution_size(_state->config.settings.main_resolution,&width,&height);
+    pthread_mutex_lock(&_state->photo_lock);
+    int ret=capture_group_jpeg(_state,request.lens==1?CA_MT11_WIDE_GROUP:CA_MT11_ZOOM_GROUP,
+        CA_MT11_RTSP_MAIN_CHN,width,height,request.lens==1?'C':'Z',&result);
+    pthread_mutex_unlock(&_state->photo_lock);
+    return ret;
 }

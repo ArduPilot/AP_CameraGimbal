@@ -37,6 +37,11 @@ public:
     int set_focus_percent(float percent);
     bool thermal_range(struct ca_thermal_range *range);
     int capture_photo(enum ca_photo_scope scope);
+    bool survey_available(unsigned lens) const;
+    float survey_hfov(unsigned lens) const;
+    bool survey_start(const ca_survey_request &request);
+    bool survey_poll(ca_survey_result &result);
+    void survey_cancel();
     bool cached_thermal_controls(uint8_t *gain, uint8_t *palette);
     int get_thermal_gain(uint8_t *gain);
     int set_thermal_gain(uint8_t gain);
@@ -46,6 +51,9 @@ public:
     APC_Tracking &tracking() { return _tracking; }
 private:
     struct LiveControls;
+    struct SurveyWorker;
+    SurveyWorker *_survey = nullptr;
+    void _stop_survey();
     int _open_backend(const ca_media_config *config);
     void _apply_overlay_after_control(const char *control);
     int _restore_controls(const LiveControls *state);

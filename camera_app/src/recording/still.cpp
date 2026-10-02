@@ -33,7 +33,7 @@ static int write_all(int fd, const unsigned char *data, size_t length)
 int ca_still_write_jpeg(const char *root, char suffix,
                         const unsigned char *jpeg, size_t jpeg_length,
                         const struct timespec *captured_at,
-                        char *path, size_t path_size)
+                        char *path, size_t path_size, const ca_metadata *capture_metadata)
 {
     struct tm local;
     char day[16];
@@ -102,7 +102,8 @@ int ca_still_write_jpeg(const char *root, char suffix,
         return -1;
     }
     /* EXIF/XMP go right after SOI; the rest of the file is untouched */
-    ca_metadata_snapshot(&metadata);
+    if(capture_metadata) metadata=*capture_metadata;
+    else ca_metadata_snapshot(&metadata);
     segments_length = ca_metadata_jpeg_segments(&metadata, captured_at,
                                                 segments, sizeof(segments));
     if (write_all(fd, jpeg, 2U) == 0 &&

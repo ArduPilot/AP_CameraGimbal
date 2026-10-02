@@ -78,6 +78,7 @@ int main(void)
     assert(ca_lens1_hfov(2) > 51 && ca_lens1_hfov(2) < 52);
 #endif
 #if APCAM_TARGET == APCAM_TARGET_MT11
+    near(APCAM_GIMBAL_RATE_MAX, 100);
     near(ca_zoom_lens_hfov(1, 1), 31.3613561f);
     near(ca_zoom_lens_hfov(2, 1), ca_zoom_lens_hfov(1, 2));
     assert(ca_zoom_lens_hfov(2, 1) < ca_zoom_lens_hfov(1, 1));

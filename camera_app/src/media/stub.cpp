@@ -2,6 +2,8 @@
 #define _GNU_SOURCE
 #endif
 #include <new>
+#include <vector>
+#include "camera_app/still.h"
 #include "camera_app/APC_Media_Backend.h"
 #include "camera_app/binlog.h"
 #include "camera_app/thermal_stream.h"
@@ -88,6 +90,9 @@ struct APC_Media_SITL_State {
     uint8_t *photos[3];
     size_t photo_length[3];
     bool capture_done;
+    ca_metadata capture_pose;
+    timespec capture_utc;
+    uint64_t capture_ms;
     atomic_bool sitl_recording;
     struct ca_mp4 *mp4[2];
     bool wait_keyframe[2];
@@ -177,6 +182,23 @@ public:
     int set_focus_percent(float percent) override;
     bool thermal_range(struct ca_thermal_range *range) override;
     int capture_photo(enum ca_photo_scope scope) override;
+    float survey_hfov(unsigned lens) const override {
+#if APCAM_HAVE_THERMAL
+        if(lens==0) return APCAM_LENS3_FOV_H;
+        if(lens==1) return ca_lens1_hfov(_state->digital_ratio[0]);
+        return ca_zoom_lens_hfov(_state->optical_ratio,_state->digital_ratio[1]);
+#else
+        (void)lens; return 0;
+#endif
+    }
+    bool survey_available(unsigned lens) const override {
+#ifdef CAMERA_APP_SITL
+        return APCAM_HAVE_THERMAL && (lens==0 || lens==1 || (lens==2 && APCAM_HAVE_ZOOM_LENS));
+#else
+        (void)lens; return false;
+#endif
+    }
+    int capture_survey(const ca_survey_request &, ca_survey_result &, const std::atomic<uint64_t> &) override;
     int get_thermal_gain(uint8_t *gain) override;
     int set_thermal_gain(uint8_t gain) override;
     int get_thermal_palette(uint8_t *palette) override;
@@ -362,7 +384,12 @@ static void *render_terrain_frames(void *opaque)
                     media->photo_length[i] = result < 0 ? 0 : photo_length[i];
                 } else free(photos[i]);
             }
-            if (image.capture_generation == media->capture_generation) media->capture_done = true;
+            if (image.capture_generation == media->capture_generation) {
+                media->capture_done = true;
+                media->capture_ms=uint64_t(due.tv_sec)*1000+due.tv_nsec/1000000;
+                if(frame->raw) { media->capture_pose=frame->raw->pose; media->capture_utc=frame->raw->captured_at; }
+                else { ca_metadata_snapshot(&media->capture_pose); clock_gettime(CLOCK_REALTIME,&media->capture_utc); }
+            }
             pthread_cond_signal(&media->capture_changed);
             pthread_mutex_unlock(&media->image_lock);
         }
@@ -479,7 +506,7 @@ static void *video_thread(void *opaque)
             if (frame->raw) {
                 const uint64_t capture_us = uint64_t(frame->due.tv_sec)*1000000U + frame->due.tv_nsec/1000U;
                 ca_thermal_stream_publish_terrain(media->thermal_stream, frame->raw->pixels,
-                    capture_us, frame->raw->telemetry, frame->thermal_gain, frame->fov[1]);
+                    capture_us, frame->raw->telemetry, frame->thermal_gain, frame->fov[1], &frame->raw->pose, &frame->raw->captured_at);
                 free(frame->raw);
             }
             free(frame); /* payload ownership moved to rendered[] */
@@ -932,10 +959,11 @@ bool APC_Media_SITL::thermal_range(struct ca_thermal_range *range)
 }
 
 #ifdef CAMERA_APP_SITL
-static int capture_sitl_photo(struct APC_Media_SITL_State *media, enum ca_photo_scope scope)
+static int capture_sitl_photo(struct APC_Media_SITL_State *media, enum ca_photo_scope scope, ca_survey_result *survey=nullptr)
 {
     unsigned mask = media->has_thermal && scope == CA_PHOTO_SCOPE_THERMAL ? 4U :
                     (1U | (APCAM_HAVE_ZOOM_LENS ? 2U : 0U) | (media->has_thermal ? 4U : 0U));
+    if(survey) mask=1U << (survey->request.lens-1);
     if (mkdir(media->capture_root, 0755) < 0 && errno != EEXIST) return -1;
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
@@ -960,6 +988,13 @@ static int capture_sitl_photo(struct APC_Media_SITL_State *media, enum ca_photo_
     for (unsigned i = 0; i < 3 && !error; i++) {
         if (!(mask & (1U << i))) continue;
         if (!media->photo_length[i]) { error = EIO; break; }
+        if(survey) {
+            survey->pose=media->capture_pose; survey->captured_at=media->capture_utc; survey->frame_ms=media->capture_ms;
+            if(survey->frame_ms>survey->request.deadline_ms) { error=ETIMEDOUT; break; }
+            if(ca_still_write_jpeg(media->capture_root,i==0?'C':'Z',media->photos[i],media->photo_length[i],
+                &survey->captured_at,survey->path,sizeof(survey->path),&survey->pose)<0) error=errno;
+            continue;
+        }
         char path[4096];
         int n = snprintf(path, sizeof(path), "%s/SITL_XXXXXX%s", media->capture_root, suffix[i]);
         if (n < 0 || (size_t)n >= sizeof(path)) { error = ENAMETOOLONG; break; }
@@ -1211,4 +1246,29 @@ int APC_Media_SITL::apply_overlay(const struct ca_config *settings)
 std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
 {
     return APC_Media_SITL::create(config);
+}
+
+int APC_Media_SITL::capture_survey(const ca_survey_request &request, ca_survey_result &result,
+                                  const std::atomic<uint64_t> &generation)
+{
+#ifdef CAMERA_APP_SITL
+    if(request.lens==0) return ca_thermal_stream_capture(_state->thermal_stream,_state->capture_root,request,result,generation);
+    if(generation.load()!=request.generation) { errno=ECANCELED; return -1; }
+    if(_state->terrain) return capture_sitl_photo(_state,CA_PHOTO_SCOPE_ALL,&result);
+    clock_gettime(CLOCK_REALTIME,&result.captured_at);
+    timespec mono;clock_gettime(CLOCK_MONOTONIC,&mono);
+    result.frame_ms=uint64_t(mono.tv_sec)*1000+mono.tv_nsec/1000000;
+    (void)ca_metadata_at(result.frame_ms,&result.pose);
+    const char *source=getenv("CAMERA_APP_SITL_PHOTO");
+    if(!source) { errno=ENODATA; return -1; }
+    FILE *f=fopen(source,"rb"); if(!f) return -1;
+    std::vector<unsigned char> pixels;
+    unsigned char buf[4096]; size_t n;
+    while((n=fread(buf,1,sizeof(buf),f))) pixels.insert(pixels.end(),buf,buf+n);
+    bool ok=!ferror(f);fclose(f); if(!ok) return -1;
+    return ca_still_write_jpeg(_state->capture_root,request.lens==1?'C':'Z',pixels.data(),pixels.size(),
+        &result.captured_at,result.path,sizeof(result.path),&result.pose);
+#else
+    (void)request;(void)result;(void)generation;errno=ENOTSUP;return -1;
+#endif
 }
