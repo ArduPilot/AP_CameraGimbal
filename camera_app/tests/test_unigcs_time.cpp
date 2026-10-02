@@ -60,6 +60,12 @@ unsigned ca_media_frame_rate(const ca_media *,bool) { abort(); }
 int ca_media_autofocus(ca_media *,uint16_t,uint16_t) { abort(); }
 float ca_media_zoom(const ca_media *) { abort(); }
 int ca_media_capture_photo(ca_media *,ca_photo_scope) { abort(); }
+// Polled by every update and disconnect; no tracking backend here.
+bool ca_media_tracking_available(ca_media *) { return false; }
+void ca_media_tracking_stop(ca_media *,ca_tracking_owner) {}
+ca_tracking_status ca_media_tracking_status(ca_media *) { return {}; }
+bool ca_media_side_by_side(const ca_media *) { return false; }
+int ca_media_set_side_by_side(ca_media *,bool) { abort(); }
 int ca_backend_set_zoom(ca_backend *,float) { abort(); }
 int ca_backend_handle_private(ca_backend *,const ca_private_frame *f)
 {
