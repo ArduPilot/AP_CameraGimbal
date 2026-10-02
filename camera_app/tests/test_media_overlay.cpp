@@ -3,6 +3,7 @@
 #include "../src/media/media.cpp"
 #include "test_media_backend.h"
 #include <cassert>
+#include <initializer_list>
 static bool overlay_live, recording_active, fail_open;
 static unsigned closed, opened, log_count;
 static int control_result, overlay_result;
@@ -32,7 +33,11 @@ public:
         if(control_result==0) { selected=apcam_uses_zoom_lens(z)?CA_MEDIA_LENS_ZOOM:CA_MEDIA_LENS_WIDE; thermal=false; }
         return control();
     }
-    int set_lens(enum ca_media_lens) override { return control(); }
+    int set_lens(enum ca_media_lens lens) override {
+        assert(!combined);
+        if(control_result==0) { selected=lens; thermal=false; }
+        return control();
+    }
     int set_thermal_main(bool) override { return control(); }
 };
 std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &)
@@ -80,6 +85,23 @@ int main()
     assert(!thermal && ca_media_tracking_status(media).state==CA_TRACK_IDLE);
     combined=true;
     assert(ca_media_set_zoom(media,5)==0 && !combined);
+    for (auto lens : {CA_MEDIA_LENS_WIDE,CA_MEDIA_LENS_ZOOM}) {
+        assert(ca_media_set_lens(media,lens)==0);
+        assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
+        assert(ca_media_set_lens(media,lens)==0);
+        assert(ca_media_tracking_status(media).state==CA_TRACK_ACQUIRING);
+        for (bool side_by_side : {false,true}) {
+            thermal=true; combined=side_by_side;
+            if(!side_by_side)
+                assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
+            assert(ca_media_set_lens(media,lens)==0);
+            assert(!thermal && !combined && selected==lens);
+            assert(ca_media_tracking_status(media).state==CA_TRACK_IDLE);
+        }
+        // Combined RGB view must also stop before reselecting its RGB lens.
+        combined=true;
+        assert(ca_media_set_lens(media,lens)==0 && !combined);
+    }
     ca_config next=config.settings;
     next.main_resolution=CA_VIDEO_1080P;
     assert(next.main_resolution!=config.settings.main_resolution);

@@ -351,8 +351,11 @@ unsigned APC_Media::frame_rate(bool thermal) const
 int APC_Media::set_lens(enum ca_media_lens lens)
 {
     REQUIRE_IMPL;
-    if(_backend->side_by_side() && lens!=_backend->lens() && _backend->set_side_by_side(false)<0) return -1;
-    if(lens!=_backend->lens()) _tracking.stop();
+    // Selecting even the current RGB lens exits thermal/combined view.
+    // Stop the compositor before the backend rebinds the encoder source.
+    const bool source_change=_backend->thermal_main() || lens!=_backend->lens();
+    if(_backend->side_by_side() && _backend->set_side_by_side(false)<0) return -1;
+    if(source_change) _tracking.stop();
     int result=_backend->set_lens(lens);
     int saved=errno;
     _apply_overlay_after_control("lens change");

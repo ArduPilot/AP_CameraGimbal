@@ -57,18 +57,22 @@ Confirmed rectangle centers are converted to inertial line-of-sight angles
 using camera roll/pitch/yaw and effective field of view. Aircraft yaw and its
 rate are added when fresh MAVLink attitude is available; stabilized camera
 roll/pitch are not added to aircraft roll/pitch a second time. A bounded
-attitude history interpolates the pose at image exposure; body gyro axes
+attitude history interpolates the pose at the frame timestamp; body gyro axes
 are not treated as Euler angle rates. Without aircraft attitude the prediction
 assumes the aircraft is stationary and compensates gimbal motion only.
 
 MT11 visible frames use SDK PTS translated to the monotonic clock; thermal
-frames retain the monotonic timestamps assigned by our USB injector. Motor
+frames retain the monotonic timestamps assigned by our USB injector. A8 and
+ZR10 currently timestamp frames when the MI buffer is read, without mapping
+the MI PTS to the monotonic clock. Their pose lookup therefore approximates
+exposure time with read time; a depth-one output queue limits buffering but
+does not remove capture-to-read latency or its motion-compensation error. Motor
 control projects the measured target to the current pose. The encoded box
 is projected through processing delay to the live pipeline's exposure time,
 so it is not drawn at either the old processed position or ahead of the video.
 Samples older than 350 ms cannot drive the motors; confirmation expires after
 500 ms, including during prediction. `TRKF` logs image errors, estimated target
-rates and exposure pose; `TFRA` records MT11 capture/SDK timestamps.
+rates and frame pose; `TFRA` records MT11 capture/SDK timestamps.
 
 The estimated target LOS rate predicts the next search rectangle and supplies
 feed-forward gimbal rates. MT11 tracking realizes rates below its measured

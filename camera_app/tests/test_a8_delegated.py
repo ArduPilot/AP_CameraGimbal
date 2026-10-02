@@ -9,13 +9,14 @@ import subprocess
 import sys
 import tempfile
 
-from test_a8_attitude import a8_frame, crc16, read_a8_frames, reserve_port, siyi, terminate, wait_path
+from test_a8_attitude import a8_frame, crc16, read_a8_frames, siyi, terminate, wait_path
+from test_mavlink_integration import reserve_tcp_udp_port
 
 binary = str(Path(sys.argv[1]).resolve())
 with tempfile.TemporaryDirectory(prefix='a8-delegated-') as directory:
     root = Path(directory)
     master, slave = pty.openpty()
-    port = reserve_port(socket.SOCK_DGRAM)
+    port = reserve_tcp_udp_port()
     config = root / 'camera.ini'
     config.write_text('[mount]\norientation=upright\n[uart]\nprotocol=none\n'
                       '[mavlink]\ntcp_port=0\nudp_port=0\n')

@@ -2,6 +2,7 @@
 """Exercise fragmented MCU UART MAVLink 1/2, reply routing and SIYI coexistence."""
 import os
 import ipaddress
+import json
 from pathlib import Path
 import pty
 import select
@@ -21,6 +22,14 @@ from test_mavlink_integration import reserve_tcp_udp_port
 binary = str(Path(sys.argv[1]).resolve())
 backend = sys.argv[2] if len(sys.argv) > 2 else 'a8'
 v3 = backend == 'mt11'
+# Serial URLs require an up, non-loopback IPv4 interface. Keep the rest of
+# the UART tests usable inside a network namespace with only loopback.
+interfaces = json.loads(subprocess.check_output(['ip', '-j', '-4', 'address', 'show', 'up'], text=True))
+have_camera_ipv4 = any('LOOPBACK' not in interface['flags'] and
+                      any(address['family']=='inet' for address in interface.get('addr_info', []))
+                      for interface in interfaces)
+if not have_camera_ipv4:
+    print('SKIP non-loopback stream URL assertion: no up non-loopback IPv4 interface')
 with tempfile.TemporaryDirectory(prefix='mcu-uart-') as directory:
     root = Path(directory)
     master, slave = pty.openpty()
@@ -125,7 +134,8 @@ with tempfile.TemporaryDirectory(prefix='mcu-uart-') as directory:
                 uri=urlsplit(stream.uri)
                 assert uri.scheme=='rtsp' and uri.path=='/video1', stream
                 address=ipaddress.IPv4Address(uri.hostname)
-                assert not address.is_unspecified and not address.is_loopback, stream
+                if have_camera_ipv4:
+                    assert not address.is_unspecified and not address.is_loopback, stream
                 ack=take('COMMAND_ACK'); assert ack.command==512 and ack.result==0
             # Host media has no tracking source, so it must not add periodic
             # idle tracking status traffic to the paced external UART.
