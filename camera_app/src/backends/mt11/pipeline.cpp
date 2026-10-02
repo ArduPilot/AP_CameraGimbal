@@ -10,6 +10,7 @@
 #include "ss_mpi_vb.h"
 #include "ss_mpi_vpss.h"
 
+#include <stdlib.h>
 #include <math.h>
 #include "apcam/atomic.h"
 #include <string.h>
@@ -378,9 +379,16 @@ td_s32 ca_mt11_thermal_send_yuyv(const td_u8 *yuyv)
     return result;
 }
 
+bool ca_mt11_single_sensor(void)
+{
+    static const bool single = getenv("CA_MT11_SINGLE_SENSOR") != NULL &&
+                               atoi(getenv("CA_MT11_SINGLE_SENSOR")) != 0;
+    return single;
+}
+
 td_s32 ca_mt11_set_inverted(td_bool inverted, ot_vpss_grp record_group)
 {
-    for (ot_vpss_grp group = CA_MT11_ZOOM_GROUP;
+    for (ot_vpss_grp group = CA_MT11_FIRST_PIPE;
          group <= CA_MT11_WIDE_GROUP; group++) {
         for (ot_vpss_chn channel = 0; channel < 3;
              channel++) {

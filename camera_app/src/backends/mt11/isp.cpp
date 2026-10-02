@@ -104,7 +104,7 @@ static td_s32 set_white_balance(ot_vi_pipe pipe, enum ca_white_balance mode)
 td_s32 ca_mt11_apply_isp_config(const struct ca_config *config, bool live)
 {
     if (config == NULL) return TD_FAILURE;
-    for (ot_vi_pipe pipe = CA_MT11_ZOOM_PIPE;
+    for (ot_vi_pipe pipe = CA_MT11_FIRST_PIPE;
          pipe <= CA_MT11_WIDE_PIPE; pipe++) {
         td_s32 result;
         bool custom_exposure = config->exposure_compensation != 0 ||

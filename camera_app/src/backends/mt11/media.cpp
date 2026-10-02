@@ -631,24 +631,29 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
     if (ca_mt11_system_init() != TD_SUCCESS) goto fail;
     media->sys_started = TD_TRUE;
     stage = "MIPI/VI/ISP startup";
-    for (int path = 0; path < 2; path++) {
+    for (int path = CA_MT11_FIRST_PIPE; path < 2; path++) {
         if (sample_comm_vi_start_vi(&media->vi_cfg[path]) != TD_SUCCESS) goto fail;
         media->vi_started[path] = TD_TRUE;
     }
     stage = "VI-to-VPSS binding";
-    for (int path = 0; path < 2; path++) {
+    for (int path = CA_MT11_FIRST_PIPE; path < 2; path++) {
         if (sample_comm_vi_bind_vpss(path, 0, path, 0) != TD_SUCCESS) goto fail;
         media->vi_vpss_bound[path] = TD_TRUE;
     }
     stage = "VPSS startup";
-    for (int path = 0; path < 2; path++) {
+    for (int path = CA_MT11_FIRST_PIPE; path < 2; path++) {
         if (ca_mt11_vpss_start(path, &sizes) != TD_SUCCESS) goto fail;
         media->vpss_started[path] = TD_TRUE;
         media->group_running[path] = true;
     }
     stage = "factory ISP scene startup";
-    if (ca_mt11_scene_start(MT11_FACTORY_SCENE_DIR) != TD_SUCCESS) goto fail;
-    media->scene_started = TD_TRUE;
+    if (ca_mt11_scene_start(MT11_FACTORY_SCENE_DIR) == TD_SUCCESS) {
+        media->scene_started = TD_TRUE;
+    } else if (ca_mt11_single_sensor()) {
+        ca_log("single sensor: factory ISP scene unavailable, using ISP defaults");
+    } else {
+        goto fail;
+    }
     stage = "ISP configuration";
     if (ca_mt11_apply_isp_config(&config->settings, false) != TD_SUCCESS) goto fail;
     stage = "thermal VPSS startup";
@@ -738,12 +743,13 @@ int APC_Media_MT11::init(const struct ca_media_config *config)
         if (ss_mpi_venc_start_chn(channel, &start) != TD_SUCCESS) goto fail;
         media->venc_started[channel] = TD_TRUE;
     }
-    if (set_group_running_locked(media, CA_MT11_ZOOM_GROUP, false) !=
+    if (!ca_mt11_single_sensor() &&
+        set_group_running_locked(media, CA_MT11_ZOOM_GROUP, false) !=
         TD_SUCCESS) {
         goto fail;
     }
     // the 4K record output is idle until recording starts
-    for (ot_vpss_grp group = CA_MT11_ZOOM_GROUP; group <= CA_MT11_WIDE_GROUP;
+    for (ot_vpss_grp group = CA_MT11_FIRST_PIPE; group <= CA_MT11_WIDE_GROUP;
          group++) {
         if (ss_mpi_vpss_disable_chn(group, CA_MT11_RECORD_CHN) != TD_SUCCESS) {
             goto fail;
