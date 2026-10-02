@@ -38,6 +38,7 @@ struct ca_metadata {
     float gimbal_pitch_rad;
     float gimbal_yaw_rad;
     float gimbal_yaw_rate_rad_s;
+    float gimbal_pitch_rate_rad_s;
     /* 0 when unknown */
     float zoom;
     /* Effective horizontal FOV after optical/digital zoom, degrees; 0 unknown.
@@ -67,6 +68,9 @@ void ca_metadata_set_zoom(float zoom);
 /* copies the current state; sources older than CA_METADATA_MAX_AGE_MS are
  * reported as absent */
 void ca_metadata_snapshot(struct ca_metadata *snapshot);
+// Bounded history on the same monotonic clock as received sensor frames.
+void ca_metadata_record_sample(uint64_t now_ms);
+bool ca_metadata_at(uint64_t frame_ms, struct ca_metadata *snapshot);
 
 /* EXIF and XMP APP1 segments for a JPEG captured at captured_at, to be
  * placed right after SOI; returns the length or 0 if capacity is too small */

@@ -8,6 +8,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -121,6 +122,35 @@ int ca_sitl_terrain_open(struct ca_sitl_terrain **out, const char *script,
     return 0;
 }
 
+// Decode only the renderer-owned numeric pose schema. Bounds at each object
+// prevent an absent field being accidentally found in another pose source.
+static bool raw_pose(const char *json, ca_metadata &m, timespec &utc)
+{
+    auto number=[](const char *object,const char *key,double &value) {
+        if(!object || *object!='{') return false;
+        const char *end=strchr(object,'}'), *field=strstr(object,key);
+        if(!end || !field || field>=end) return false;
+        field+=strlen(key); char *tail=nullptr; value=strtod(field,&tail);
+        return tail!=field && tail<=end && isfinite(value);
+    };
+    auto object=[&](const char *key) { const char *p=strstr(json,key); return p?p+strlen(key):nullptr; };
+    double lat,lon,alt,relative,roll,pitch,yaw;
+    const char *p=object("\"position\":");
+    m.have_position=number(p,"\"lat_e7\":",lat) && number(p,"\"lon_e7\":",lon) &&
+        number(p,"\"alt_amsl_m\":",alt) && number(p,"\"alt_relative_m\":",relative);
+    if(m.have_position) { m.lat_e7=lat;m.lon_e7=lon;m.alt_amsl_m=alt;m.alt_relative_m=relative; }
+    p=object("\"vehicle_attitude\":");
+    m.have_vehicle_attitude=number(p,"\"roll_rad\":",roll) && number(p,"\"pitch_rad\":",pitch) && number(p,"\"yaw_rad\":",yaw);
+    if(m.have_vehicle_attitude) { m.vehicle_roll_rad=roll;m.vehicle_pitch_rad=pitch;m.vehicle_yaw_rad=yaw; }
+    p=object("\"gimbal_attitude\":");
+    m.have_gimbal_attitude=number(p,"\"roll_rad\":",roll) && number(p,"\"pitch_rad\":",pitch) && number(p,"\"yaw_rad\":",yaw);
+    if(m.have_gimbal_attitude) { m.gimbal_roll_rad=roll;m.gimbal_pitch_rad=pitch;m.gimbal_yaw_rad=yaw; }
+    p=object("\"utc_us\":"); if(!p) return false;
+    unsigned long long stamp=strtoull(p,nullptr,10);
+    utc.tv_sec=stamp/1000000;utc.tv_nsec=(stamp%1000000)*1000;
+    return m.have_position && m.have_vehicle_attitude && m.have_gimbal_attitude;
+}
+
 int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t presentation_ms,
                           const float hfov[2], bool thermal_main, bool has_thermal, bool separate_recording,
                           const struct ca_sitl_image *image,
@@ -217,6 +247,7 @@ int ca_sitl_terrain_frame(struct ca_sitl_terrain *t, uint64_t pts, uint64_t pres
         if (transfer(t->fd, raw->pixels, pixels_size, false) < 0 ||
             transfer(t->fd, raw->telemetry, metadata_size, false) < 0) return -1;
         raw->telemetry[metadata_size] = 0;
+        (void)raw_pose(raw->telemetry,raw->pose,raw->captured_at);
         // Renderer wire format is gray16le, independently of host endianness.
         const uint8_t *bytes = reinterpret_cast<const uint8_t *>(raw->pixels);
         for (unsigned i=0; i<640U*512U; i++) raw->pixels[i] = bytes[2*i] | (uint16_t(bytes[2*i+1]) << 8);

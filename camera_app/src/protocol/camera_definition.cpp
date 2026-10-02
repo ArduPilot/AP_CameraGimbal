@@ -19,11 +19,40 @@ static const struct ca_config_option sources[] = {{"RGB", 0}, {"Thermal", 1}};
 /* Values follow the thermal module protocol. */
 static const struct ca_config_option gains[] = {{"Low gain", 0}, {"High gain", 1}};
 #endif
+#if APCAM_HAVE_PHOTO
+static const ca_config_option modes[] = {{"Photo",0}, {"Video",1},
+#if APCAM_HAVE_THERMAL
+    {"Survey",2},
+#endif
+};
+#endif
 #define OPTIONS(name_, description_, op_, initial_, options_) \
     {name_, description_, op_, 6, initial_, 0, 0, options_, ARRAY_SIZE(options_), -1}
 #define CONFIG(name_, description_) \
     {name_, description_, CA_CAMERA_CONFIG, 6, 0, 0, 0, NULL, 0, -1}
 static const struct ca_camera_parameter parameters[] = {
+#if APCAM_HAVE_PHOTO
+    OPTIONS("CAM_MODE", "Camera mode", CA_CAMERA_MODE, 0, modes),
+#if APCAM_HAVE_THERMAL
+    CONFIG("SURV_LENS", "Survey camera"),
+    CONFIG("SURV_PATTERN", "Survey pattern"),
+    CONFIG("SURV_OVERLAP", "Overlap (%)"),
+    CONFIG("SURV_FORE", "Forward distance (% AGL)"),
+    CONFIG("SURV_AFT", "Rear distance (% AGL)"),
+    CONFIG("SURV_BURST", "Images per position"),
+    CONFIG("SURV_BURST_MS", "Burst interval (ms)"),
+    CONFIG("SURV_DWELL_MS", "Capture dwell limit (ms)"),
+    CONFIG("SURV_SETTLE_MS", "Settling window (ms)"),
+    CONFIG("SURV_ERROR_CD", "Pointing tolerance (0.01 deg)"),
+    CONFIG("SURV_RATE_CD", "Residual rate tolerance (0.01 deg/s)"),
+    CONFIG("SURV_TERR_MS", "Terrain maximum age (ms)"),
+    CONFIG("SURV_TERR_M", "Terrain report radius (m)"),
+    CONFIG("SURV_TERR_TOL", "Terrain consistency (m)"),
+    CONFIG("SURV_MIN_SPEED", "Minimum ground speed (m/s)"),
+    CONFIG("SURV_TURN_DEG", "Turn threshold (deg)"),
+#endif
+#endif
+
 #if APCAM_HAVE_ZOOM && !APCAM_ZOOM_NATIVE_RATE
     /* Native rate-only zoom has no trustworthy absolute position readback. */
     {"CAM_ZOOM", APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",

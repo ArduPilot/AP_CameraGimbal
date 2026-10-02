@@ -1,5 +1,6 @@
 #include "camera_app/thermal_stream.h"
 #include <stddef.h>
+#include <errno.h>
 
 void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 {
@@ -15,6 +16,7 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 #include "camera_app/log.h"
 #include "camera_app/metadata.h"
 #include "camera_app/video_metadata.h"
+#include "camera_app/raw_thermal.h"
 #include "apcam/target.h"
 #include <arpa/inet.h>
 #include <atomic>
@@ -23,6 +25,7 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 #include <math.h>
 #include <memory>
 #include <mutex>
+#include <deque>
 #include <new>
 #include <poll.h>
 #include <pthread.h>
@@ -50,6 +53,15 @@ struct ca_thermal_stream {
     std::vector<uint16_t> pixels;
     std::string json;
     uint64_t sequence = 0, capture_us = 0;
+    ca_metadata pose{};
+    timespec captured_at{};
+    struct SurveyFrame {
+        std::vector<uint16_t> pixels;
+        std::string json;
+        uint64_t capture, sequence;
+    };
+    std::deque<SurveyFrame> survey_frames;
+    std::atomic<unsigned> survey_pending{0};
     ThermalCodec codec;
     Bytes header;
     std::mutex record_lock;
@@ -74,7 +86,7 @@ static void wake_worker(ca_thermal_stream *s)
 
 static bool frames_wanted(const ca_thermal_stream *s)
 {
-    return s->streaming_clients.load() != 0 || s->record_open.load() ||
+    return s->survey_pending.load() != 0 || s->streaming_clients.load() != 0 || s->record_open.load() ||
            (s->proxy && enabled.load());
 }
 struct ThermalClient {
@@ -84,11 +96,13 @@ struct ThermalClient {
     uint64_t progress_us;
     std::shared_ptr<const Bytes> pending;
     size_t offset = 0;
+    std::deque<std::shared_ptr<const Bytes>> survey_queue;
 };
 
 static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t now,
                           const char *telemetry, uint8_t gain, bool rotated,
-                          const char *simulation_source, float hfov)
+                          const char *simulation_source, float hfov,
+                          const ca_metadata &pose, const timespec &captured_at)
 {
     unsigned minimum = UINT16_MAX, maximum = 0;
     for (unsigned i=0;i<640U*512U;i++) {
@@ -114,6 +128,8 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     if (n<0 || size_t(n)>=sizeof(json)) return;
     memcpy(s->pixels.data(),pixels,640U*512U*sizeof(uint16_t));
     s->json.assign(json,size_t(n)); s->capture_us=now;
+    s->pose=pose; s->captured_at=captured_at;
+    if(strcmp(simulation_source,"terrain")!=0) (void)ca_metadata_at(now/1000,&s->pose);
     wake_worker(s);
 }
 
@@ -135,16 +151,67 @@ void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
     char telemetry[CA_VIDEO_METADATA_JSON_MAX];
     if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
     publish_frame(s, pixels, now, telemetry, gain, rotated,
-                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H);
+                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H, metadata, *captured_at);
 }
 
 void ca_thermal_stream_publish_terrain(ca_thermal_stream *s, const uint16_t *pixels,
-                                      uint64_t capture_us, const char *telemetry, uint8_t gain, float hfov)
+                                      uint64_t capture_us, const char *telemetry, uint8_t gain, float hfov,
+                                      const ca_metadata *render_pose, const timespec *render_utc)
 {
     if (!s || !pixels || !telemetry || !*telemetry) return;
     // Terrain pixels are already upright. Metadata belongs to the rendered
     // pose, not the newer vehicle state at encoding/client delivery time.
-    publish_frame(s, pixels, capture_us, telemetry, gain, false, "terrain", hfov);
+    ca_metadata pose=render_pose?*render_pose:ca_metadata{};
+    timespec captured=render_utc?*render_utc:timespec{};
+    publish_frame(s, pixels, capture_us, telemetry, gain, false, "terrain", hfov, pose, captured);
+}
+
+int ca_thermal_stream_capture(ca_thermal_stream *s, const char *root,
+                              const ca_survey_request &request, ca_survey_result &result,
+                              const std::atomic<uint64_t> &generation)
+{
+    if(!s) { errno=ENOTSUP; return -1; }
+    struct Pending {
+        std::atomic<unsigned> &n;
+        Pending(std::atomic<unsigned> &v):n(v) { ++n; }
+        ~Pending() { --n; }
+    } pending(s->survey_pending);
+    ca_thermal_stream::SurveyFrame frame;
+    while(true) {
+        if(generation.load()!=request.generation) { errno=ECANCELED; return -1; }
+        if(mono_us()/1000>request.deadline_ms) { errno=ETIMEDOUT; return -1; }
+        {
+            std::lock_guard<std::mutex> g(s->lock);
+            if(s->capture_us/1000>request.eligible_ms && !s->json.empty()) {
+                frame={s->pixels,s->json,s->capture_us,s->sequence};
+                result.pose=s->pose; result.captured_at=s->captured_at;
+                result.frame_ms=s->capture_us/1000;
+                break;
+            }
+        }
+        usleep(5000);
+    }
+    double corners[4][2];
+    if(!ca_survey_footprint(result.pose,request.target_alt,request.hfov,request.aspect,corners)) { errno=ETIMEDOUT; return -1; }
+    ca_raw_thermal *raw=nullptr;
+    if(ca_raw_thermal_open(&raw,root)<0) return -1;
+    int ret=ca_raw_thermal_write_at(raw,frame.pixels.data(),640,512,&result.captured_at);
+    if(!ret) snprintf(result.path,sizeof(result.path),"%s",ca_raw_thermal_path(raw));
+    ca_raw_thermal_close(raw);
+    if(ret<0) return -1;
+    std::lock_guard<std::mutex> g(s->lock);
+    result.stream_queued=s->survey_frames.size()<32;
+    if(result.stream_queued) {
+        char json[2048];
+        if(ca_survey_json(result,json,sizeof(json))) {
+            frame.json.pop_back(); frame.json+=",\"survey\":";
+            frame.json+=json; frame.json+="}";
+            s->survey_frames.push_back(std::move(frame));
+            wake_worker(s);
+        } else result.stream_queued=false;
+    }
+    if(!result.stream_queued) ca_log("Survey stream queue full; image %d retained on SD",request.index);
+    return 0;
 }
 
 static int write_all(int fd, const Bytes &data)
@@ -310,6 +377,9 @@ static void *thermal_worker(void *opaque)
                     close(c.fd); c.fd=-1; continue;
                 }
             }
+            if (!c.pending && !c.survey_queue.empty()) {
+                c.pending=c.survey_queue.front(); c.survey_queue.pop_front(); c.offset=0; c.progress_us=now;
+            }
             if (c.pending) {
                 const auto &b=*c.pending;
                 ssize_t n=send(c.fd,b.data()+c.offset,b.size()-c.offset,MSG_NOSIGNAL);
@@ -334,7 +404,13 @@ static void *thermal_worker(void *opaque)
         }
         bool stream_due = s->proxy && enabled.load();
         for (auto &c:clients) stream_due |= c.streaming && !c.pending;
-        stream_due = stream_due && now >= next_encode;
+        bool survey_due=false;
+        {
+            std::lock_guard<std::mutex> g(s->lock);
+            survey_due=!s->survey_frames.empty();
+        }
+        if(s->survey_pending.load() && !survey_due) continue;
+        stream_due = survey_due || (stream_due && now >= next_encode);
         uint64_t generation;
         bool record_due;
         {
@@ -347,11 +423,18 @@ static void *thermal_worker(void *opaque)
         uint64_t sequence,capture;
         {
             std::lock_guard<std::mutex> guard(s->lock);
-            sequence=s->sequence; capture=s->capture_us;
-            if (s->json.empty()) continue;
-            pixels=s->pixels; json=s->json;
+            if(survey_due) {
+                auto &f=s->survey_frames.front();
+                sequence=f.sequence; capture=f.capture;
+                pixels=std::move(f.pixels); json=std::move(f.json);
+                s->survey_frames.pop_front();
+            } else {
+                sequence=s->sequence; capture=s->capture_us;
+                if (s->json.empty()) continue;
+                pixels=s->pixels; json=s->json;
+            }
         }
-        stream_due = stream_due && sequence != previous;
+        stream_due = stream_due && (survey_due || sequence != previous);
         {
             std::lock_guard<std::mutex> guard(s->record_lock);
             record_due = record_due && generation == s->record_generation &&
@@ -369,7 +452,11 @@ static void *thermal_worker(void *opaque)
         encoded_sequence = sequence;
         if (stream_due) {
             auto data=std::make_shared<Bytes>(thermal_mkv::frame(encoded,json.c_str(),(capture-epoch)/1000));
-            for (auto &c:clients) if (c.streaming && !c.pending) { c.pending=data; c.progress_us=now; }
+            for (auto &c:clients) if (c.streaming) {
+                if(!c.pending && c.survey_queue.empty()) { c.pending=data; c.progress_us=now; }
+                else if(survey_due && c.survey_queue.size()<32) c.survey_queue.push_back(data);
+                else if(survey_due) ca_log("Survey delivery gap on slow thermal client; recover images from SD");
+            }
             if (enabled.load()) ca_support_video_push(s->proxy, data->data(), data->size(), 0, true);
             previous=sequence; next_encode=next_deadline(next_encode,now,stream_fps);
         }
@@ -462,8 +549,9 @@ int ca_thermal_stream_open(ca_thermal_stream **s,unsigned,bool,const ca_config *
 void ca_thermal_stream_close(ca_thermal_stream *) {}
 int ca_thermal_stream_configure(ca_thermal_stream *,const ca_config *) { return 0; }
 int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 0; }
+int ca_thermal_stream_capture(ca_thermal_stream *,const char *,const ca_survey_request &,ca_survey_result &,const std::atomic<uint64_t> &) { errno=ENOTSUP; return -1; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
-void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *, uint64_t, const char *, uint8_t, float) {}
+void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *, uint64_t, const char *, uint8_t, float, const ca_metadata *, const timespec *) {}
 unsigned ca_thermal_stream_port() { return 0; }
 bool ca_thermal_stream_available() { return false; }
 unsigned ca_thermal_stream_fps() { return 0; }

@@ -1,6 +1,8 @@
 #pragma once
 #include "camera_app/media.h"
 #include "camera_app/exposure.h"
+#include "camera_app/survey.h"
+#include <atomic>
 #include "camera_app/image_tracker.h"
 #include <memory>
 #include <cerrno>
@@ -36,6 +38,10 @@ public:
     virtual int set_focus_percent(float percent) = 0;
     virtual bool thermal_range(struct ca_thermal_range *range) = 0;
     virtual int capture_photo(enum ca_photo_scope scope) = 0;
+    virtual float survey_hfov(unsigned) const { return 0; }
+    virtual bool survey_available(unsigned) const { return false; }
+    virtual int capture_survey(const ca_survey_request &, ca_survey_result &,
+                              const std::atomic<uint64_t> &) { errno=ENOTSUP; return -1; }
     virtual int get_thermal_gain(uint8_t *gain) = 0;
     virtual int set_thermal_gain(uint8_t gain) = 0;
     virtual int get_thermal_palette(uint8_t *palette) = 0;

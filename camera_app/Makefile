@@ -125,7 +125,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/network_capture.cpp \
 	src/streaming/support_video.cpp \
 	src/protocol/external_uart.cpp \
-	src/protocol/targeting.cpp \
+	src/protocol/targeting.cpp src/protocol/survey.cpp src/protocol/terrain.cpp \
 	src/protocol/siyi.cpp \
 	src/protocol/siyi_server.cpp \
 	$(if $(filter mt11 a8 zr10,$(CAMERA_BACKEND)),src/protocol/unigcs.cpp) \
@@ -671,7 +671,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
 		src/log.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp -lpthread -lm
 
-test: timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: survey-test timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \
@@ -1004,3 +1004,26 @@ mt11-overlay-test: build/tests/test_mt11_overlay
 build/tests/test_mt11_overlay: tests/test_mt11_overlay.cpp src/backends/mt11/overlay.cpp src/media/overlay.cpp include/camera_app/overlay.h
 	mkdir -p $(@D)
 	$(HOST_CXX) -O2 -std=gnu++17 -Wall -Wextra -Werror -Wno-missing-field-initializers -Iinclude -I../include -I$(SS928_MPP_ROOT)/include/hisilicon -DAPCAM_TARGET=APCAM_TARGET_MT11 -o $@ $(filter %.cpp,$^)
+
+tests/test_survey: tests/test_survey.cpp src/protocol/survey.cpp src/protocol/targeting.cpp src/config.cpp include/camera_app/survey.h
+	$(HOST_CXX) $(APCAM_CPPFLAGS) -Iinclude -std=gnu++17 -Wall -Wextra -Werror $(filter %.cpp,$^) -o $@ -pthread
+
+survey-test: tests/test_survey
+	./tests/test_survey
+
+.PHONY: metadata-history-test
+metadata-history-test: tests/test_metadata_history
+	./tests/test_metadata_history
+
+tests/test_metadata_history: tests/test_metadata_history.cpp src/recording/metadata.cpp include/camera_app/metadata.h
+	$(HOST_CXX) -Iinclude -std=gnu++17 -Wall -Wextra -Werror -Wno-missing-field-initializers $< -o $@ -pthread
+
+test: metadata-history-test
+
+tests/test_terrain: tests/test_terrain.cpp src/protocol/terrain.cpp include/camera_app/terrain.h ../include/apcam/terrain_format.h
+	$(HOST_CXX) $(APP_CXXFLAGS) -Iinclude -I../include $< src/protocol/terrain.cpp -pthread -o $@
+
+.PHONY: terrain-test
+terrain-test: tests/test_terrain
+	python3 tests/test_terrain.py ./tests/test_terrain
+test: terrain-test

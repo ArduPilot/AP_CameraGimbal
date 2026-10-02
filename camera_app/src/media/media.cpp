@@ -3,6 +3,9 @@
 #endif
 #include "camera_app/APC_Media.h"
 #include <new>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
 #include "camera_app/log.h"
 #include "camera_app/binlog.h"
 #include "camera_app/metadata.h"
@@ -14,6 +17,75 @@
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
+
+struct APC_Media::SurveyWorker {
+    std::mutex lock;
+    std::condition_variable wake;
+    std::thread thread;
+    std::atomic<uint64_t> generation{0};
+    bool stop=false, pending=false, working=false, done=false;
+    ca_survey_request request{};
+    ca_survey_result result{};
+};
+
+void APC_Media::_stop_survey()
+{
+    if(!_survey) return;
+    {
+        std::lock_guard<std::mutex> g(_survey->lock);
+        _survey->stop=true; ++_survey->generation;
+        _survey->wake.notify_one();
+    }
+    if(_survey->thread.joinable()) _survey->thread.join();
+    delete _survey; _survey=nullptr;
+}
+
+float APC_Media::survey_hfov(unsigned lens) const
+{ return _backend ? _backend->survey_hfov(lens) : 0; }
+
+bool APC_Media::survey_available(unsigned lens) const
+{ return _backend && _backend->survey_available(lens); }
+
+void APC_Media::survey_cancel()
+{ if(_survey) ++_survey->generation; }
+
+bool APC_Media::survey_start(const ca_survey_request &request)
+{
+    if(!survey_available(request.lens)) return false;
+    if(!_survey) {
+        _survey=new(std::nothrow) SurveyWorker;
+        if(!_survey) return false;
+        _survey->thread=std::thread([this]() {
+            auto &w=*_survey;
+            std::unique_lock<std::mutex> g(w.lock);
+            while(!w.stop) {
+                w.wake.wait(g,[&] { return w.stop || w.pending; });
+                if(w.stop) break;
+                auto request=w.request;
+                w.pending=false; w.working=true;
+                g.unlock();
+                ca_survey_result result{}; result.request=request;
+                if(_backend->capture_survey(request,result,w.generation)<0) result.error=errno?errno:EIO;
+                if(!result.error && !ca_survey_write_metadata(result)) result.error=errno?errno:EIO;
+                g.lock();
+                w.result=result; w.done=true; w.working=false;
+            }
+        });
+    }
+    std::lock_guard<std::mutex> g(_survey->lock);
+    if(_survey->pending || _survey->working || _survey->done) return false;
+    _survey->request=request; _survey->generation=request.generation;
+    _survey->pending=true; _survey->wake.notify_one();
+    return true;
+}
+
+bool APC_Media::survey_poll(ca_survey_result &result)
+{
+    if(!_survey) return false;
+    std::lock_guard<std::mutex> g(_survey->lock);
+    if(!_survey->done) return false;
+    result=_survey->result; _survey->done=false; return true;
+}
 
 // Compatibility handle retained by existing MAVLink/vendor callbacks.
 struct ca_media final : public APC_Media {
@@ -201,6 +273,7 @@ int APC_Media::configure(const struct ca_config *settings)
         old->recording_resolution != settings->recording_resolution ||
         old->main_codec != settings->main_codec || old->sub_codec != settings->sub_codec;
     if (pipeline) {
+        _stop_survey();
         if (_backend && _backend->recording()) { errno = EBUSY; return -1; }
         LiveControls state = {};
         state.zoom = 1;
@@ -273,6 +346,7 @@ int APC_Media::configure(const struct ca_config *settings)
 
 APC_Media::~APC_Media()
 {
+    _stop_survey();
     _stop_controls_monitor();
     if (recording()) (void)set_recording(false);
     _backend.reset();
@@ -602,3 +676,10 @@ int ca_media_set_inverted(struct ca_media *media, bool inverted)
     return media->set_inverted(inverted);
 }
 void ca_media_close(struct ca_media *media) { delete media; }
+
+bool ca_media_survey_available(ca_media *m, unsigned lens) { return m && m->survey_available(lens); }
+bool ca_media_survey_start(ca_media *m, const ca_survey_request &r) { return m && m->survey_start(r); }
+bool ca_media_survey_poll(ca_media *m, ca_survey_result &r) { return m && m->survey_poll(r); }
+void ca_media_survey_cancel(ca_media *m) { if(m) m->survey_cancel(); }
+
+float ca_media_survey_hfov(const ca_media *m,unsigned lens) { return m?m->survey_hfov(lens):0; }

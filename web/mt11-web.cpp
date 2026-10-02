@@ -600,6 +600,19 @@ static const struct option camera_component_options[] = {
 
 static const struct option tracking_options[] = {{"angle", S_OPT_TRACK_ANGLE}, {"rate", S_OPT_TRACK_RATE}};
 
+static const struct option survey_patterns[] = {
+    {"both", S_SURV_BOTH}, {"left_right", S_SURV_LEFT_RIGHT}, {"fore_aft", S_SURV_FORE_AFT},
+    {"fore_only", S_SURV_FORE_ONLY},
+};
+static const struct option survey_lenses[] = {
+#if WEB_HAVE_THERMAL
+    {"thermal", S_SURV_THERMAL},
+#endif
+    {"wide", S_SURV_WIDE},
+#if APCAM_HAVE_ZOOM_LENS
+    {"zoom", S_SURV_ZOOM},
+#endif
+};
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -718,15 +731,33 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 15, 1, NULL, 0},
     {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
+     PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
+    {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
+     PARAM_ENUM, 0, 0, 0, survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0])},
+    {"survey_overlap", "survey", "overlap", S_SURV_OVERLAP, S_SURV_OVERLAP_HELP, PARAM_INTEGER, 0, 90, 1, NULL, 0},
+    {"survey_fore_pct", "survey", "fore_pct", S_SURV_FORE_PCT, S_SURV_FORE_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
+    {"survey_aft_pct", "survey", "aft_pct", S_SURV_AFT_PCT, S_SURV_AFT_PCT_HELP, PARAM_INTEGER, 10, 200, 1, NULL, 0},
+    {"survey_burst", "survey", "burst", S_SURV_BURST, S_SURV_BURST_HELP, PARAM_INTEGER, 1, 25, 1, NULL, 0},
+    {"survey_burst_ms", "survey", "burst_ms", S_SURV_BURST_MS, S_SURV_BURST_MS_HELP, PARAM_INTEGER, 40, 2000, 1, NULL, 0},
+    {"survey_dwell_ms", "survey", "dwell_ms", S_SURV_DWELL_MS, S_SURV_DWELL_MS_HELP, PARAM_INTEGER, 200, 10000, 1, NULL, 0},
+    {"survey_settle_ms", "survey", "settle_ms", S_SURV_SETTLE_MS, S_SURV_SETTLE_MS_HELP, PARAM_INTEGER, 0, 2000, 1, NULL, 0},
+    {"survey_error_cd", "survey", "error_cd", S_SURV_ERROR_CD, S_SURV_ERROR_CD_HELP, PARAM_INTEGER, 10, 1000, 1, NULL, 0},
+    {"survey_rate_cd", "survey", "rate_cd", S_SURV_RATE_CD, S_SURV_RATE_CD_HELP, PARAM_INTEGER, 10, 2000, 1, NULL, 0},
+    {"survey_terrain_ms", "survey", "terrain_ms", S_SURV_TERRAIN_MS, S_SURV_TERRAIN_MS_HELP, PARAM_INTEGER, 500, 10000, 1, NULL, 0},
+    {"survey_terrain_m", "survey", "terrain_m", S_SURV_TERRAIN_M, S_SURV_TERRAIN_M_HELP, PARAM_INTEGER, 50, 2000, 1, NULL, 0},
+    {"survey_terrain_tol", "survey", "terrain_tol", S_SURV_TERRAIN_TOL, S_SURV_TERRAIN_TOL_HELP, PARAM_INTEGER, 1, 100, 1, NULL, 0},
+    {"survey_min_speed", "survey", "min_speed", S_SURV_MIN_SPEED, S_SURV_MIN_SPEED_HELP, PARAM_INTEGER, 1, 30, 1, NULL, 0},
+    {"survey_turn_deg", "survey", "turn_deg", S_SURV_TURN_DEG, S_SURV_TURN_DEG_HELP, PARAM_INTEGER, 5, 45, 1, NULL, 0},
 };
 
-enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_COUNT };
+enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_COUNT };
 static const struct {
     const char *name;
     enum string_id label;
 } parameter_tabs[TAB_COUNT] = {
     {"system", S_PARAMS_SYSTEM}, {"network", S_PARAMS_NETWORK},
-    {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY},
+    {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY}, {"survey", S_PARAMS_SURVEY},
 };
 
 static enum parameter_tab parameter_tab(const struct parameter *p)
@@ -734,6 +765,7 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
     if (!strcmp(p->section, "network") ||
         !strcmp(p->form_name, "mavlink_tcp_port") || !strcmp(p->form_name, "mavlink_udp_port"))
         return TAB_NETWORK;
+    if (!strcmp(p->section, "survey")) return TAB_SURVEY;
     if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
     if (!strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
@@ -760,6 +792,7 @@ static const char *replacement_defaults[] = {
     "0", "Raw Thermal (16-bit)",
 #endif
     "", "false", "false", "false", "eth0", "", "", "", "false",
+    "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
 
 
@@ -4977,6 +5010,23 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                 page.append("</p>");
             }
 #endif
+            if (tab == TAB_SURVEY) {
+                page.append("<p>Survey tracks fixed ground points using the selected pattern. "
+                    "Save settings before starting. Uses uploaded terrain first, with flight-controller terrain as fallback. Requires gimbal ownership.</p>"
+                    "<p><button type=submit formnovalidate formaction=/survey name=survey_mode value=2>Start / resume survey</button> "
+                    "<button type=submit formnovalidate formaction=/survey name=survey_mode value=0>Stop survey</button></p>"
+                    "<pre id=survey-status aria-live=polite>Waiting for status</pre>"
+                    "<p><label>Terrain ZIP from terrain.ardupilot.org <input id=terrain-file type=file accept=.zip></label> "
+                    "<button id=terrain-upload type=button>Upload terrain</button></p>"
+                    "<p>Stored on the SD card. Upload replaces the installed terrain area and takes effect automatically. "
+                    "Maximum ZIP size: 512 MiB. Keep the browser open until validation finishes.</p>"
+                    "<output id=terrain-upload-status aria-live=polite></output>"
+                    "<p id=survey-pattern-description></p><p>Flight direction &#8593;</p><table id=survey-pattern-grid><tr><td>1 Front-left</td><td>2 Front-centre</td><td>3 Front-right</td></tr>"
+                    "<tr><td>6 Down-left</td><td>5 Down-centre</td><td>4 Down-right</td></tr>"
+                    "<tr><td>7 Rear-left</td><td>8 Rear-centre</td><td>9 Rear-right</td></tr></table>"
+                    "<p>Overlap is a requested target. Slew and burst time may reduce achieved overlap. "
+                    "Negative nominal overlap indicates gaps; check actual captured footprints in MAVProxy.</p>");
+            }
             if (tab == TAB_NETWORK) {
                 char capture_message[512];
                 bool failed;
@@ -5935,6 +5985,8 @@ static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int outp
     }
     return true;
 }
+
+#include "APC_TerrainUpload.h"
 
 #if WEB_INSTALLS_FIRMWARE
 /* The .gcu overlay is a ZIP of the gcu/ap and gcu/ipc files. It is checked before
@@ -7068,7 +7120,8 @@ static void handle_request(int fd, const char *peer)
         if (strcmp(request.method, "POST") == 0) handle_login(fd, &request, peer);
         else send_redirect(fd, "/");
     } else if (request.streaming_body) {
-        handle_firmware_upload(fd, &request, peer);
+        if(!strcmp(request.path,"/survey/terrain")) handle_terrain_upload(fd,&request);
+        else handle_firmware_upload(fd, &request, peer);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI
         if (!webroot.available()) {
@@ -7172,6 +7225,13 @@ static void handle_request(int fd, const char *peer)
         send_log_text(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/rebooting") == 0) {
         send_rebooting_page(fd);
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/survey/status") == 0) {
+        char path[4096]; snprintf(path,sizeof(path),"%s.survey.json",REPLACEMENT_CONFIG_PATH);
+        struct stat st{};
+        size_t length=0; char *body=stat(path,&st)==0 && time(NULL)-st.st_mtime<=5 ? read_file(path,4096,&length) : NULL;
+        const char *empty="{\"state\":\"camera unavailable\"}";
+        send_response(fd,200,"OK","application/json",body?body:empty,body?length:strlen(empty),"Cache-Control: no-store\r\n");
+        free(body);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/healthz") == 0) {
         char health[96];
         enum camera_kind kind = current_camera_kind();
@@ -7193,6 +7253,20 @@ static void handle_request(int fd, const char *peer)
             } else {
                 send_page(fd, T(S_CSRF_RELOAD), true);
             }
+        } else if (strcmp(request.path, "/survey") == 0) {
+            size_t length=0; char *mode=form_value(&request,"survey_mode",&length);
+            if(!mode || length!=1 || (mode[0]!='0' && mode[0]!='2')) {
+                send_response(fd,400,"Bad Request","text/plain","Invalid survey mode",19,NULL);
+            } else {
+                char path[4096],tmp[4100];
+                snprintf(path,sizeof(path),"%s.survey.command",REPLACEMENT_CONFIG_PATH);
+                snprintf(tmp,sizeof(tmp),"%s.tmp",path);
+                FILE *f=fopen(tmp,"w"); bool ok=false;
+                if(f) { bool written=fprintf(f,"%c\n",mode[0])==2; ok=fclose(f)==0 && written; }
+                if(ok && rename(tmp,path)==0) send_redirect_headers(fd,"/parameters#survey",NULL);
+                else send_response(fd,500,"Error","text/plain","Could not request survey mode",29,NULL);
+            }
+            free(mode);
         } else if (strcmp(request.path, "/logout") == 0) {
             /* revoke whatever session the browser holds, also when this
              * request itself was authenticated by Basic credentials */

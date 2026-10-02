@@ -161,7 +161,7 @@ inline int APC_HTTPRequest::receive(int fd)
         return 400;
     }
     this->streaming_body = strcmp(this->method, "POST") == 0 &&
-                              strcmp(this->path, "/upgrade") == 0;
+                              (strcmp(this->path, "/upgrade") == 0 || strcmp(this->path, "/survey/terrain") == 0);
     this->content_length = content_length;
     this->storage = storage;
     this->header_len = header_len;
