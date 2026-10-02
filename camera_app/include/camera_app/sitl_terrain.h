@@ -5,10 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "camera_app/config.h"
+#include "camera_app/metadata.h"
 #include "camera_app/exposure.h"
 #include "camera_app/image_tracker.h"
 
 struct ca_sitl_raw_thermal {
+    ca_metadata pose;
+    timespec captured_at;
     uint16_t pixels[640U*512U];
     // Predicted pose and source ages can exceed the live-video JSON bound.
     char telemetry[2048];

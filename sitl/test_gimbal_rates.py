@@ -15,6 +15,19 @@ from mt11_rate_sweep import Vendor
 
 
 class RateResponse(unittest.TestCase):
+    def test_mt11_angle_slew_uses_full_hardware_speed(self):
+        now = [0.0]
+        with patch('gimbal_sim.time.monotonic', side_effect=lambda: now[0]):
+            gimbal = Gimbal(1, 'mt11')
+            gimbal.pitch = -60
+            gimbal.target = (90, 0)
+            now[0] = .1
+            gimbal.update()
+            self.assertAlmostEqual(gimbal.yaw, 10)
+            self.assertAlmostEqual(gimbal.pitch, -50)
+            self.assertAlmostEqual(gimbal.yaw_rate, 100)
+            self.assertAlmostEqual(gimbal.pitch_rate, 100)
+
     def test_a8_measured_response(self):
         gimbal = Gimbal(2, 'a8')
         for axis in ('pitch', 'yaw'):

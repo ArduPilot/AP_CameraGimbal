@@ -150,6 +150,46 @@ enum string_id {
     S_H_POSITION_TARGETING,
     S_P_THERMAL_PALETTE,
     S_H_THERMAL_PALETTE,
+    S_PARAMS_SURVEY,
+    S_SURV_PATTERN,
+    S_SURV_PATTERN_HELP,
+    S_SURV_BOTH,
+    S_SURV_LEFT_RIGHT,
+    S_SURV_FORE_AFT,
+    S_SURV_FORE_ONLY,
+    S_SURV_LENS,
+    S_SURV_LENS_HELP,
+    S_SURV_THERMAL,
+    S_SURV_WIDE,
+    S_SURV_ZOOM,
+    S_SURV_OVERLAP,
+    S_SURV_OVERLAP_HELP,
+    S_SURV_FORE_PCT,
+    S_SURV_FORE_PCT_HELP,
+    S_SURV_AFT_PCT,
+    S_SURV_AFT_PCT_HELP,
+    S_SURV_BURST,
+    S_SURV_BURST_HELP,
+    S_SURV_BURST_MS,
+    S_SURV_BURST_MS_HELP,
+    S_SURV_DWELL_MS,
+    S_SURV_DWELL_MS_HELP,
+    S_SURV_SETTLE_MS,
+    S_SURV_SETTLE_MS_HELP,
+    S_SURV_ERROR_CD,
+    S_SURV_ERROR_CD_HELP,
+    S_SURV_RATE_CD,
+    S_SURV_RATE_CD_HELP,
+    S_SURV_TERRAIN_MS,
+    S_SURV_TERRAIN_MS_HELP,
+    S_SURV_TERRAIN_M,
+    S_SURV_TERRAIN_M_HELP,
+    S_SURV_TERRAIN_TOL,
+    S_SURV_TERRAIN_TOL_HELP,
+    S_SURV_MIN_SPEED,
+    S_SURV_MIN_SPEED_HELP,
+    S_SURV_TURN_DEG,
+    S_SURV_TURN_DEG_HELP,
     S_P_RAW_STREAM_FPS,
     S_H_RAW_STREAM_FPS,
     S_P_RAW_RECORD_FPS,
@@ -715,6 +755,46 @@ static constexpr Translations translations = [] {
     result[S_H_POSITION_TARGETING] = {"When enabled, advertise and handle geographic ROI targets in the camera. Disable to make ArduPilot calculate and send angle targets. Changes apply when saved; the updated capability is advertised to the flight controller.", "启用时，由相机宣告并处理地理 ROI 目标。禁用时，由 ArduPilot 计算并发送角度目标。保存后生效。", "有効にすると、カメラが地理 ROI ターゲットを通知して処理します。無効にすると、ArduPilot が角度ターゲットを計算して送信します。保存時に反映します。"};
     result[S_P_THERMAL_PALETTE] = {"Thermal palette", "热成像调色板", "サーマルパレット"};
     result[S_H_THERMAL_PALETTE] = {"Pseudo-colour palette applied by the thermal module to video and still images.", "热成像模块应用于视频和照片的伪彩调色板。", "サーマルモジュールが映像と静止画に適用する疑似カラーパレット。"};
+    result[S_PARAMS_SURVEY] = {"Survey", "Survey", "Survey"};
+    result[S_SURV_PATTERN] = {"Survey pattern", "Survey pattern", "Survey pattern"};
+    result[S_SURV_PATTERN_HELP] = {"Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid.", "Fore-only uses three forward views. Left/right and fore/aft use two views. Both uses the full nine-view grid."};
+    result[S_SURV_BOTH] = {"Both (nine views)", "Both (nine views)", "Both (nine views)"};
+    result[S_SURV_LEFT_RIGHT] = {"Left/right only", "Left/right only", "Left/right only"};
+    result[S_SURV_FORE_AFT] = {"Fore/aft only", "Fore/aft only", "Fore/aft only"};
+    result[S_SURV_FORE_ONLY] = {"Fore-only (three pitch angles)", "Fore-only (three pitch angles)", "Fore-only (three pitch angles)"};
+    result[S_SURV_LENS] = {"Survey camera", "Survey camera", "Survey camera"};
+    result[S_SURV_LENS_HELP] = {"Select the physical camera used for survey captures.", "Select the physical camera used for survey captures.", "Select the physical camera used for survey captures."};
+    result[S_SURV_THERMAL] = {"Raw thermal", "Raw thermal", "Raw thermal"};
+    result[S_SURV_WIDE] = {"Wide RGB", "Wide RGB", "Wide RGB"};
+    result[S_SURV_ZOOM] = {"Zoom RGB", "Zoom RGB", "Zoom RGB"};
+    result[S_SURV_OVERLAP] = {"Overlap (%)", "Overlap (%)", "Overlap (%)"};
+    result[S_SURV_OVERLAP_HELP] = {"Requested overlap in both flight and cross-track directions; achieved overlap is reported separately.", "Requested overlap in both flight and cross-track directions; achieved overlap is reported separately.", "Requested overlap in both flight and cross-track directions; achieved overlap is reported separately."};
+    result[S_SURV_FORE_PCT] = {"Forward distance (% AGL)", "Forward distance (% AGL)", "Forward distance (% AGL)"};
+    result[S_SURV_FORE_PCT_HELP] = {"Forward viewing distance as a percentage of height above ground.", "Forward viewing distance as a percentage of height above ground.", "Forward viewing distance as a percentage of height above ground."};
+    result[S_SURV_AFT_PCT] = {"Rear distance (% AGL)", "Rear distance (% AGL)", "Rear distance (% AGL)"};
+    result[S_SURV_AFT_PCT_HELP] = {"Rear viewing distance as a percentage of height above ground.", "Rear viewing distance as a percentage of height above ground.", "Rear viewing distance as a percentage of height above ground."};
+    result[S_SURV_BURST] = {"Images per position", "Images per position", "Images per position"};
+    result[S_SURV_BURST_HELP] = {"Distinct frames per target. Bursts are shortened at the slot deadline.", "Distinct frames per target. Bursts are shortened at the slot deadline.", "Distinct frames per target. Bursts are shortened at the slot deadline."};
+    result[S_SURV_BURST_MS] = {"Burst interval (ms)", "Burst interval (ms)", "Burst interval (ms)"};
+    result[S_SURV_BURST_MS_HELP] = {"Minimum interval between distinct exposures.", "Minimum interval between distinct exposures.", "Minimum interval between distinct exposures."};
+    result[S_SURV_DWELL_MS] = {"Capture dwell limit (ms)", "Capture dwell limit (ms)", "Capture dwell limit (ms)"};
+    result[S_SURV_DWELL_MS_HELP] = {"Additional time after predicted slew. Capture at the deadline even if still unsettled.", "Additional time after predicted slew. Capture at the deadline even if still unsettled.", "Additional time after predicted slew. Capture at the deadline even if still unsettled."};
+    result[S_SURV_SETTLE_MS] = {"Settling window (ms)", "Settling window (ms)", "Settling window (ms)"};
+    result[S_SURV_SETTLE_MS_HELP] = {"Consecutive time within pointing and residual-rate tolerances.", "Consecutive time within pointing and residual-rate tolerances.", "Consecutive time within pointing and residual-rate tolerances."};
+    result[S_SURV_ERROR_CD] = {"Pointing tolerance (0.01 deg)", "Pointing tolerance (0.01 deg)", "Pointing tolerance (0.01 deg)"};
+    result[S_SURV_ERROR_CD_HELP] = {"Angular difference between actual and required line of sight.", "Angular difference between actual and required line of sight.", "Angular difference between actual and required line of sight."};
+    result[S_SURV_RATE_CD] = {"Residual rate tolerance (0.01 deg/s)", "Residual rate tolerance (0.01 deg/s)", "Residual rate tolerance (0.01 deg/s)"};
+    result[S_SURV_RATE_CD_HELP] = {"Measured camera motion minus the rate needed to track the fixed ground point.", "Measured camera motion minus the rate needed to track the fixed ground point.", "Measured camera motion minus the rate needed to track the fixed ground point."};
+    result[S_SURV_TERRAIN_MS] = {"Terrain maximum age (ms)", "Terrain maximum age (ms)", "Terrain maximum age (ms)"};
+    result[S_SURV_TERRAIN_MS_HELP] = {"When uploaded terrain is unavailable, pause captures if the flight-controller TERRAIN_REPORT becomes stale.", "When uploaded terrain is unavailable, pause captures if the flight-controller TERRAIN_REPORT becomes stale.", "When uploaded terrain is unavailable, pause captures if the flight-controller TERRAIN_REPORT becomes stale."};
+    result[S_SURV_TERRAIN_M] = {"Terrain report radius (m)", "Terrain report radius (m)", "Terrain report radius (m)"};
+    result[S_SURV_TERRAIN_M_HELP] = {"Maximum horizontal distance from aircraft to terrain report location.", "Maximum horizontal distance from aircraft to terrain report location.", "Maximum horizontal distance from aircraft to terrain report location."};
+    result[S_SURV_TERRAIN_TOL] = {"Terrain consistency (m)", "Terrain consistency (m)", "Terrain consistency (m)"};
+    result[S_SURV_TERRAIN_TOL_HELP] = {"Maximum mismatch between reported AGL and aligned aircraft altitude minus ground elevation.", "Maximum mismatch between reported AGL and aligned aircraft altitude minus ground elevation.", "Maximum mismatch between reported AGL and aligned aircraft altitude minus ground elevation."};
+    result[S_SURV_MIN_SPEED] = {"Minimum ground speed (m/s)", "Minimum ground speed (m/s)", "Minimum ground speed (m/s)"};
+    result[S_SURV_MIN_SPEED_HELP] = {"Wait below this speed; resume 2 m/s above it after a straight-flight settling period.", "Wait below this speed; resume 2 m/s above it after a straight-flight settling period.", "Wait below this speed; resume 2 m/s above it after a straight-flight settling period."};
+    result[S_SURV_TURN_DEG] = {"Turn threshold (deg)", "Turn threshold (deg)", "Turn threshold (deg)"};
+    result[S_SURV_TURN_DEG_HELP] = {"Start a new ground grid after course changes this far from the current leg.", "Start a new ground grid after course changes this far from the current leg.", "Start a new ground grid after course changes this far from the current leg."};
     result[S_P_RAW_STREAM_FPS] = {"Raw thermal streaming rate (fps)", "原始热成像流帧率 (fps)", "生サーマル配信レート (fps)"};
     result[S_H_RAW_STREAM_FPS] = {"1–25 fps; default 5. Applies immediately. Slow connections receive fewer frames; every delivered frame remains lossless.", "1–25 fps，默认 5，立即生效。低速连接会跳帧，但保留每帧的全部数据。", "1～25 fps、初期値5。即時反映。低速回線ではフレームを間引きますが、各フレームは可逆圧縮です。"};
     result[S_P_RAW_RECORD_FPS] = {"Raw thermal recording rate (fps)", "原始热成像录像帧率 (fps)", "生サーマル録画レート (fps)"};

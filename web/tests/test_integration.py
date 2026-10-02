@@ -17,6 +17,7 @@ import urllib.parse
 
 from test_parameters_browser import check_parameters_browser
 from test_reboot_browser import check_reboot_browser
+from test_terrain_upload import check_terrain_upload
 
 
 binary = Path(sys.argv[1]).resolve()
@@ -220,7 +221,7 @@ def authorization(password):
 
 
 def request(method, path, password, body=None, headers=None):
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=120 if path == "/survey/terrain" else 5)
     all_headers = {"Authorization": authorization(password)}
     if headers:
         all_headers.update(headers)
@@ -620,6 +621,7 @@ try:
             time.sleep(0.05)
 
     test_large_recording_download()
+    check_terrain_upload(request, root, csrf, port)
     test_login_and_languages(csrf)
     test_reboot_redirect(csrf)
 
@@ -664,6 +666,11 @@ try:
     for zone in (b"GMT", b"Europe/London", b"America/New_York", b"Australia/Sydney", b"Asia/Kathmandu"):
         assert b'<option value="' + zone + b'">' + zone + b'</option>' in body
     replacement_parameters = {
+        "survey_pattern": "both", "survey_lens": "thermal", "survey_overlap": "50", "survey_fore_pct": "50",
+        "survey_aft_pct": "50", "survey_burst": "1", "survey_burst_ms": "100",
+        "survey_dwell_ms": "1200", "survey_settle_ms": "200", "survey_error_cd": "100",
+        "survey_rate_cd": "100", "survey_terrain_ms": "3000", "survey_terrain_m": "500",
+        "survey_terrain_tol": "25", "survey_min_speed": "5", "survey_turn_deg": "15",
         "timezone": "Asia/Kathmandu",
         "photo_scope": "all",
         "orientation": "auto",
@@ -719,7 +726,12 @@ try:
     status, body, _ = form(
         "/parameters", "initial-password", csrf, replacement_parameters
     )
-    assert status == 200 and b"Parameters saved" in body
+    assert status == 200 and b"Parameters saved" in body, (status, body.decode())
+    status, _, headers = form("/survey", "initial-password", csrf, {"survey_mode": "2"})
+    assert status == 303 and headers["Location"] == "/parameters#survey"
+    assert (root / "app" / "camera.ini.survey.command").read_text().strip() == "2"
+    assert form("/survey", "initial-password", csrf, {"survey_mode": "9"})[0] == 400
+    assert request("GET", "/survey/status", "initial-password")[0] == 200
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
     assert "[uart]" not in saved_config
