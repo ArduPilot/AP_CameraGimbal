@@ -723,17 +723,17 @@ try:
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
     assert "[uart]" not in saved_config
-    assert 'system_id = "42"' in saved_config
-    assert 'camera_component_id = "105"' in saved_config
-    assert 'tcp_port = "14600"' in saved_config
-    assert 'udp_port = "14601"' in saved_config
-    assert 'position_targeting = "false"' in saved_config
-    assert 'cross = "true"' in saved_config and 'thermal_fov = "true"' in saved_config
-    assert 'recording = "true"' in saved_config
-    assert 'autorecord = "while_armed"' in saved_config
-    assert 'stream_fps = "8"' in saved_config
-    assert 'record_fps = "3"' in saved_config
-    assert 'alias = "main.264"' in saved_config and 'alias = ""' in saved_config
+    assert 'system_id = 42' in saved_config
+    assert 'camera_component_id = 105' in saved_config
+    assert 'tcp_port = 14600' in saved_config
+    assert 'udp_port = 14601' in saved_config
+    assert 'position_targeting = false' in saved_config
+    assert 'cross = true' in saved_config and 'thermal_fov = true' in saved_config
+    assert 'recording = true' in saved_config
+    assert 'autorecord = while_armed' in saved_config
+    assert 'stream_fps = 8' in saved_config
+    assert 'record_fps = 3' in saved_config
+    assert 'alias = main.264' in saved_config and 'alias = ""' in saved_config
     assert "retained from an installation" in saved_config
     status, body, _ = request("GET", "/parameters", "initial-password")
     assert status == 200
@@ -744,7 +744,7 @@ try:
     assert b'<h2>SupportProxy</h2>' in body
     assert b'name="proxy_publish_password" id="proxy_publish_password" type=password' in body
     assert b'<input required name="proxy_publish_password"' not in body
-    assert 'timezone = "Asia/Kathmandu"' in (root / "app/camera.ini").read_text()
+    assert 'timezone = Asia/Kathmandu' in (root / "app/camera.ini").read_text()
     status, timezone_page, _ = request("GET", "/parameters", "initial-password")
     assert status == 200 and b'<option value="Asia/Kathmandu" selected>' in timezone_page
     status, timezone_status, _ = request("GET", "/", "initial-password")
@@ -752,7 +752,7 @@ try:
     status, _, _ = form("/parameters", "initial-password", csrf,
                         dict(replacement_parameters, timezone="Asia/Typo"))
     assert status == 400
-    assert 'timezone = "Asia/Kathmandu"' in (root / "app/camera.ini").read_text()
+    assert 'timezone = Asia/Kathmandu' in (root / "app/camera.ini").read_text()
 
     valid_proxy = dict(replacement_parameters, proxy_enabled="true", proxy_host="localhost",
                        proxy_signing="true", proxy_signing_passphrase=" a signing phrase ",
@@ -762,7 +762,7 @@ try:
     assert status == 200 and b"Parameters saved" in proxy_body
     proxy_config = (root / "app" / "camera.ini").read_text()
     assert 'signing_passphrase = " a signing phrase "' in proxy_config
-    assert 'video1_name = "Front Camera"' in proxy_config
+    assert 'video1_name = Front Camera' in proxy_config
 
     def input_value(page, name):
         match = re.search(r'<input[^>]* name="' + re.escape(name) +
@@ -863,8 +863,8 @@ try:
     assert status == 200 and b"Parameters saved" in body
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
-    assert 'tcp_port = "14700"' in saved_config
-    assert 'udp_port = "14701"' in saved_config
+    assert 'tcp_port = 14700' in saved_config
+    assert 'udp_port = 14701' in saved_config
     status, _, _ = form(
         "/time/sync", "initial-password", "0" * 64, {"time_ms": "1767225600123"}
     )
