@@ -35,3 +35,8 @@ __pycache__/
 /web/tests/test_webroot
 
 /camera_app/tests/test_timezone
+
+/camera_app/tests/test_survey
+/camera_app/tests/test_metadata_history
+
+/camera_app/tests/test_terrain

@@ -1,3 +1,5 @@
+#include "camera_app/terrain.h"
+#include <string>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -18,6 +20,7 @@
 #include "camera_app/media.h"
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
+#include "camera_app/survey.h"
 #include "camera_app/telemetry_time.h"
 #include "camera_app/thermal_stream.h"
 #include "camera_app/video_fov.h"
@@ -127,6 +130,7 @@ struct ca_mavlink_server {
     uint8_t autopilot_system_id;
     uint8_t autopilot_component_id;
     uint8_t camera_mode;
+    struct survey_runtime *survey;
     bool stream_enabled[APCAM_NUM_STREAMS];
 #if APCAM_HAVE_THERMAL
     uint32_t thermal_interval_ms[APCAM_NUM_STREAMS];
@@ -190,6 +194,14 @@ struct ca_mavlink_server {
     float logged_camera[128];
     struct ca_log_mode logged_mode;
 };
+
+static bool survey_running(const ca_mavlink_server *);
+static void survey_gimbal_command(ca_mavlink_server *, const mavlink_message_t *);
+static bool survey_acquiring(ca_mavlink_server *,float,float,const ca_gimbal_attitude &);
+static uint8_t set_camera_mode(ca_mavlink_server *, unsigned);
+static void survey_pause(ca_mavlink_server *, const char *);
+static void survey_message(ca_mavlink_server *,const mavlink_message_t *);
+static void survey_capture_start(ca_mavlink_server *, int32_t, float);
 
 static void update_binlog(struct ca_mavlink_server *server, bool allow_stop);
 
@@ -657,6 +669,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM |
                  CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
+    if(ca_media_survey_available(server->media,server->settings.survey.lens)) info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
     info.cam_definition_version = server->definition_version;
     if(ca_media_tracking_available(server->media))
         info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
@@ -737,7 +750,8 @@ static void send_camera_settings(struct ca_mavlink_server *server,
     (void)mavlink_msg_camera_settings_encode_status(
         server->system_id, server->camera_component_id,
         &server->encode_status, &message, &settings);
-    (void)send_message(server, route, &message);
+    if(route) (void)send_message(server, route, &message);
+    else broadcast_message(server,&message);
 }
 
 static float storage_available(const struct ca_mavlink_server *server,
@@ -798,7 +812,7 @@ static void pack_capture_status(struct ca_mavlink_server *server,
         .recording_time_ms = recording_time_ms(server),
         .available_capacity =
             storage_available(server, &total, &used, &storage_status),
-        .image_status = (uint8_t)(server->captures_remaining != 0 ? 1U : 0U),
+        .image_status = (uint8_t)(server->captures_remaining != 0 || survey_running(server) ? 1U : 0U),
         .video_status = (uint8_t)(ca_media_recording(server->media) ? 1U : 0U),
         .image_count = (int32_t)server->image_count,
     };
@@ -1238,6 +1252,8 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
         {MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE, 100000U},
         /* UTC date for recordings, including when GPS time becomes valid later. */
         {MAVLINK_MSG_ID_SYSTEM_TIME, 1000000U},
+        {MAVLINK_MSG_ID_TERRAIN_REPORT, 500000U},
+        {MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS, 1000000U},
     };
     server->last_telemetry_request_ms = now;
     for (unsigned i = 0; i < sizeof(messages) / sizeof(messages[0]); i++) {
@@ -1280,7 +1296,7 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
         return;
     }
     if (server->manual_control && *server->manual_control) return;
-    bool rate = server->settings.tracking_method == CA_TRACK_RATE;
+    bool rate = survey_running(server) || server->settings.tracking_method == CA_TRACK_RATE;
     unsigned interval = rate ? 50U : TARGET_LOCATION_INTERVAL_MS;
     if (!server->target_location_active || !server->settings.position_targeting) {
         stop_tracking_rate(server);
@@ -1309,6 +1325,11 @@ static void update_target_location(struct ca_mavlink_server *server, uint64_t no
     if (!ca_backend_gimbal_attitude(server->backend, &attitude) ||
         now < attitude.timestamp_ms || now - attitude.timestamp_ms > 500U) {
         stop_tracking_rate(server);
+        return;
+    }
+    if(survey_acquiring(server,pitch,yaw,attitude)) {
+        stop_tracking_rate(server);
+        (void)ca_backend_set_gimbal_angles(server->backend,pitch,yaw);
         return;
     }
     const float radians = PI_F / 180.0f;
@@ -1648,11 +1669,8 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
                                      (unsigned)params[0])
                    ? MAV_RESULT_ACCEPTED : MAV_RESULT_DENIED;
     case MAV_CMD_SET_CAMERA_MODE:
-        if (!isfinite(params[1]) || (params[1] != 0 && params[1] != 1) ||
-            (!APCAM_HAVE_PHOTO && params[1] == 0)) return MAV_RESULT_UNSUPPORTED;
-        server->camera_mode = (uint8_t)params[1];
-        send_camera_settings(server, route);
-        return MAV_RESULT_ACCEPTED;
+        if (!isfinite(params[1]) || params[1]<0 || params[1]>2 || floorf(params[1])!=params[1]) return MAV_RESULT_UNSUPPORTED;
+        return set_camera_mode(server,(unsigned)params[1]);
     case MAV_CMD_SET_CAMERA_ZOOM: {
         uint8_t result = set_zoom(server, params[0], params[1]);
         if (result == MAV_RESULT_ACCEPTED) send_camera_settings(server, route);
@@ -1678,6 +1696,10 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         if (count < 0 || !isfinite(params[1]) || params[1] < 0.0f) {
             return MAV_RESULT_DENIED;
         }
+        if(server->camera_mode==CAMERA_MODE_IMAGE_SURVEY) {
+            survey_capture_start(server,count,params[1]);
+            return MAV_RESULT_ACCEPTED;
+        }
         server->next_image_index = index + 1;
         if (count == 1) {
             server->captures_remaining = 0;
@@ -1694,6 +1716,7 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         return capture_one(server, index);
     }
     case MAV_CMD_IMAGE_STOP_CAPTURE:
+        survey_pause(server,"survey paused: capture stopped");
         server->captures_remaining = 0;
         server->capture_interval_s = 0.0f;
         broadcast_capture_status(server);
@@ -2007,6 +2030,7 @@ static uint8_t handle_command_int(struct ca_mavlink_server *server,
         return send_ack(server,route,server->gimbal_component_id,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
     }
     if (command == MAV_CMD_DO_SET_ROI_LOCATION) {
+        survey_pause(server,"survey paused: external ROI");
         uint8_t frame = request.frame;
         int32_t lat_e7 = request.x;
         int32_t lon_e7 = request.y;
@@ -2055,6 +2079,7 @@ static uint8_t handle_gimbal_set_attitude(struct ca_mavlink_server *server,
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) return 255;
     if (server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
+    survey_gimbal_command(server,message);
     ca_media_tracking_stop(server->media);
     clear_target_location(server);
     if ((flags & (GIMBAL_DEVICE_FLAGS_RETRACT | GIMBAL_DEVICE_FLAGS_NEUTRAL)) !=
@@ -2190,6 +2215,8 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
         if (value!=ca_config_param_get(&previous,i))
             ca_binlog_parameter(ca_config_param_name(i),value,true);
     }
+    if(memcmp(&next->survey,&previous.survey,sizeof(next->survey)) || !next->position_targeting || pipeline)
+        survey_pause(server,"survey paused: configuration changed");
     server->settings = *next;
     server->photo_scope = next->photo_scope;
     if (next->position_targeting != previous.position_targeting) send_gimbal_information(server, NULL);
@@ -2437,6 +2464,7 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
 {
     uint8_t thermal;
     switch (p->operation) {
+    case CA_CAMERA_MODE: *value=server->camera_mode; return true;
     case CA_CAMERA_CONFIG:
         /* Format choices describe the saved configuration, including changes
          * waiting for a recording to finish, just as in the web UI. */
@@ -2546,6 +2574,7 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
                                  const struct ca_camera_parameter *p, float value)
 {
     switch (p->operation) {
+    case CA_CAMERA_MODE: return set_camera_mode(server,(unsigned)value)==MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_CONFIG:
         return apply_camera_config(server, (size_t)p->config_index, value);
     case CA_CAMERA_ZOOM:
@@ -2812,6 +2841,7 @@ static void process_message(struct ca_mavlink_server *server,
             }
         }
     }
+    survey_message(server,message);
     if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT) update_binlog(server, true);
     if (message->msgid == MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL) {
         handle_camera_ftp(server, route, message);
@@ -3019,6 +3049,15 @@ static int read_uart(struct ca_mavlink_server *server)
     }
 }
 
+#include "survey_server.inc"
+
+static void survey_capture_start(ca_mavlink_server *s,int32_t count,float interval)
+{
+    set_camera_mode(s,CAMERA_MODE_IMAGE_SURVEY);
+    s->survey->remaining=count?count:-1;
+    s->survey->interval_ms=unsigned(fminf(interval*1000,UINT32_MAX));
+}
+
 int ca_mavlink_server_open(struct ca_mavlink_server **result,
                            const struct ca_mavlink_server_config *config)
 {
@@ -3074,6 +3113,16 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
     if (server->definition_xml == NULL) goto fail;
     server->definition_version = ca_camera_definition_version(
         server->definition_xml, server->definition_length);
+    server->survey=new(std::nothrow) survey_runtime;
+    // Capture lives in MEDIA_ROOT/DCIM/capture on all camera targets.
+    {
+    const char *terrain_root=getenv("CAMERA_APP_TERRAIN_ROOT");
+    std::string terrain_directory=terrain_root?terrain_root:std::string(server->capture_root)+"/../../TERRAIN";
+    ca_terrain_start(terrain_directory.c_str());
+    }
+    if(!server->survey) goto fail;
+    server->survey->session=realtime_us();
+    { char path[4096]; snprintf(path,sizeof(path),"%s.survey.command",server->config_path); unlink(path); }
     server->camera_mode = APCAM_HAVE_PHOTO ? 0 : 1;
     for (unsigned i = 0; i < APCAM_NUM_STREAMS; i++) server->stream_enabled[i] = true;
 #if APCAM_HAVE_THERMAL
@@ -3227,6 +3276,8 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
         send_ext_parameter(server, &list->route, list->next++);
         if (list->next >= ca_camera_param_count()) list->active = false;
     }
+    ca_metadata_record_sample(now);
+    update_survey(server, now);
     update_target_location(server, now);
     if (server->zoom_rate != 0.0f) {
         float observed = selected_zoom(server);
@@ -3298,5 +3349,7 @@ void ca_mavlink_server_close(struct ca_mavlink_server *server)
     free(server->definition_xml);
     free(server->config_path);
     ca_camera_ftp_close(&server->ftp);
+    ca_terrain_stop();
+    delete server->survey;
     free(server);
 }

@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "target.h"
+#include "lens.h"
 #include "network.h"
 #include "APC_Timezone.h"
 #include <arpa/inet.h>
@@ -144,7 +145,41 @@ private:
         {"angle", CA_TRACK_ANGLE}, {"rate", CA_TRACK_RATE},
     };
 
+    inline static constexpr ca_config_option survey_patterns[] = {
+        {"both", CA_SURVEY_BOTH}, {"left_right", CA_SURVEY_LEFT_RIGHT}, {"fore_aft", CA_SURVEY_FORE_AFT},
+        {"fore_only", CA_SURVEY_FORE_ONLY},
+    };
+
+    inline static constexpr ca_config_option survey_lenses[] = {
+#if APCAM_HAVE_THERMAL
+        {"thermal", 0},
+#endif
+        {"wide", 1},
+#if APCAM_HAVE_ZOOM_LENS
+        {"zoom", 2},
+#endif
+    };
+
     inline static constexpr Field _fields[] = {
+        {"survey", "pattern", Kind::Enum, offsetof(ca_config, survey.pattern), sizeof(unsigned),
+         survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0]), 0, 0, "SURV_PATTERN"},
+        {"survey", "lens", Kind::Enum, offsetof(ca_config, survey.lens), sizeof(unsigned),
+         survey_lenses, sizeof(survey_lenses)/sizeof(survey_lenses[0]), 0, 0, "SURV_LENS"},
+        {"survey", "overlap", Kind::Uint, offsetof(ca_config, survey.overlap), sizeof(unsigned), NULL, 0, 0, 90, "SURV_OVERLAP"},
+        {"survey", "fore_pct", Kind::Uint, offsetof(ca_config, survey.fore_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_FORE"},
+        {"survey", "aft_pct", Kind::Uint, offsetof(ca_config, survey.aft_pct), sizeof(unsigned), NULL, 0, 10, 200, "SURV_AFT"},
+        {"survey", "burst", Kind::Uint, offsetof(ca_config, survey.burst), sizeof(unsigned), NULL, 0, 1, 25, "SURV_BURST"},
+        {"survey", "burst_ms", Kind::Uint, offsetof(ca_config, survey.burst_ms), sizeof(unsigned), NULL, 0, 40, 2000, "SURV_BURST_MS"},
+        {"survey", "dwell_ms", Kind::Uint, offsetof(ca_config, survey.dwell_ms), sizeof(unsigned), NULL, 0, 200, 10000, "SURV_DWELL_MS"},
+        {"survey", "settle_ms", Kind::Uint, offsetof(ca_config, survey.settle_ms), sizeof(unsigned), NULL, 0, 0, 2000, "SURV_SETTLE_MS"},
+        {"survey", "error_cd", Kind::Uint, offsetof(ca_config, survey.error_cd), sizeof(unsigned), NULL, 0, 10, 1000, "SURV_ERROR_CD"},
+        {"survey", "rate_cd", Kind::Uint, offsetof(ca_config, survey.rate_cd), sizeof(unsigned), NULL, 0, 10, 2000, "SURV_RATE_CD"},
+        {"survey", "terrain_ms", Kind::Uint, offsetof(ca_config, survey.terrain_ms), sizeof(unsigned), NULL, 0, 500, 10000, "SURV_TERR_MS"},
+        {"survey", "terrain_m", Kind::Uint, offsetof(ca_config, survey.terrain_m), sizeof(unsigned), NULL, 0, 50, 2000, "SURV_TERR_M"},
+        {"survey", "terrain_tol", Kind::Uint, offsetof(ca_config, survey.terrain_tol), sizeof(unsigned), NULL, 0, 1, 100, "SURV_TERR_TOL"},
+        {"survey", "min_speed", Kind::Uint, offsetof(ca_config, survey.min_speed), sizeof(unsigned), NULL, 0, 1, 30, "SURV_MIN_SPEED"},
+        {"survey", "turn_deg", Kind::Uint, offsetof(ca_config, survey.turn_deg), sizeof(unsigned), NULL, 0, 5, 45, "SURV_TURN_DEG"},
+
         {"logging", "disarmed", Kind::Bool, offsetof(struct ca_config, log_disarmed),
          sizeof(((struct ca_config *)0)->log_disarmed), NULL, 0U, 0, 0, "LOG_DISARMED"},
         {"general", "timezone", Kind::Timezone,

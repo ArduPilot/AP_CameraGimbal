@@ -32,6 +32,7 @@ static struct {
     float gimbal_pitch_rad;
     float gimbal_yaw_rad;
     float gimbal_yaw_rate_rad_s;
+    float gimbal_pitch_rate_rad_s;
     float zoom;
 } state = {.lock = PTHREAD_MUTEX_INITIALIZER};
 
@@ -108,6 +109,9 @@ void ca_metadata_set_gimbal_attitude_motion(float roll_rad, float pitch_rad,
                                             uint64_t timestamp_ms)
 {
     pthread_mutex_lock(&state.lock);
+    uint64_t sample=timestamp_ms+1U;
+    if(state.gimbal_attitude_ms && sample>state.gimbal_attitude_ms && sample-state.gimbal_attitude_ms<500)
+        state.gimbal_pitch_rate_rad_s=(pitch_rad-state.gimbal_pitch_rad)*1000/(sample-state.gimbal_attitude_ms);
     state.gimbal_roll_rad = roll_rad;
     state.gimbal_pitch_rad = pitch_rad;
     state.gimbal_yaw_rad = yaw_rad;
@@ -165,9 +169,87 @@ void ca_metadata_snapshot(struct ca_metadata *snapshot)
         snapshot->gimbal_pitch_rad = state.gimbal_pitch_rad;
         snapshot->gimbal_yaw_rad = state.gimbal_yaw_rad;
         snapshot->gimbal_yaw_rate_rad_s = state.gimbal_yaw_rate_rad_s;
+        snapshot->gimbal_pitch_rate_rad_s = state.gimbal_pitch_rate_rad_s;
     }
     snapshot->zoom = state.zoom;
     pthread_mutex_unlock(&state.lock);
+}
+
+// The short history aligns frame metadata with the control loop's monotonic
+// clock. Extrapolation is bounded; stale sensor data never becomes fresh merely
+// because a worker asks for another snapshot.
+static struct {
+    pthread_mutex_t lock;
+    ca_metadata pose[64];
+    uint64_t ms[64];
+    unsigned next, count;
+} history = { .lock=PTHREAD_MUTEX_INITIALIZER };
+
+static void advance_pose(ca_metadata &m, double seconds)
+{
+    if(m.have_position && m.have_velocity) {
+        const double earth=6378137.0, radians=M_PI/180;
+        double latitude=m.lat_e7*1e-7*radians;
+        m.lat_e7+=llround(m.vn_m_s*seconds/earth/radians*1e7);
+        if(fabs(cos(latitude))>.001)
+            m.lon_e7=int32_t(llround(remainder(m.lon_e7*1e-7+m.ve_m_s*seconds/(earth*cos(latitude))/radians,360)*1e7));
+        m.alt_amsl_m-=m.vd_m_s*seconds;
+    }
+    if(isfinite(m.vehicle_yaw_rate_rad_s)) m.vehicle_yaw_rad+=m.vehicle_yaw_rate_rad_s*seconds;
+    if(isfinite(m.gimbal_yaw_rate_rad_s)) m.gimbal_yaw_rad+=m.gimbal_yaw_rate_rad_s*seconds;
+    if(isfinite(m.gimbal_pitch_rate_rad_s)) m.gimbal_pitch_rad+=m.gimbal_pitch_rate_rad_s*seconds;
+}
+
+void ca_metadata_record_sample(uint64_t now)
+{
+    ca_metadata m; ca_metadata_snapshot(&m);
+    m.have_position=m.have_position && m.position_age_ms<=250;
+    m.have_vehicle_attitude=m.have_vehicle_attitude && m.vehicle_attitude_age_ms<=250;
+    m.have_gimbal_attitude=m.have_gimbal_attitude && m.gimbal_attitude_age_ms<=250;
+    // Correct each source to the sample instant using that source's own age.
+    ca_metadata position=m; advance_pose(position,m.position_age_ms*.001);
+    m.lat_e7=position.lat_e7; m.lon_e7=position.lon_e7; m.alt_amsl_m=position.alt_amsl_m;
+    if(isfinite(m.vehicle_yaw_rate_rad_s)) m.vehicle_yaw_rad+=m.vehicle_yaw_rate_rad_s*m.vehicle_attitude_age_ms*.001;
+    if(isfinite(m.gimbal_yaw_rate_rad_s)) m.gimbal_yaw_rad+=m.gimbal_yaw_rate_rad_s*m.gimbal_attitude_age_ms*.001;
+    if(isfinite(m.gimbal_pitch_rate_rad_s)) m.gimbal_pitch_rad+=m.gimbal_pitch_rate_rad_s*m.gimbal_attitude_age_ms*.001;
+    pthread_mutex_lock(&history.lock);
+    unsigned last=(history.next+63)%64;
+    if(!history.count || now>=history.ms[last]+20) {
+        history.pose[history.next]=m; history.ms[history.next]=now;
+        history.next=(history.next+1)%64;
+        if(history.count<64) ++history.count;
+    }
+    pthread_mutex_unlock(&history.lock);
+}
+
+bool ca_metadata_at(uint64_t when, ca_metadata *out)
+{
+    memset(out,0,sizeof(*out));
+    pthread_mutex_lock(&history.lock);
+    int before=-1,after=-1;
+    for(unsigned i=0;i<history.count;i++) {
+        unsigned k=(history.next+64-history.count+i)%64;
+        if(history.ms[k]<=when) before=k;
+        else { after=k; break; }
+    }
+    if(before<0 || when-history.ms[before]>200) { pthread_mutex_unlock(&history.lock); return false; }
+    *out=history.pose[before];
+    if(after>=0 && history.ms[after]-history.ms[before]<=250) {
+        const auto &b=history.pose[after];
+        double t=double(when-history.ms[before])/(history.ms[after]-history.ms[before]);
+        out->lat_e7+=llround((double(b.lat_e7)-out->lat_e7)*t);
+        out->lon_e7=int32_t(llround(remainder(out->lon_e7*1e-7+remainder((double(b.lon_e7)-out->lon_e7)*1e-7,360)*t,360)*1e7));
+        out->alt_amsl_m+=(b.alt_amsl_m-out->alt_amsl_m)*t;
+#define ANGLE(field) out->field+=remainder(b.field-out->field,2*M_PI)*t
+        ANGLE(vehicle_roll_rad); ANGLE(vehicle_pitch_rad); ANGLE(vehicle_yaw_rad);
+        ANGLE(gimbal_roll_rad); ANGLE(gimbal_pitch_rad); ANGLE(gimbal_yaw_rad);
+#undef ANGLE
+        out->have_position=out->have_position && b.have_position;
+        out->have_vehicle_attitude=out->have_vehicle_attitude && b.have_vehicle_attitude;
+        out->have_gimbal_attitude=out->have_gimbal_attitude && b.have_gimbal_attitude;
+    } else advance_pose(*out,(when-history.ms[before])*.001);
+    pthread_mutex_unlock(&history.lock);
+    return out->have_position && out->have_vehicle_attitude && out->have_gimbal_attitude;
 }
 
 /* ---- EXIF (TIFF little-endian) ---- */

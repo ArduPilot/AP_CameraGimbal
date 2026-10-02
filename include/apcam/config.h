@@ -128,7 +128,29 @@ struct ca_network_config {
     char gateway[16];
 };
 
+enum ca_survey_pattern { CA_SURVEY_BOTH=0, CA_SURVEY_LEFT_RIGHT=1, CA_SURVEY_FORE_AFT=2, CA_SURVEY_FORE_ONLY=3 };
+
+struct ca_survey_config {
+    unsigned pattern;
+    unsigned lens; // 0 raw thermal, 1 wide RGB, 2 zoom RGB
+    unsigned overlap;
+    unsigned fore_pct;
+    unsigned aft_pct;
+    unsigned burst;
+    unsigned burst_ms;
+    unsigned dwell_ms;
+    unsigned settle_ms;
+    unsigned error_cd;
+    unsigned rate_cd;
+    unsigned terrain_ms;
+    unsigned terrain_m;
+    unsigned terrain_tol;
+    unsigned min_speed;
+    unsigned turn_deg;
+};
+
 struct ca_config {
+    struct ca_survey_config survey;
     struct ca_network_config network;
     bool network_capture;
     struct ca_support_config support;

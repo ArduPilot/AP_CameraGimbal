@@ -69,7 +69,9 @@
 #define APCAM_GIMBAL_YAW_CONTINUOUS 1
 #define APCAM_GIMBAL_YAW_MIN -180.0f
 #define APCAM_GIMBAL_YAW_MAX 180.0f
-#define APCAM_GIMBAL_RATE_MAX 60.0f
+/* Upright bench sweeps confirmed approximately 100 deg/s on both axes.
+ * Shared by firmware tracking limits and SITL angle movement. */
+#define APCAM_GIMBAL_RATE_MAX 100.0f
 /* MT11 bench BIN: normalized yaw speed 100 is approximately 100 deg/s. */
 #define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
 #define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f

@@ -20,7 +20,15 @@ class Definitions(unittest.TestCase):
             with self.subTest(target=target):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name'): p for p in root.findall('parameters/parameter')}
-                self.assertNotIn('CAM_MODE', params)
+                self.assertEqual('CAM_MODE' in params, target != 'z1mini')
+                if 'CAM_MODE' in params:
+                    options = params['CAM_MODE'].findall('options/option')
+                    self.assertEqual([o.get('value') for o in options], ['0', '1', '2'] if target == 'mt11' else ['0', '1'])
+                self.assertEqual('SURV_LENS' in params, target == 'mt11')
+                self.assertEqual('SURV_PATTERN' in params, target == 'mt11')
+                if target == 'mt11':
+                    self.assertEqual(params['SURV_PATTERN'].get('default'), '0')
+                    self.assertEqual([o.get('value') for o in params['SURV_PATTERN'].findall('options/option')], ['0','1','2','3'])
                 self.assertIn('OSD_CROSS', params)
                 self.assertEqual('OSD_RECORD' in params, target != 'z1mini')
                 if 'OSD_RECORD' in params:

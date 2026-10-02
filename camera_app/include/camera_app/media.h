@@ -11,6 +11,13 @@
 
 struct ca_media;
 struct ca_backend;
+struct ca_survey_request;
+struct ca_survey_result;
+float ca_media_survey_hfov(const ca_media *, unsigned lens);
+bool ca_media_survey_available(struct ca_media *, unsigned lens);
+bool ca_media_survey_start(struct ca_media *, const ca_survey_request &);
+bool ca_media_survey_poll(struct ca_media *, ca_survey_result &);
+void ca_media_survey_cancel(struct ca_media *);
 bool ca_media_tracking_available(struct ca_media *media);
 int ca_media_tracking_start(struct ca_media *media, ca_tracking_rect rect, ca_tracking_owner owner);
 void ca_media_tracking_stop(struct ca_media *media, ca_tracking_owner owner=CA_TRACK_OWNER_NONE);
