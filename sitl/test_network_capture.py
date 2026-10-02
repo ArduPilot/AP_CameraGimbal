@@ -146,7 +146,7 @@ def main():
             wait_for(lambda: 'Off; saved capture files' in page())
             assert camera.poll() is None
             saved = (root/'app/camera.ini').read_text()
-            assert 'capture = "false"' in saved
+            assert 'capture = false' in saved
             files = list(captures.glob('*.pcap'))
             assert files
             snapshot = {file: file.read_bytes() for file in files}

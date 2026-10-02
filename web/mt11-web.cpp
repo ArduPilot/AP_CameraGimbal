@@ -1792,6 +1792,16 @@ static struct ini_update *find_update(struct ini_update *updates, size_t count,
     return NULL;
 }
 
+// The camera reader only strips quotes wrapping the whole value, so quote just
+// the values that would otherwise change when read back.
+static bool ini_needs_quotes(const char *value)
+{
+    size_t length = strlen(value);
+    return length == 0U || isspace((unsigned char)value[0]) ||
+           isspace((unsigned char)value[length - 1U]) ||
+           (length >= 2U && value[0] == '"' && value[length - 1U] == '"');
+}
+
 static char *ini_apply_updates(const char *config, struct ini_update *updates,
                                size_t count, bool add_missing,
                                size_t *new_length,
@@ -1840,8 +1850,10 @@ static char *ini_apply_updates(const char *config, struct ini_update *updates,
                     const char *value_start = equals + 1;
                     const char *value_end = end;
                     trim_span(&value_start, &value_end);
-                    if (value_end > value_start + 1 && *value_start == '"' &&
-                        value_end[-1] == '"') {
+                    // keep the existing line's quoting style
+                    const bool quoted = value_end > value_start + 1 &&
+                                        *value_start == '"' && value_end[-1] == '"';
+                    if (quoted) {
                         value_start++;
                         value_end--;
                         if (strcmp(section, "support_proxy") != 0)
@@ -1852,7 +1864,9 @@ static char *ini_apply_updates(const char *config, struct ini_update *updates,
                         update = NULL;
                     } else {
                         if (!output.append_n(p, (size_t)(equals + 1 - p)) ||
-                            !output.appendf(" \"%s\"", update->value)) {
+                            !output.appendf(quoted || ini_needs_quotes(update->value)
+                                                ? " \"%s\"" : " %s",
+                                            update->value)) {
                             output.reset();
                             return NULL;
                         }
@@ -1895,8 +1909,9 @@ static char *ini_apply_updates(const char *config, struct ini_update *updates,
                     strcmp(updates[j].section, updates[i].section) != 0) {
                     continue;
                 }
-                if (!output.appendf("%s = \"%s\"\n",
-                                updates[j].key, updates[j].value)) {
+                if (!output.appendf(ini_needs_quotes(updates[j].value)
+                                        ? "%s = \"%s\"\n" : "%s = %s\n",
+                                    updates[j].key, updates[j].value)) {
                     goto allocation_failed;
                 }
                 updates[j].found = true;
