@@ -163,8 +163,22 @@ static int motor_step(struct ca_e5739 *motor, bool zoom, unsigned steps,
     return gate_batch(motor);
 }
 
+// Writing 0x0c00 leaves both stepper outputs enabled, so the coils draw
+// holding current indefinitely. Disable them once a move has finished; the
+// lens gearing holds position.
+static int release_outputs(struct ca_e5739 *motor)
+{
+    if (usleep(20000U) < 0 ||
+        spi_write_register(motor, 0x24U, 0U) < 0 ||
+        spi_write_register(motor, 0x25U, 0U) < 0 ||
+        spi_write_register(motor, 0x29U, 0U) < 0 ||
+        spi_write_register(motor, 0x2aU, 0U) < 0) return -1;
+    return gate_batch(motor);
+}
+
 static int move_zoom_to(struct ca_e5739 *motor, int target)
 {
+    if (motor->zoom_position == target) return 0;
     while (motor->zoom_position != target) {
         int difference = target - motor->zoom_position;
         unsigned steps = (unsigned)abs(difference);
@@ -173,11 +187,12 @@ static int move_zoom_to(struct ca_e5739 *motor, int target)
             return -1;
         }
     }
-    return 0;
+    return release_outputs(motor);
 }
 
 static int move_focus_to(struct ca_e5739 *motor, int target)
 {
+    if (motor->focus_position == target) return 0;
     while (motor->focus_position != target) {
         int difference = target - motor->focus_position;
         unsigned steps = (unsigned)abs(difference);
@@ -186,7 +201,7 @@ static int move_focus_to(struct ca_e5739 *motor, int target)
             return -1;
         }
     }
-    return 0;
+    return release_outputs(motor);
 }
 
 static int home_channel(struct ca_e5739 *motor, bool zoom, unsigned stop_pin,
@@ -559,6 +574,7 @@ int ca_e5739_set_focus_position(struct ca_e5739 *motor, int position)
 void ca_e5739_close(struct ca_e5739 *motor)
 {
     if (motor == NULL) return;
+    if (motor->spi_fd >= 0 && motor->gpio_fd >= 0) (void)release_outputs(motor);
     if (motor->gpio_fd >= 0) (void)gpio_set(motor, E5739_GATE_PIN, 0U);
     if (motor->spi_fd >= 0) close(motor->spi_fd);
     if (motor->gpio_fd >= 0) close(motor->gpio_fd);
