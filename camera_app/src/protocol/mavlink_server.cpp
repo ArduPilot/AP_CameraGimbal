@@ -613,6 +613,16 @@ static bool route_local_ipv4(const struct ca_mavlink_server *server,
     int probe = -1;
     int fd;
 
+#if !APCAM_HAVE_NETWORK_CONFIG
+    // Companion computers usually reach the GCS through a local MAVLink
+    // router, so a loopback route says nothing about the GCS's network.
+    const char *configured = getenv("CAMERA_APP_VIDEO_ADDRESS");
+    struct in_addr parsed;
+    if (configured && inet_pton(AF_INET, configured, &parsed) == 1) {
+        snprintf(address, INET_ADDRSTRLEN, "%s", configured);
+        return true;
+    }
+#endif
     // Serial routes have no IP peer from which to infer a local address.
     if (route->kind == ROUTE_UART || route->kind == ROUTE_MCU) {
         return interface_ipv4(address);
@@ -637,6 +647,9 @@ static bool route_local_ipv4(const struct ca_mavlink_server *server,
               inet_ntop(AF_INET, &local.sin_addr, address,
                         INET_ADDRSTRLEN) != NULL;
     if (probe >= 0) close(probe);
+#if !APCAM_HAVE_NETWORK_CONFIG
+    if (ok && (ntohl(local.sin_addr.s_addr) >> 24) == 127U) return interface_ipv4(address);
+#endif
     return ok;
 }
 

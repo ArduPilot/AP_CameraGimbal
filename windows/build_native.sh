@@ -5,7 +5,8 @@ export MAKEFLAGS=${MAKEFLAGS:--j8}
 python3 windows/prepare_xop.py build/deps/ss928-mpp/src/rtspserver/src build/windows-xop
 mkdir -p build/windows/native
 python3 tools/export_targets.py
-for backend in $(python3 -c 'import json; print(" ".join(json.load(open("build/targets/targets.json"))))'); do
+# Hardware-only targets (APCAM_HAVE_SITL 0) have no simulator build.
+for backend in $(python3 -c 'import json; print(" ".join(name for name, target in json.load(open("build/targets/targets.json")).items() if target.get("have_sitl", 1)))'); do
     make -C camera_app sitl CAMERA_BACKEND="$backend" \
         SITL_TARGET="../build/windows/native/camera-app-$backend.exe" \
         SITL_OBJDIR="build/windows-$backend" \

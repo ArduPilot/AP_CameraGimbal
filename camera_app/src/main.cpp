@@ -387,7 +387,7 @@ int APC_CameraApp::run(int argc, char **argv)
         ca_log("cannot bind SIYI UDP/TCP %u: %s", port, strerror(errno));
         return result;
     }
-#else
+#elif APCAM_HAVE_XFROBOT
     if (ca_xfrobot_server_open(&_xfrobot, port, app_config.orientation == CA_MOUNT_INVERTED) < 0) return result;
 #endif
     const char *record_root = environment_string("CAMERA_APP_RECORD_ROOT",
@@ -421,6 +421,9 @@ int APC_CameraApp::run(int argc, char **argv)
 #ifdef CAMERA_APP_SITL
     if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
         ca_log("network configuration skipped in SITL (uses host networking)");
+#elif !APCAM_HAVE_NETWORK_CONFIG
+    if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
+        ca_log("network configuration skipped (host OS owns networking)");
 #else
     char network_state[PATH_MAX];
     if (snprintf(network_state, sizeof(network_state), "%s.network", ready_path()) >= (int)sizeof(network_state)) {
@@ -460,10 +463,10 @@ int APC_CameraApp::run(int argc, char **argv)
     config.manual_command=&_manual.executing;
     config.name = backend_name;
     config.uart_device = uart_device;
-#if APCAM_HAVE_XFROBOT
-    config.emit = NULL;
-#else
+#if APCAM_HAVE_SIYI
     config.emit = ca_siyi_server_emit;
+#else
+    config.emit = NULL;
 #endif
     config.emit_opaque = _server;
     config.recording_set = set_recording;

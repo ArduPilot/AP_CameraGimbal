@@ -13,10 +13,10 @@ import time
 def main():
     import faulthandler
     faulthandler.dump_traceback_later(180, repeat=True)
-    from sitl.target_properties import TARGETS
+    from sitl.target_properties import SITL_TARGETS, TARGETS
     from sitl.launcher_config import vendor_stride
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--backend', choices=tuple(TARGETS) + ('all',), default='all')
+    parser.add_argument('--backend', choices=tuple(SITL_TARGETS) + ('all',), default='all')
     parser.add_argument('--video', choices=('simple', 'terrain'), default='simple')
     parser.add_argument('--orientation', choices=('upright', 'inverted'), default='upright')
     parser.add_argument('--show-window', action='store_true')
@@ -79,7 +79,7 @@ def main():
                 raise AssertionError('Timed out waiting for launcher: ' + window.status.text())
             time.sleep(.02)
         app.processEvents()
-    for backend in (tuple(TARGETS) if args.backend == 'all' else (args.backend,)):
+    for backend in (tuple(SITL_TARGETS) if args.backend == 'all' else (args.backend,)):
         cookies = http.cookiejar.CookieJar()
         browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
         prefix = backend.upper() + '_SITL_'
@@ -326,7 +326,7 @@ def main():
         window.count.setValue(4)
         endpoints = []
         try:
-            for index, (backend, panel) in enumerate(zip(TARGETS, window.simulators)):
+            for index, (backend, panel) in enumerate(zip(SITL_TARGETS, window.simulators)):
                 panel.camera.setCurrentIndex(panel.camera.findData(backend))
                 panel.orientation.setCurrentIndex(panel.orientation.findData(args.orientation))
                 panel.video.setCurrentIndex(panel.video.findData(args.video))
