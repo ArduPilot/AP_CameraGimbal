@@ -3,7 +3,7 @@
 import codecs
 import os
 from pathlib import Path
-from sitl.target_properties import TARGETS
+from sitl.target_properties import SITL_TARGETS, TARGETS
 from sitl.launcher_config import vendor_ports, vendor_stride, MAX_SIMULATORS, mavlink_settings
 import signal
 import subprocess
@@ -76,7 +76,7 @@ class SimulatorPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         form = QtWidgets.QFormLayout()
         self.camera = QtWidgets.QComboBox()
-        for backend, properties in TARGETS.items():
+        for backend, properties in SITL_TARGETS.items():
             self.camera.addItem(properties['product_name'], backend)
         self.camera.setCurrentIndex(self.camera.findData('mt11'))
         self.orientation = QtWidgets.QComboBox()

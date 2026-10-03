@@ -17,6 +17,13 @@
 #endif
 #define APCAM_HAVE_SIYI (APCAM_VENDOR_PROTOCOL == APCAM_PROTOCOL_SIYI)
 #define APCAM_HAVE_XFROBOT (APCAM_VENDOR_PROTOCOL == APCAM_PROTOCOL_XFROBOT)
+#ifndef APCAM_HAVE_SITL
+#define APCAM_HAVE_SITL 1
+#endif
+/* Targets on a host OS which owns networking set this to 0. */
+#ifndef APCAM_HAVE_NETWORK_CONFIG
+#define APCAM_HAVE_NETWORK_CONFIG 1
+#endif
 #ifndef APCAM_LOG_ROOT
 #define APCAM_LOG_ROOT "/mnt/logs"
 #endif

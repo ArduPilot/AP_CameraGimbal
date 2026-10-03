@@ -6,6 +6,8 @@
 #define APCAM_TARGET_Z1_MINI 4
 #define APCAM_LENS_TYPE_RGB 1
 #define APCAM_LENS_TYPE_THERMAL 2
+/* NONE: MAVLink only, no vendor UDP/TCP control service. */
+#define APCAM_PROTOCOL_NONE 0
 #define APCAM_PROTOCOL_SIYI 1
 #define APCAM_PROTOCOL_XFROBOT 2
 /* Stable resolution IDs match the persisted/MAVLink resolution parameters. */
