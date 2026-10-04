@@ -50,6 +50,7 @@ struct APC_Media_ZR10_State {
     bool recording_wait_keyframe;
     struct ca_rtsp *rtsp;
     unsigned sub_rtsp_stream;
+    uint64_t last_pts[2];
     struct ca_live_video_server *live_video;
     struct ca_mp4 *mp4;
     char recording_path[PATH_MAX];
@@ -171,7 +172,9 @@ static void consume_frame(struct APC_Media_ZR10_State *media, unsigned channel,
     if (channel == CA_ZR10_MAIN_VENC || channel == CA_ZR10_SUB_VENC) {
         unsigned stream = channel == CA_ZR10_MAIN_VENC ? 0U
                                                      : media->sub_rtsp_stream;
-        (void)ca_rtsp_push_video(media->rtsp, stream, data, length, key_frame, hfov_deg);
+        if (pts <= media->last_pts[channel]) pts = media->last_pts[channel] + 1;
+        media->last_pts[channel] = pts;
+        (void)ca_rtsp_push_video_timed(media->rtsp, stream, data, length, key_frame, hfov_deg, pts);
         (void)ca_live_video_server_publish(media->live_video, channel, data,
                                             length, pts, key_frame, hfov_deg);
         if (channel == CA_ZR10_MAIN_VENC && !media->isp_bin_loaded &&
