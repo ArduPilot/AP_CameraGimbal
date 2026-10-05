@@ -102,4 +102,62 @@
 /* Pi OS has no /mnt media card; the service may override these. */
 #define APCAM_LOG_ROOT "/var/lib/ap_cameragimbal/logs"
 
+/* Platform paths are consumed only by the web service. systemd supervises
+ * both services: the web stops camera-app and systemd starts a fresh one. */
+#ifdef APCAM_WEB_BUILD
+/* Updates come from the source tree (git pull, make, install), not packages. */
+#define WEB_HAVE_FIRMWARE_UPLOAD 0
+#define FIRMWARE_PREFIX "RPi_"
+#ifndef APP_DIR
+#define APP_DIR "/etc/ap_cameragimbal"
+#endif
+#ifndef MEDIA_ROOT
+#define MEDIA_ROOT "/var/lib/ap_cameragimbal"
+#endif
+/* Recordings live on the root filesystem, not a separately mounted card. */
+#define WEB_MEDIA_IS_MOUNT 0
+#ifndef CAPTURE_ROOT
+#define CAPTURE_ROOT MEDIA_ROOT "/capture"
+#endif
+#ifndef REPLACEMENT_CONFIG_PATH
+#define REPLACEMENT_CONFIG_PATH APP_DIR "/camera.ini"
+#endif
+#ifndef REPLACEMENT_CONFIG_BACKUP_PATH
+#define REPLACEMENT_CONFIG_BACKUP_PATH APP_DIR "/camera.ini.web.bak"
+#endif
+#ifndef PASSWORD_PATH
+#define PASSWORD_PATH APP_DIR "/web.pass"
+#endif
+#ifndef REPLACEMENT_CAMERA_PATH
+#define REPLACEMENT_CAMERA_PATH "/usr/local/bin/ap-camera-app"
+#endif
+#ifndef WEB_PATH
+#define WEB_PATH "/usr/local/bin/ap-camera-web"
+#endif
+#ifndef WEBROOT_PATH
+#define WEBROOT_PATH "/usr/local/share/ap_cameragimbal/webroot"
+#endif
+#ifndef APP_SELECTION_DIR
+#define APP_SELECTION_DIR APP_DIR
+#endif
+#ifndef APP_REQUEST_PATH
+#define APP_REQUEST_PATH "/run/camera-app.request"
+#endif
+#ifndef APP_REQUEST_LOCK_PATH
+#define APP_REQUEST_LOCK_PATH "/run/camera-app.request.lock"
+#endif
+#ifndef APP_STARTED_PATH
+#define APP_STARTED_PATH "/run/camera-app.started"
+#endif
+#define APP_STORAGE_PATH "/usr/local/bin"
+#define SETTINGS_STORAGE_PATH APP_DIR
+#ifndef REBOOT_COMMAND
+#define REBOOT_COMMAND "systemctl reboot"
+#endif
+/* camera-app logs to the journal of its systemd unit. */
+#ifndef APP_LOG_COMMAND
+#define APP_LOG_COMMAND "journalctl --unit=ap-cameragimbal --boot --lines=2000 --output=cat --no-pager"
+#endif
+#endif
+
 #endif
