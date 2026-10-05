@@ -99,6 +99,11 @@ jobs:
           make -C web network-status-test
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
+      - name: Test Raspberry Pi image controls and CADDX gimbal, and build against libcamera 0.2
+        run: |
+          make -C camera_app rpi_libcam_caddx-test
+          sudo apt-get install -y libcamera-dev pkg-config
+          make -j8 rpi_libcam_caddx
       - name: Test MAVLink control BIN logging and sender identities
         run: make -C camera_app mavlink-binlog-test
       - name: Test SIYI and XFRobot packet BIN logging on all camera targets
