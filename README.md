@@ -10,6 +10,7 @@ The following hardware is currently supported:
  - SIYI A8-mini
  - SIYI ZR10
  - XFRobot Z1-Mini
+ - Raspberry Pi CM4 with an IMX477 CSI camera and CADDX gimbal (see [`packaging/rpi_libcam_caddx/README.md`](packaging/rpi_libcam_caddx/README.md))
 
 Adding support for new hardware is usually fairly straight forward.
 
@@ -38,7 +39,7 @@ Key features of the firmware:
 
 - `camera_app/` contains the camera service, reusable protocol and media code,
   backend interface, tests and detailed configuration documentation.
-- `camera_app/src/backends/` contains the camera-specific MT11, A8, ZR10 and Z1-Mini backends.
+- `camera_app/src/backends/` contains the camera-specific MT11, A8, ZR10, Z1-Mini and Raspberry Pi backends.
 - `web/` contains the shared administration and live-view service.
 - `packaging/` and `tools/` contain camera-specific installation and package
   builders.
