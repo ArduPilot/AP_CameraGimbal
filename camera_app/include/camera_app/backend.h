@@ -120,5 +120,8 @@ int ca_backend_set_gimbal_neutral(struct ca_backend *backend);
 bool ca_backend_recording(const struct ca_backend *backend);
 const char *ca_backend_name(const struct ca_backend *backend);
 void ca_backend_close(struct ca_backend *backend);
+/* Whether a gimbal is connected; MAVLink advertises one only if so. Defined
+ * only by backends of targets with APCAM_GIMBAL_OPTIONAL. */
+bool ca_backend_has_gimbal(const struct ca_backend *backend);
 
 #endif

@@ -4,6 +4,7 @@
 #define APCAM_TARGET_A8 2
 #define APCAM_TARGET_ZR10 3
 #define APCAM_TARGET_Z1_MINI 4
+#define APCAM_TARGET_RPI_LIBCAM_CADDX 5
 #define APCAM_LENS_TYPE_RGB 1
 #define APCAM_LENS_TYPE_THERMAL 2
 /* NONE: MAVLink only, no vendor UDP/TCP control service. */

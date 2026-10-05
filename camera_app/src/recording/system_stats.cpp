@@ -85,7 +85,8 @@ static float cpu_temperature(void)
     float value = mt11_temperature((const volatile uint32_t*)(map));
     munmap(map, 4096);
     return value;
-#elif !defined(CAMERA_APP_SITL) && !defined(CAMERA_APP_HOST) && APCAM_TARGET == APCAM_TARGET_Z1_MINI
+#elif !defined(CAMERA_APP_SITL) && !defined(CAMERA_APP_HOST) && defined(SOC_TEMPERATURE_PATH)
+    /* Kernel thermal zone, millidegrees Celsius (Z1-Mini, Raspberry Pi). */
     FILE *file = fopen(SOC_TEMPERATURE_PATH, "r");
     if (!file) return NAN;
     long value;

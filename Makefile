@@ -497,6 +497,13 @@ z1mini_native_package: z1mini
 # The self-contained native-capture variant is the deployable package.
 z1mini_package: z1mini_native_package
 
+# Raspberry Pi + libcamera + CADDX gimbal: native build on Raspberry Pi OS
+# against the system libcamera; see packaging/rpi_libcam_caddx/README.md.
+RPI_CROSS_COMPILE ?=
+.PHONY: rpi_libcam_caddx
+rpi_libcam_caddx:
+	$(MAKE) -C camera_app CAMERA_BACKEND=rpi_libcam_caddx CROSS_COMPILE='$(RPI_CROSS_COMPILE)'
+
 Z1MINI_SITL_BUILD ?= build/z1mini-sitl
 $(Z1MINI_SITL_BUILD)/main.h264: $(A8_SITL_BUILD)/main.h264
 	mkdir -p $(dir $@)

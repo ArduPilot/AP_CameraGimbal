@@ -530,11 +530,24 @@ static void send_heartbeat(struct ca_mavlink_server *server,
     (void)send_message(server, route, &message);
 }
 
+#if APCAM_GIMBAL_OPTIONAL
+/* Without a gimbal no gimbal component is advertised: no heartbeat, device
+ * information or command replies. Other targets always have a gimbal and
+ * compile the original code, unchanged. */
+static bool have_gimbal(const struct ca_mavlink_server *server)
+{
+    return ca_backend_has_gimbal(server->backend);
+}
+#endif
+
 static void broadcast_heartbeats(struct ca_mavlink_server *server)
 {
     mavlink_message_t message;
     pack_heartbeat(server, server->camera_component_id, MAV_TYPE_CAMERA, &message);
     broadcast_message(server, &message);
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server)) return;
+#endif
     pack_heartbeat(server, server->gimbal_component_id, MAV_TYPE_GIMBAL, &message);
     broadcast_message(server, &message);
 }
@@ -674,6 +687,9 @@ static void send_camera_information(struct ca_mavlink_server *server,
     if(ca_media_tracking_available(server->media))
         info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
     info.gimbal_device_id = server->gimbal_component_id;
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server)) info.gimbal_device_id = 0U;
+#endif
 #if APCAM_HAVE_THERMAL
     info.flags |= CAMERA_CAP_FLAGS_HAS_THERMAL_RANGE;
 #endif
@@ -1141,6 +1157,9 @@ static uint8_t set_thermal_interval(struct ca_mavlink_server *server,
 static void send_gimbal_information(struct ca_mavlink_server *server,
                                     const struct route *route)
 {
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server)) return;
+#endif
     mavlink_message_t message;
     uint32_t flags = GIMBAL_DEVICE_CAP_FLAGS_HAS_NEUTRAL |
                      GIMBAL_DEVICE_CAP_FLAGS_HAS_PITCH_AXIS |
@@ -1261,9 +1280,16 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
         command.command = MAV_CMD_SET_MESSAGE_INTERVAL;
         command.target_system = server->autopilot_system_id;
         command.target_component = server->autopilot_component_id;
+#if APCAM_GIMBAL_OPTIONAL
+        (void)mavlink_msg_command_long_encode_status(
+            server->system_id, route->kind == ROUTE_MCU || !have_gimbal(server)
+                ? server->camera_component_id : server->gimbal_component_id,
+            &server->encode_status, &message, &command);
+#else
         (void)mavlink_msg_command_long_encode_status(
             server->system_id, route->kind == ROUTE_MCU ? server->camera_component_id : server->gimbal_component_id,
             &server->encode_status, &message, &command);
+#endif
         (void)send_message(server, route, &message);
     }
 }
@@ -1763,8 +1789,14 @@ static uint8_t handle_command_long(struct ca_mavlink_server *server,
          (command == MAV_CMD_REQUEST_MESSAGE &&
           (params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION ||
            params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS)))) return 255;
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server) && target_component == server->gimbal_component_id) return 255;
+    if (have_gimbal(server) && target_matches(server, target_system, target_component,
+                       server->gimbal_component_id)) {
+#else
     if (target_matches(server, target_system, target_component,
                        server->gimbal_component_id)) {
+#endif
         if (command == MAV_CMD_REQUEST_MESSAGE &&
             ((uint32_t)params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION ||
              (uint32_t)params[0] == MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS)) {
@@ -2009,6 +2041,9 @@ static uint8_t handle_command_int(struct ca_mavlink_server *server,
     mavlink_command_int_t request;
     if (message->len < 29U) return 255;
     mavlink_msg_command_int_decode(message, &request);
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server)) return 255;
+#endif
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) {
         return 255;
@@ -2065,6 +2100,9 @@ static uint8_t handle_gimbal_set_attitude(struct ca_mavlink_server *server,
     if (message->len < MAVLINK_MSG_ID_GIMBAL_DEVICE_SET_ATTITUDE_MIN_LEN) return 255;
     mavlink_msg_gimbal_device_set_attitude_decode(message, &request);
     uint16_t flags = request.flags;
+#if APCAM_GIMBAL_OPTIONAL
+    if (!have_gimbal(server)) return 255;
+#endif
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) return 255;
     if (server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
@@ -2968,6 +3006,9 @@ static int accept_clients(struct ca_mavlink_server *server)
                host, ntohs(address.sin_port));
         struct route route = {.kind = ROUTE_TCP, .client = slot};
         send_heartbeat(server, &route, server->camera_component_id, 30U);
+#if APCAM_GIMBAL_OPTIONAL
+        if (have_gimbal(server))
+#endif
         send_heartbeat(server, &route, server->gimbal_component_id, 26U);
     }
 }
