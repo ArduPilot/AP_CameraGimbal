@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/dma-buf.h>
 #include <linux/videodev2.h>
 #include <poll.h>
 #include <pthread.h>
@@ -28,6 +29,8 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <stdlib.h>
 
 #include <memory>
 #include <new>
@@ -69,6 +72,15 @@ struct ca_rpi_pipeline {
     ControlList pending {controls::controls};
     bool have_pending = false;
     struct ca_rpi_image_controls image {};
+
+    /* Stills: camera buffers mapped read-only, and a frame copy requested by
+     * ca_rpi_pipeline_grab_still() and filled by request_complete(). */
+    std::vector<const uint8_t *> mapped;
+    std::vector<size_t> mapped_length;
+    pthread_cond_t still_ready;
+    struct ca_rpi_still_frame *still = nullptr;
+    bool still_done = false;
+    atomic_bool still_wanted; /* lock-free check on every frame */
 };
 
 static int xioctl(int fd, unsigned long request, void *arg)
@@ -140,6 +152,39 @@ static void report_exposure(struct ca_rpi_pipeline *p, const ControlList &metada
 
 static void requeue(struct ca_rpi_pipeline *p, unsigned index);
 
+static void dmabuf_sync(int fd, uint64_t flags)
+{
+    struct dma_buf_sync sync = {.flags = flags};
+    (void)xioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+}
+
+/* libcamera's thread: copy the frame for a waiting still capture. */
+static void copy_still(struct ca_rpi_pipeline *p, unsigned index, FrameBuffer *buffer, uint64_t timestamp_us)
+{
+    pthread_mutex_lock(&p->lock);
+    struct ca_rpi_still_frame *frame = p->still;
+    const auto planes = buffer->planes();
+    if (frame && !p->still_done && index < p->mapped.size() && p->mapped[index] && planes.size() == 3) {
+        const unsigned chroma_stride = frame->stride / 2U, chroma_height = (frame->height + 1U) / 2U;
+        const size_t sizes[3] = {(size_t)frame->stride * frame->height,
+                                 (size_t)chroma_stride * chroma_height, (size_t)chroma_stride * chroma_height};
+        uint8_t *out = frame->data;
+        const int fd = planes[0].fd.get();
+        dmabuf_sync(fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+        for (unsigned i = 0; i < 3U; i++) {
+            const size_t n = sizes[i] < planes[i].length ? sizes[i] : planes[i].length;
+            if (planes[i].offset + n <= p->mapped_length[index])
+                memcpy(out, p->mapped[index] + planes[i].offset, n);
+            out += sizes[i];
+        }
+        dmabuf_sync(fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+        frame->timestamp_us = timestamp_us;
+        p->still_done = true;
+        pthread_cond_signal(&p->still_ready);
+    }
+    pthread_mutex_unlock(&p->lock);
+}
+
 /* libcamera's thread: hand the completed frame to the encoder. */
 static void request_complete(struct ca_rpi_pipeline *p, Request *request)
 {
@@ -149,6 +194,7 @@ static void request_complete(struct ca_rpi_pipeline *p, Request *request)
     if (!buffer) return;
     const auto sensor_ns = request->metadata().get(controls::SensorTimestamp);
     const uint64_t timestamp_us = sensor_ns ? (uint64_t)*sensor_ns / 1000U : monotonic_us();
+    if (atomic_load(&p->still_wanted)) copy_still(p, (unsigned)request->cookie(), buffer, timestamp_us);
 
     struct v4l2_plane plane = {};
     struct v4l2_buffer v = {};
@@ -367,6 +413,13 @@ static int open_camera(struct ca_rpi_pipeline *p)
         std::unique_ptr<Request> request = p->camera->createRequest(i);
         if (!request || request->addBuffer(p->stream, buffers[i].get()) < 0) { errno = ENOMEM; return -1; }
         p->requests.push_back(std::move(request));
+        /* All YUV420 planes share one dmabuf; map it for still copies. */
+        const auto planes = buffers[i]->planes();
+        const size_t length = planes.back().offset + planes.back().length;
+        void *data = mmap(NULL, length, PROT_READ, MAP_SHARED, planes[0].fd.get(), 0);
+        p->mapped.push_back(data == MAP_FAILED ? nullptr : static_cast<const uint8_t *>(data));
+        p->mapped_length.push_back(data == MAP_FAILED ? 0 : length);
+        if (data == MAP_FAILED) ca_log("RPi cannot map camera buffer %u for stills: %s", i, strerror(errno));
     }
     return 0;
 }
@@ -397,7 +450,13 @@ int ca_rpi_pipeline_open(struct ca_rpi_pipeline **out, const struct ca_rpi_pipel
     if (!p) { errno = ENOMEM; return -1; }
     p->config = *config;
     atomic_init(&p->stop, false);
+    atomic_init(&p->still_wanted, false);
     pthread_mutex_init(&p->lock, NULL);
+    pthread_condattr_t condattr;
+    pthread_condattr_init(&condattr);
+    pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC);
+    pthread_cond_init(&p->still_ready, &condattr);
+    pthread_condattr_destroy(&condattr);
     if (start(p) < 0) {
         int saved = errno ? errno : EIO;
         ca_rpi_pipeline_close(p);
@@ -443,6 +502,8 @@ void ca_rpi_pipeline_close(struct ca_rpi_pipeline *p)
         close(p->encoder);
     }
     p->requests.clear();
+    for (size_t i = 0; i < p->mapped.size(); i++)
+        if (p->mapped[i]) munmap(const_cast<uint8_t *>(p->mapped[i]), p->mapped_length[i]);
     if (p->allocator && p->stream) (void)p->allocator->free(p->stream);
     p->allocator.reset();
     p->camera_config.reset();
@@ -450,6 +511,44 @@ void ca_rpi_pipeline_close(struct ca_rpi_pipeline *p)
     p->camera.reset();
     if (p->manager) p->manager->stop();
     p->manager.reset();
+    pthread_cond_destroy(&p->still_ready);
     pthread_mutex_destroy(&p->lock);
     delete p;
+}
+
+int ca_rpi_pipeline_grab_still(struct ca_rpi_pipeline *p, struct ca_rpi_still_frame *frame, unsigned timeout_ms)
+{
+    if (!p || !frame || !p->camera_config) { errno = EINVAL; return -1; }
+    const StreamConfiguration &stream = p->camera_config->at(0);
+    *frame = {};
+    frame->width = stream.size.width;
+    frame->height = stream.size.height;
+    frame->stride = stream.stride;
+    const size_t chroma = (size_t)(frame->stride / 2U) * ((frame->height + 1U) / 2U);
+    /* Padding: libjpeg reads chroma rows rounded up to whole 8-pixel blocks. */
+    frame->data = static_cast<uint8_t *>(malloc((size_t)frame->stride * frame->height + 2U * chroma + 64U));
+    if (!frame->data) { errno = ENOMEM; return -1; }
+
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += timeout_ms / 1000U;
+    deadline.tv_nsec += (long)(timeout_ms % 1000U) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&p->lock);
+    p->still = frame;
+    p->still_done = false;
+    atomic_store(&p->still_wanted, true);
+    int error = 0;
+    while (!p->still_done && error == 0) error = pthread_cond_timedwait(&p->still_ready, &p->lock, &deadline);
+    const bool done = p->still_done;
+    p->still = nullptr;
+    atomic_store(&p->still_wanted, false);
+    pthread_mutex_unlock(&p->lock);
+    if (!done) {
+        free(frame->data);
+        frame->data = nullptr;
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    return 0;
 }

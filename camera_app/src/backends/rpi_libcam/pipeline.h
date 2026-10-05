@@ -33,6 +33,19 @@ int ca_rpi_pipeline_set_image(struct ca_rpi_pipeline *pipeline,
                               const struct ca_config *settings);
 void ca_rpi_pipeline_close(struct ca_rpi_pipeline *pipeline);
 
+/* A copy of one camera frame: planar YUV420 (I420) with the camera's
+ * limited-range Rec.709 colour, U and V planes at half the luma stride. */
+struct ca_rpi_still_frame {
+    uint8_t *data; /* malloc()ed; Y, then U, then V */
+    unsigned width, height, stride;
+    uint64_t timestamp_us;
+};
+
+/* Copy the next camera frame without interrupting video. The caller frees
+ * frame->data. Returns -1 with errno ETIMEDOUT if no frame arrives. */
+int ca_rpi_pipeline_grab_still(struct ca_rpi_pipeline *pipeline,
+                               struct ca_rpi_still_frame *frame, unsigned timeout_ms);
+
 /* libcamera control values for the IMG_* settings, independent of libcamera
  * so they can be tested on the host. Zero gain/exposure means automatic. */
 struct ca_rpi_image_controls {

@@ -103,10 +103,11 @@ jobs:
           python3 sitl/test_survey_controls.py
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
-      - name: Test Raspberry Pi image controls and CADDX gimbal, and build against libcamera 0.2
+      - name: Test Raspberry Pi image controls, CADDX gimbal and JPEG stills, and build against libcamera 0.2
         run: |
           make -C camera_app rpi_libcam_caddx-test
-          sudo apt-get install -y libcamera-dev pkg-config
+          sudo apt-get install -y libcamera-dev libjpeg-dev pkg-config
+          make -C camera_app rpi_jpeg-test
           make -j8 rpi_libcam_caddx
       - name: Test MAVLink control BIN logging and sender identities
         run: make -C camera_app mavlink-binlog-test
