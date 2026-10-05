@@ -335,6 +335,9 @@ enum string_id {
     S_STORAGE_APPLICATION,
     S_STORAGE_SETTINGS,
     S_STORAGE_MICROSD,
+#if !WEB_MEDIA_IS_MOUNT
+    S_STORAGE_RECORDINGS,
+#endif
     S_STATUS_REFRESH,
     S_STATUS_ACTIONS,
     S_STATUS_RESTART,
@@ -901,6 +904,9 @@ static constexpr Translations translations = [] {
     result[S_STORAGE_APPLICATION] = {"Application", "应用分区", "アプリ領域"};
     result[S_STORAGE_SETTINGS] = {"Settings", "设置分区", "設定領域"};
     result[S_STORAGE_MICROSD] = {"microSD", "microSD 卡", "microSD"};
+#if !WEB_MEDIA_IS_MOUNT
+    result[S_STORAGE_RECORDINGS] = {"Recordings", "录像存储", "録画保存先"};
+#endif
     result[S_STATUS_REFRESH] = {"Refresh status", "刷新状态", "ステータスを更新"};
     result[S_STATUS_ACTIONS] = {"Actions", "操作", "操作"};
     result[S_STATUS_RESTART] = {"Restart camera app", "重新启动相机应用", "カメラアプリを再起動"};
