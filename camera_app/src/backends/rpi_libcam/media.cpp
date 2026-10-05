@@ -3,6 +3,7 @@
 #endif
 #include <new>
 #include "pipeline.h"
+#include "jpeg.h"
 #include "apcam/atomic.h"
 #include "apcam/target.h"
 #include "camera_app/APC_Media_Backend.h"
@@ -10,11 +11,13 @@
 #include "camera_app/rtsp.h"
 #include "camera_app/mp4.h"
 #include "camera_app/log.h"
+#include "camera_app/still.h"
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -36,7 +39,11 @@ struct APC_Media_RPiLibcam_State {
     char path[PATH_MAX];
     uint64_t pts_offset, last_pts;
     struct ca_exposure exposure;
+    pthread_mutex_t photo_lock;
 };
+
+#define RPI_JPEG_QUALITY 90
+#define RPI_STILL_TIMEOUT_MS 1000U
 
 // One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves both RTSP
 // paths, the web live view and recording. The pipeline's encoder thread is
@@ -140,6 +147,7 @@ int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
     _state = m;
     m->config = *c;
     pthread_mutex_init(&m->lock, NULL);
+    pthread_mutex_init(&m->photo_lock, NULL);
     const unsigned fps = c->frame_rate ? c->frame_rate : APCAM_FRAME_RATE;
     struct ca_rpi_pipeline_config pipeline = {
         .width = 1920, .height = 1080, .frame_rate = fps,
@@ -218,7 +226,40 @@ int APC_Media_RPiLibcam::autofocus(uint16_t x, uint16_t y) { (void)x; (void)y; r
 int APC_Media_RPiLibcam::manual_focus(int d) { (void)d; return unsupported(); }
 int APC_Media_RPiLibcam::set_focus_percent(float p) { (void)p; return unsupported(); }
 bool APC_Media_RPiLibcam::thermal_range(struct ca_thermal_range *r) { (void)r; return false; }
-int APC_Media_RPiLibcam::capture_photo(enum ca_photo_scope s) { (void)s; return unsupported(); }
+/* A still from the next video frame: no interruption to streaming or
+ * recording, at the video resolution. */
+int APC_Media_RPiLibcam::capture_photo(enum ca_photo_scope scope)
+{
+    auto *m = _state;
+    if (!m || !m->pipeline || (scope != CA_PHOTO_SCOPE_ALL && scope != CA_PHOTO_SCOPE_THERMAL)) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&m->photo_lock);
+    struct timespec captured_at;
+    struct ca_rpi_still_frame frame;
+    uint8_t *jpeg = NULL;
+    size_t length = 0;
+    char path[PATH_MAX];
+    int result = clock_gettime(CLOCK_REALTIME, &captured_at);
+    if (result == 0) result = ca_rpi_pipeline_grab_still(m->pipeline, &frame, RPI_STILL_TIMEOUT_MS);
+    if (result == 0) {
+        ca_rpi_jpeg_convert(&frame);
+        result = ca_rpi_jpeg_encode(&frame, RPI_JPEG_QUALITY, &jpeg, &length);
+        free(frame.data);
+    }
+    if (result == 0) {
+        result = ca_still_write_jpeg(m->config.capture_root, 'C', jpeg, length, &captured_at,
+                                     path, sizeof(path));
+        if (result == 0) ca_log("RPi JPEG capture saved: %s (%zu bytes)", path, length);
+        else ca_log("RPi JPEG write failed: %s", strerror(errno));
+    } else {
+        ca_log("RPi JPEG capture failed: %s", strerror(errno));
+    }
+    free(jpeg);
+    pthread_mutex_unlock(&m->photo_lock);
+    return result;
+}
 int APC_Media_RPiLibcam::get_thermal_gain(uint8_t *g) { (void)g; return unsupported(); }
 int APC_Media_RPiLibcam::set_thermal_gain(uint8_t g) { (void)g; return unsupported(); }
 int APC_Media_RPiLibcam::get_thermal_palette(uint8_t *p) { (void)p; return unsupported(); }
@@ -270,6 +311,7 @@ void APC_Media_RPiLibcam::shutdown()
     ca_rpi_pipeline_close(m->pipeline);
     if (m->mp4) (void)ca_mp4_close(m->mp4);
     ca_live_video_server_close(m->live); ca_rtsp_close(m->rtsp);
+    pthread_mutex_destroy(&m->photo_lock);
     pthread_mutex_destroy(&m->lock); _state = nullptr; delete m;
 }
 

@@ -3530,6 +3530,69 @@ static bool set_lidar_enabled(bool enabled, char *error, size_t error_size)
 }
 #endif
 
+#if APCAM_WEB_CONTROL_MAVLINK && APCAM_HAVE_PHOTO
+/* MAVLink-controlled cameras: send the command a GCS would, and report
+ * the camera's COMMAND_ACK, which follows the saved photo. */
+static bool trigger_camera_photo(char *error, size_t error_size)
+{
+    const struct timeval timeout = {.tv_sec = 10, .tv_usec = 0};
+    mavlink_message_t message;
+    mavlink_status_t status = {};
+    bool acknowledged = false, accepted = false;
+
+#ifndef MT11_WEB_TEST
+    if (current_camera_kind() == CAMERA_NONE) {
+        snprintf(error, error_size, "%s", T(S_E_CAMERA_NOT_RUNNING));
+        return false;
+    }
+#endif
+    int fd = z1_web_socket(camera_api_port());
+    if (fd < 0 || setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        snprintf(error, error_size, T(S_E_CAMERA_API), strerror(errno));
+        if (fd >= 0) close(fd);
+        return false;
+    }
+    mavlink_msg_command_long_pack(255, 191, &message, 0, 0, MAV_CMD_IMAGE_START_CAPTURE, 0,
+                                  0, 0, 1, 0, 0, 0, 0);
+    if (!z1_web_send(fd, &message)) {
+        snprintf(error, error_size, T(S_E_SEND_SHUTTER), strerror(errno));
+        close(fd);
+        return false;
+    }
+    /* Heartbeats keep arriving, so the receive timeout alone never expires. */
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += timeout.tv_sec;
+    while (!acknowledged) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) break;
+        uint8_t buffer[MAVLINK_MAX_PACKET_LEN * 2];
+        ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
+        if (n <= 0) break;
+        for (ssize_t i = 0; i < n && !acknowledged; i++) {
+            if (!mavlink_parse_char(0, buffer[i], &message, &status) ||
+                message.msgid != MAVLINK_MSG_ID_COMMAND_ACK) continue;
+            mavlink_command_ack_t ack;
+            mavlink_msg_command_ack_decode(&message, &ack);
+            if (ack.command != MAV_CMD_IMAGE_START_CAPTURE) continue;
+            acknowledged = true;
+            accepted = ack.result == MAV_RESULT_ACCEPTED;
+        }
+    }
+    close(fd);
+    if (!acknowledged) {
+        snprintf(error, error_size, "%s", T(S_E_SHUTTER_UNCONFIRMED));
+        return false;
+    }
+    if (!accepted) {
+        snprintf(error, error_size, "%s", T(S_E_CAPTURE_FAILED));
+        return false;
+    }
+    return true;
+}
+#else
 static bool trigger_camera_photo(char *error, size_t error_size)
 {
     const struct timeval timeout = {.tv_sec = 10, .tv_usec = 0};
@@ -3571,6 +3634,7 @@ static bool trigger_camera_photo(char *error, size_t error_size)
     }
     return true;
 }
+#endif
 
 
 #ifdef APP_LOG_COMMAND

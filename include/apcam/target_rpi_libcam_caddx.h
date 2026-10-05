@@ -13,7 +13,7 @@
 #define APCAM_NUM_STREAMS 2
 #define APCAM_STREAM1_LENS_MASK 1
 #define APCAM_STREAM2_LENS_MASK 1
-#define APCAM_HAVE_PHOTO 0
+#define APCAM_HAVE_PHOTO 1
 #define APCAM_HAVE_ZOOM 0
 #define APCAM_NUM_RECORDING_CHANNELS 1
 /* MAVLink only; the companion computer has no vendor control service. */
