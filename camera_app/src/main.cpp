@@ -294,8 +294,13 @@ static int write_ready(const struct ca_backend *backend, unsigned port,
 
 static void usage(const char *program)
 {
+#if APCAM_TARGET == APCAM_TARGET_RPI_LIBCAM_CADDX
+    ca_log("Usage: %s [--backend " APCAM_NAME "] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
+           "[--config PATH]", program);
+#else
     ca_log("Usage: %s [--backend mt11|a8|zr10|z1mini] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
            "[--config PATH]", program);
+#endif
 }
 
 int APC_CameraApp::run(int argc, char **argv)

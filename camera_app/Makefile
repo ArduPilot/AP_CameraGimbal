@@ -3,12 +3,21 @@ include ../tools/build.mk
 
 CAMERA_BACKEND ?= mt11
 include ../include/apcam/targets.mk
-SUPPORTED_BACKENDS := mt11 a8 zr10 z1mini
+SUPPORTED_BACKENDS := mt11 a8 zr10 z1mini rpi_libcam_caddx
 ifeq ($(filter $(CAMERA_BACKEND),$(SUPPORTED_BACKENDS)),)
 $(error Unsupported CAMERA_BACKEND '$(CAMERA_BACKEND)'; supported backends: $(SUPPORTED_BACKENDS))
 endif
 
-ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
+ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
+# Raspberry Pi: native build on Raspberry Pi OS, linked against the system
+# libcamera. Cross builds supply CROSS_COMPILE and LIBCAMERA_* flags.
+CROSS_COMPILE ?=
+LDFLAGS ?=
+TARGET := build/rpi_libcam_caddx/camera-app
+PKG_CONFIG ?= pkg-config
+LIBCAMERA_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcamera)
+LIBCAMERA_LIBS ?= $(shell $(PKG_CONFIG) --libs libcamera)
+else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
 # ARMv7 targets: A8/Z1-Mini glibc and ZR10 uClibc.
 # Per-backend object directories keep incompatible SDKs and libcs separate.
 CROSS_COMPILE ?= arm-linux-
@@ -44,7 +53,14 @@ MAVLINK_STAMP := build/$(CAMERA_BACKEND)/mavlink-dialect
 MAVLINK_DEPS := $(APCAM_HEADERS) $(MAVLINK_HEADER) $(MAVLINK_STAMP) include/camera_app/mavlink.h
 MAVLINK_CPPFLAGS := -I$(MAVLINK_GEN_DIR) -DCA_MAVLINK_DIALECT=$(MAVLINK_DIALECT)
 
+# rpi_libcam_caddx combines the Raspberry Pi media backend with the CADDX gimbal.
+ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
+BACKEND_DIR := src/backends/rpi_libcam
+CONTROL_DIR := src/backends/caddx
+else
 BACKEND_DIR := src/backends/$(CAMERA_BACKEND)
+CONTROL_DIR := $(BACKEND_DIR)
+endif
 CPPFLAGS = -Ibuild $(APCAM_CPPFLAGS) -Iinclude -I$(BACKEND_DIR) $(MAVLINK_CPPFLAGS)
 # Required language/runtime settings follow user flags, including command-line overrides.
 override CXXFLAGS += -std=gnu++17 -fno-exceptions -fno-rtti -Wno-missing-field-initializers
@@ -135,7 +151,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp \
-	$(BACKEND_DIR)/control.cpp
+	$(CONTROL_DIR)/control.cpp
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
@@ -242,7 +258,7 @@ generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
  build/xop_rtp_connection.cpp build/binlog_version.h
 
 
-ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
+ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
 A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,\
 	$(XOP_HOST_SOURCES)) build/$(CAMERA_BACKEND)/xop/xop/RtspConnection.o \
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
@@ -255,7 +271,10 @@ $(TARGET): Makefile $(OBJECTS)
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
-		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc)
+		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS))
+
+build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 
 build/$(CAMERA_BACKEND)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
@@ -371,6 +390,14 @@ tests/test_timezone: tests/test_timezone.cpp $(APCAM_HEADERS)
 $(CONFIG_TEST_TARGET): tests/test_config.cpp src/config.cpp include/camera_app/config.h $(APCAM_HEADERS)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
+
+tests/test_rpi_libcam_caddx: tests/test_rpi_libcam_caddx.cpp src/backends/caddx/control.cpp src/backends/caddx/caddx.h src/config.cpp src/log.cpp src/recording/binlog.cpp src/recording/system_stats.cpp src/backends/rpi_libcam/pipeline.h build/binlog_version.h $(APCAM_HEADERS)
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Ibuild -I../include -Iinclude -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -lpthread -lm
+
+.PHONY: rpi_libcam_caddx-test
+rpi_libcam_caddx-test: tests/test_rpi_libcam_caddx
+	./tests/test_rpi_libcam_caddx
 
 tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rate.h $(APCAM_HEADERS)
 	$(call progress,Linking $@)
@@ -671,7 +698,7 @@ $(LIVE_VIDEO_SERVER_TEST_TARGET): tests/test_live_video_server.cpp \
 		src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
 		src/log.cpp src/recording/video_metadata.cpp src/recording/metadata.cpp -lpthread -lm
 
-test: timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
+test: rpi_libcam_caddx-test timezone-test system-stats-test thermal-mavlink-test media-overlay-test z1-overlay-race-test manual-control-test tests/test_gimbal_rate tests/test_mavlink_time tests/test_telemetry_time tests/test_support_mavlink $(VIDEO_METADATA_TEST_TARGET) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) \
 	$(MP4_SYNC_TEST_TARGET) \
 	$(MP4_ROLLOVER_TEST_TARGET) \
 	$(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) \

@@ -11,12 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from sitl.target_properties import TARGETS, transform
 
-assert set(TARGETS) == {'mt11', 'a8', 'zr10', 'z1mini'}
+assert set(TARGETS) == {'mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'}
 recording_defaults = {
     'mt11': '3840x2160',
     'a8': '3840x2160',
     'zr10': '2560x1440',
     'z1mini': '1920x1080',
+    'rpi_libcam_caddx': '1920x1080',
 }
 resolutions = ('1280x720', '1920x1080', '3840x2160', '2560x1440')
 with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
@@ -58,4 +59,4 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
                     converted = transform(target, channel, inverted, vector, rates=rates)
                     recovered = transform(target, channel, inverted, converted, rates=rates, inverse=True)
                     assert list(vector) == recovered
-print('PASS four-target compiler exports, profile defaults, orthogonal mappings and known calibration vectors')
+print('PASS five-target compiler exports, profile defaults, orthogonal mappings and known calibration vectors')

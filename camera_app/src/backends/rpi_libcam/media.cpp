@@ -1,0 +1,279 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <new>
+#include "pipeline.h"
+#include "apcam/atomic.h"
+#include "apcam/target.h"
+#include "camera_app/APC_Media_Backend.h"
+#include "camera_app/live_video_server.h"
+#include "camera_app/rtsp.h"
+#include "camera_app/mp4.h"
+#include "camera_app/log.h"
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#define RPI_HFOV_DEG APCAM_LENS1_FOV_H
+
+class APC_Media_RPiLibcam;
+struct APC_Media_RPiLibcam_State {
+    struct ca_media_config config;
+    atomic_bool ready, recording;
+    bool wait_key, have_pts;
+    pthread_mutex_t lock;
+    struct ca_rtsp *rtsp;
+    struct ca_live_video_server *live;
+    unsigned sub;
+    struct ca_mp4 *mp4;
+    struct ca_rpi_pipeline *pipeline;
+    char path[PATH_MAX];
+    uint64_t pts_offset, last_pts;
+    struct ca_exposure exposure;
+};
+
+// One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves both RTSP
+// paths, the web live view and recording. The pipeline's encoder thread is
+// joined before any of those outputs are released.
+class APC_Media_RPiLibcam final : public APC_Media_Backend {
+public:
+    ~APC_Media_RPiLibcam() override { shutdown(); }
+    static std::unique_ptr<APC_Media_Backend> create(const ca_media_config &config)
+    {
+        auto *driver = new (std::nothrow) APC_Media_RPiLibcam();
+        if (!driver) { errno = ENOMEM; return nullptr; }
+        if (driver->init(&config) < 0) {
+            const int saved = errno;
+            delete driver;
+            errno = saved;
+            return nullptr;
+        }
+        return std::unique_ptr<APC_Media_Backend>(driver);
+    }
+    bool ready() const override;
+    int set_recording(bool active) override;
+    bool recording() const override;
+    const char * recording_path() const override;
+    int set_zoom(float zoom) override;
+    float zoom() const override;
+    float hfov(bool thermal) const override;
+    unsigned frame_rate(bool thermal) const override;
+    int set_lens(enum ca_media_lens lens) override;
+    enum ca_media_lens lens() const override;
+    int set_thermal_main(bool thermal_main) override;
+    bool thermal_main() const override;
+    int autofocus(uint16_t x, uint16_t y) override;
+    int manual_focus(int direction) override;
+    int set_focus_percent(float percent) override;
+    bool thermal_range(struct ca_thermal_range *range) override;
+    int capture_photo(enum ca_photo_scope scope) override;
+    int get_thermal_gain(uint8_t *gain) override;
+    int set_thermal_gain(uint8_t gain) override;
+    int get_thermal_palette(uint8_t *palette) override;
+    int set_thermal_palette(uint8_t palette) override;
+    int set_inverted(bool inverted) override;
+    int exposure(unsigned lens, struct ca_exposure *sample) override;
+    int apply_overlay(const struct ca_config *settings) override;
+    int apply_image(const struct ca_config *settings) override;
+private:
+    APC_Media_RPiLibcam() = default;
+    int init(const ca_media_config *config);
+    void shutdown();
+    APC_Media_RPiLibcam_State *_state = nullptr;
+};
+
+static uint64_t monotonic_us(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
+
+static void consume(void *opaque, const uint8_t *data, size_t n, uint64_t pts, bool key)
+{
+    auto *m = static_cast<APC_Media_RPiLibcam_State *>(opaque);
+    if (!m->have_pts) { m->pts_offset = monotonic_us() - pts; m->have_pts = true; }
+    pts += m->pts_offset;
+    if (pts <= m->last_pts) pts = m->last_pts + 1;
+    m->last_pts = pts;
+    for (unsigned i = 0; i < 2; i++) {
+        (void)ca_rtsp_push_video_timed(m->rtsp, i ? m->sub : 0, data, n, key, RPI_HFOV_DEG, pts);
+        (void)ca_live_video_server_publish(m->live, i, data, n, pts, key, RPI_HFOV_DEG);
+    }
+    pthread_mutex_lock(&m->lock);
+    if (m->mp4 && key) m->wait_key = false;
+    if (m->mp4 && !m->wait_key && ca_mp4_write_h264(m->mp4, data, n, pts, key, RPI_HFOV_DEG) < 0) {
+        ca_log("RPi recording write failed: %s", strerror(errno));
+        (void)ca_mp4_close(m->mp4); m->mp4 = NULL;
+        atomic_store(&m->recording, false);
+    }
+    pthread_mutex_unlock(&m->lock);
+    atomic_store(&m->ready, true);
+}
+
+static void consume_exposure(void *opaque, const struct ca_exposure *sample)
+{
+    auto *m = static_cast<APC_Media_RPiLibcam_State *>(opaque);
+    pthread_mutex_lock(&m->lock);
+    m->exposure = *sample;
+    pthread_mutex_unlock(&m->lock);
+}
+
+int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
+{
+    if (!c || !c->backend || strcmp(c->backend, APCAM_NAME) ||
+        !c->record_root || !c->capture_root) { errno = EINVAL; return -1; }
+    if (c->settings.main_resolution != CA_VIDEO_1080P ||
+        c->settings.sub_resolution != CA_VIDEO_1080P ||
+        c->settings.recording_resolution != CA_VIDEO_1080P ||
+        c->settings.main_codec != CA_VIDEO_H264 || c->settings.sub_codec != CA_VIDEO_H264) {
+        ca_log("RPi media requires 1080p H264 streams and 1080p recording");
+        errno = ENOTSUP; return -1;
+    }
+    auto *m = new (std::nothrow) APC_Media_RPiLibcam_State{};
+    if (!m) { errno = ENOMEM; return -1; }
+    _state = m;
+    m->config = *c;
+    pthread_mutex_init(&m->lock, NULL);
+    const unsigned fps = c->frame_rate ? c->frame_rate : APCAM_FRAME_RATE;
+    struct ca_rpi_pipeline_config pipeline = {
+        .width = 1920, .height = 1080, .frame_rate = fps,
+        .bit_rate_kbps = c->bit_rate_kbps ? c->bit_rate_kbps : 4096,
+        .inverted = c->settings.orientation == CA_MOUNT_INVERTED,
+        .image = c->settings,
+        .frame = consume, .exposure = consume_exposure, .opaque = m,
+    };
+    if (ca_rtsp_open(&m->rtsp, c->rtsp_port, "video1", CA_VIDEO_H264, fps) < 0 ||
+        ca_rtsp_add_video(m->rtsp, "video2", CA_VIDEO_H264, fps, &m->sub) < 0 ||
+        ca_live_video_server_open(&m->live, c->rtsp_port + 1U) < 0 ||
+        ca_live_video_server_configure(m->live, 0, 1920, 1080, fps, true) < 0 ||
+        ca_live_video_server_configure(m->live, 1, 1920, 1080, fps, true) < 0) goto fail;
+    ca_rtsp_add_config_aliases(m->rtsp, &c->settings);
+    if (ca_rtsp_support_proxy(m->rtsp, &c->settings.support) < 0)
+        ca_log("RPi SupportProxy startup failed: %s", strerror(errno));
+    if (ca_rpi_pipeline_open(&m->pipeline, &pipeline) < 0) goto fail;
+    for (unsigned i = 0; i < 50 && !atomic_load(&m->ready); i++) usleep(100000);
+    if (!atomic_load(&m->ready)) { ca_log("RPi no encoded video within 5s"); errno = ETIMEDOUT; goto fail; }
+    ca_log("RPi media ready: libcamera -> 1080p%u H264", fps);
+    return 0;
+fail:;
+    int saved = errno; shutdown(); errno = saved; return -1;
+}
+
+int APC_Media_RPiLibcam::set_recording(bool active)
+{
+    auto *m = _state;
+    if (!m) { errno = EINVAL; return -1; }
+    pthread_mutex_lock(&m->lock);
+    int result = 0;
+    if (active == atomic_load(&m->recording)) goto done;
+    if (active) {
+        if (!atomic_load(&m->ready)) { errno = EAGAIN; result = -1; goto done; }
+        struct stat st;
+        if (stat(m->config.record_root, &st) || !S_ISDIR(st.st_mode)) { result = -1; goto done; }
+        struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
+        int n = snprintf(m->path, sizeof(m->path), "%s/RPI_%lld_%09ld.mp4",
+                         m->config.record_root, (long long)now.tv_sec, now.tv_nsec);
+        if (n < 0 || n >= (int)sizeof(m->path)) { errno = ENAMETOOLONG; result = -1; goto done; }
+        if (ca_mp4_open(&m->mp4, m->path, 1920, 1080, frame_rate(false)) < 0) { result = -1; goto done; }
+        m->wait_key = true;
+        atomic_store(&m->recording, true);
+    } else {
+        result = ca_mp4_close(m->mp4); m->mp4 = NULL;
+        atomic_store(&m->recording, false);
+    }
+done:
+    pthread_mutex_unlock(&m->lock); return result;
+}
+
+bool APC_Media_RPiLibcam::ready() const
+{
+    const auto *m = _state; return m && atomic_load(&m->ready); }
+bool APC_Media_RPiLibcam::recording() const
+{
+    const auto *m = _state; return m && atomic_load(&m->recording); }
+const char * APC_Media_RPiLibcam::recording_path() const
+{
+    const auto *m = _state; return m ? m->path : ""; }
+static int unsupported(void) { errno = ENOTSUP; return -1; }
+int APC_Media_RPiLibcam::set_zoom(float z) { return z == 1 ? 0 : unsupported(); }
+float APC_Media_RPiLibcam::zoom() const { return 1; }
+float APC_Media_RPiLibcam::hfov(bool thermal) const { return thermal ? NAN : RPI_HFOV_DEG; }
+unsigned APC_Media_RPiLibcam::frame_rate(bool thermal) const
+{
+    const auto *m = _state;
+    if (thermal) return 0;
+    return m && m->config.frame_rate ? m->config.frame_rate : APCAM_FRAME_RATE;
+}
+int APC_Media_RPiLibcam::set_lens(enum ca_media_lens l) { return l == CA_MEDIA_LENS_WIDE ? 0 : unsupported(); }
+enum ca_media_lens APC_Media_RPiLibcam::lens() const { return CA_MEDIA_LENS_WIDE; }
+int APC_Media_RPiLibcam::set_thermal_main(bool t) { return t ? unsupported() : 0; }
+bool APC_Media_RPiLibcam::thermal_main() const { return false; }
+int APC_Media_RPiLibcam::autofocus(uint16_t x, uint16_t y) { (void)x; (void)y; return unsupported(); }
+int APC_Media_RPiLibcam::manual_focus(int d) { (void)d; return unsupported(); }
+int APC_Media_RPiLibcam::set_focus_percent(float p) { (void)p; return unsupported(); }
+bool APC_Media_RPiLibcam::thermal_range(struct ca_thermal_range *r) { (void)r; return false; }
+int APC_Media_RPiLibcam::capture_photo(enum ca_photo_scope s) { (void)s; return unsupported(); }
+int APC_Media_RPiLibcam::get_thermal_gain(uint8_t *g) { (void)g; return unsupported(); }
+int APC_Media_RPiLibcam::set_thermal_gain(uint8_t g) { (void)g; return unsupported(); }
+int APC_Media_RPiLibcam::get_thermal_palette(uint8_t *p) { (void)p; return unsupported(); }
+int APC_Media_RPiLibcam::set_thermal_palette(uint8_t p) { (void)p; return unsupported(); }
+int APC_Media_RPiLibcam::set_inverted(bool inverted)
+{
+    auto *m = _state;
+    /* Applied when the camera is configured; MOUNT_ORIENT requires a restart. */
+    return inverted == (m->config.settings.orientation == CA_MOUNT_INVERTED) ? 0 : unsupported();
+}
+
+int APC_Media_RPiLibcam::exposure(unsigned lens, struct ca_exposure *s)
+{
+    auto *m = _state;
+    if (lens) return -ENOTSUP;
+    pthread_mutex_lock(&m->lock);
+    struct ca_exposure cached = m->exposure;
+    pthread_mutex_unlock(&m->lock);
+    if (!cached.time_us) return -ENODATA;
+    uint64_t now = monotonic_us();
+    if (now < cached.time_us || now - cached.time_us > 1000000U) return -ETIMEDOUT;
+    *s = cached;
+    return s->result;
+}
+
+int APC_Media_RPiLibcam::apply_overlay(const struct ca_config *settings)
+{
+    static atomic_bool warned;
+    if (settings->osd_cross && !atomic_exchange(&warned, true))
+        ca_log("OSD_CROSS is configured but overlays are not yet supported on Raspberry Pi");
+    return 0;
+}
+
+int APC_Media_RPiLibcam::apply_image(const struct ca_config *settings)
+{
+    auto *m = _state;
+    if (ca_rpi_pipeline_set_image(m->pipeline, settings) < 0) return -1;
+    ca_log("RPi image brightness=%d saturation=%d contrast=%d ev=%d iso=%d shutter=%d "
+           "metering=%d white_balance=%d", settings->brightness, settings->saturation,
+           settings->contrast, settings->exposure_compensation, settings->iso,
+           settings->shutter, settings->metering, settings->white_balance);
+    return 0;
+}
+
+void APC_Media_RPiLibcam::shutdown()
+{
+    auto *m = _state;
+    if (!m) return;
+    ca_rpi_pipeline_close(m->pipeline);
+    if (m->mp4) (void)ca_mp4_close(m->mp4);
+    ca_live_video_server_close(m->live); ca_rtsp_close(m->rtsp);
+    pthread_mutex_destroy(&m->lock); _state = nullptr; delete m;
+}
+
+std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config)
+{
+    return APC_Media_RPiLibcam::create(config);
+}
