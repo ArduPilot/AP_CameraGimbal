@@ -69,6 +69,14 @@
 #ifndef FIRMWARE_SUFFIX
 #define FIRMWARE_SUFFIX ".bin"
 #endif
+/* Targets keeping media on the root filesystem set this to 0. */
+#ifndef WEB_MEDIA_IS_MOUNT
+#define WEB_MEDIA_IS_MOUNT 1
+#endif
+/* Targets updated outside the web UI set this to 0 to hide package upload. */
+#ifndef WEB_HAVE_FIRMWARE_UPLOAD
+#define WEB_HAVE_FIRMWARE_UPLOAD 1
+#endif
 #ifdef FIRMWARE_INSTALL_NAME
 #define FIRMWARE_NAME_PATTERNS FIRMWARE_INSTALL_NAME " / " FIRMWARE_PREFIX "*" FIRMWARE_SUFFIX
 #else
@@ -1032,6 +1040,8 @@ static char *read_file(const char *path, size_t limit, size_t *length)
     return buffer;
 }
 
+/* Rotated log files, unless the camera app logs to a journal. */
+#ifndef APP_LOG_COMMAND
 static char *read_file_tail(const char *path, size_t limit, size_t *length)
 {
     int fd;
@@ -1108,6 +1118,7 @@ static char *read_app_log_paths(const char *path, const char *old_path,
     free(current);
     return combined;
 }
+#endif
 
 static bool random_token(char output[65])
 {
@@ -3527,6 +3538,10 @@ static bool trigger_camera_photo(char *error, size_t error_size)
     size_t feedback_length = 0U;
     int fd;
 
+    if (!APCAM_HAVE_PHOTO) {
+        snprintf(error, error_size, "%s", T(S_E_CAPTURE_FAILED));
+        return false;
+    }
 #ifndef MT11_WEB_TEST
     if (current_camera_kind() == CAMERA_NONE) {
         snprintf(error, error_size, "%s", T(S_E_CAMERA_NOT_RUNNING));
@@ -3558,10 +3573,43 @@ static bool trigger_camera_photo(char *error, size_t error_size)
 }
 
 
+#ifdef APP_LOG_COMMAND
+/* Tail of a log command's output, for camera apps logging to a journal. */
+static char *read_current_app_log(size_t *length)
+{
+    FILE *pipe = popen(APP_LOG_COMMAND " 2>&1", "r");
+    char *log = (char *)malloc(APP_LOG_DISPLAY_SIZE + 1U);
+    size_t used = 0;
+    char chunk[4096];
+    size_t got;
+
+    *length = 0;
+    if (pipe == NULL || log == NULL) {
+        if (pipe != NULL) (void)pclose(pipe);
+        free(log);
+        return strdup("");
+    }
+    while ((got = fread(chunk, 1, sizeof(chunk), pipe)) > 0) {
+        /* chunk is smaller than the display size; keep the newest bytes */
+        if (used + got > APP_LOG_DISPLAY_SIZE) {
+            size_t drop = used + got - APP_LOG_DISPLAY_SIZE;
+            memmove(log, log + drop, used - drop);
+            used -= drop;
+        }
+        memcpy(log + used, chunk, got);
+        used += got;
+    }
+    (void)pclose(pipe);
+    log[used] = '\0';
+    *length = used;
+    return log;
+}
+#else
 static char *read_current_app_log(size_t *length)
 {
     return read_app_log_paths(REPLACEMENT_LOG_PATH, REPLACEMENT_LOG_OLD_PATH, length);
 }
+#endif
 
 static int lock_restart(char *error, size_t error_size)
 {
@@ -3955,7 +4003,7 @@ static void append_filesystem_status(APC_StringBuffer *page,
     char used[32];
     char total[32];
     unsigned percent = 0;
-    bool mounted = strcmp(path, MEDIA_ROOT) != 0 || is_mounted(path);
+    bool mounted = !WEB_MEDIA_IS_MOUNT || strcmp(path, MEDIA_ROOT) != 0 || is_mounted(path);
 
     snprintf(used, sizeof(used), "%s", T(S_UNAVAILABLE));
     snprintf(total, sizeof(total), "%s", T(S_UNAVAILABLE));
@@ -4456,7 +4504,8 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
 #if WEB_HAVE_SOC_TEMPERATURE
 static bool read_soc_temperature(int *millidegrees)
 {
-#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+/* Kernel thermal zone where available; otherwise the SS928 sensor registers. */
+#ifdef SOC_TEMPERATURE_PATH
     FILE *file = fopen(SOC_TEMPERATURE_PATH, "r");
     if (!file) return false;
     char text[64], extra;
@@ -4648,10 +4697,15 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
 #ifdef SETTINGS_STORAGE_PATH
     append_filesystem_status(&page, T(S_STORAGE_SETTINGS), SETTINGS_STORAGE_PATH);
 #endif
+#if WEB_MEDIA_IS_MOUNT
     append_filesystem_status(&page, T(S_STORAGE_MICROSD), MEDIA_ROOT);
+#else
+    append_filesystem_status(&page, T(S_STORAGE_RECORDINGS), MEDIA_ROOT);
+#endif
     webroot.render(page, "status-actions.html", {T(S_STATUS_REFRESH), T(S_STATUS_ACTIONS), csrf_token});
     page.append(T(S_STATUS_RESTART));
     page.append("</button></form>");
+#if WEB_HAVE_FIRMWARE_UPLOAD
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
                       "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
                       "<button id=select-firmware type=button>%s</button>"
@@ -4668,6 +4722,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.appendf(T(S_STATUS_UPGRADE_SYNC_A8), FIRMWARE_INSTALL_NAME);
 #endif
     page.append("</p>");
+#endif
     webroot.render(page, "status-reboot.html", {csrf_token, T(S_STATUS_REBOOT_CONFIRM), T(S_STATUS_REBOOT_BUTTON)});
     page.appendf(T(S_STATUS_AUTH_NOTE), PASSWORD_PATH);
     page.append("</p></section></div></body></html>");
@@ -6675,7 +6730,7 @@ static void handle_firmware_upload(int fd, const APC_HTTPRequest *request,
     sync_firmware_storage();
     log_message("firmware %s (%zu bytes) uploaded and published as %s by %s",
                 filename, received, published, peer);
-#if APCAM_TARGET == APCAM_TARGET_MT11
+#if APCAM_TARGET == APCAM_TARGET_MT11 || !defined(FIRMWARE_INSTALL_NAME)
     send_text_errorf(fd, 201, "Created", S_FW_UPLOADED_MT11, filename);
 #else
     send_text_errorf(fd, 201, "Created", S_FW_UPLOADED_A8, filename, FIRMWARE_INSTALL_NAME);
@@ -6963,6 +7018,10 @@ static void schedule_reboot(void)
     if (listen_fd >= 0) close(listen_fd);
     sleep(2);
     sync();
+#ifdef REBOOT_COMMAND
+    /* Let the init system stop services and unmount cleanly. */
+    execl("/bin/sh", "sh", "-c", REBOOT_COMMAND, (char *)NULL);
+#endif
     reboot(RB_AUTOBOOT);
     _exit(1);
 #endif
@@ -7068,7 +7127,8 @@ static void handle_request(int fd, const char *peer)
         if (strcmp(request.method, "POST") == 0) handle_login(fd, &request, peer);
         else send_redirect(fd, "/");
     } else if (request.streaming_body) {
-        handle_firmware_upload(fd, &request, peer);
+        if (WEB_HAVE_FIRMWARE_UPLOAD) handle_firmware_upload(fd, &request, peer);
+        else send_text_errorf(fd, 404, "Not Found", S_NOT_FOUND);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI
         if (!webroot.available()) {
