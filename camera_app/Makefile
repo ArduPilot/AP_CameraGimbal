@@ -17,6 +17,8 @@ TARGET := build/rpi_libcam_caddx/camera-app
 PKG_CONFIG ?= pkg-config
 LIBCAMERA_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcamera)
 LIBCAMERA_LIBS ?= $(shell $(PKG_CONFIG) --libs libcamera)
+# Stills are encoded with libjpeg(-turbo): Raspberry Pi OS libjpeg-dev.
+LIBJPEG_LIBS ?= -ljpeg
 else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
 # ARMv7 targets: A8/Z1-Mini glibc and ZR10 uClibc.
 # Per-backend object directories keep incompatible SDKs and libcs separate.
@@ -264,7 +266,7 @@ A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
 ARM_APP_OBJECTS := $(patsubst %.cpp,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURCES) \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
-	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
+	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
 OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
 $(TARGET): Makefile $(OBJECTS)
@@ -272,7 +274,7 @@ $(TARGET): Makefile $(OBJECTS)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
-		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS))
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS))
 
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 
@@ -398,6 +400,15 @@ tests/test_rpi_libcam_caddx: tests/test_rpi_libcam_caddx.cpp src/backends/caddx/
 .PHONY: rpi_libcam_caddx-test
 rpi_libcam_caddx-test: tests/test_rpi_libcam_caddx
 	./tests/test_rpi_libcam_caddx
+
+# Needs libjpeg development files, so it is not part of "make test".
+tests/test_rpi_jpeg: tests/test_rpi_jpeg.cpp src/backends/rpi_libcam/jpeg.cpp src/backends/rpi_libcam/jpeg.h src/log.cpp $(APCAM_HEADERS)
+	$(call progress,Linking $@)
+	$(HOST_CXX) -I../include -Iinclude -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) -ljpeg -lm
+
+.PHONY: rpi_jpeg-test
+rpi_jpeg-test: tests/test_rpi_jpeg
+	./tests/test_rpi_jpeg
 
 tests/test_gimbal_rate: tests/test_gimbal_rate.cpp include/camera_app/gimbal_rate.h $(APCAM_HEADERS)
 	$(call progress,Linking $@)

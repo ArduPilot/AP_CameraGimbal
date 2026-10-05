@@ -173,7 +173,7 @@ build/zr10_upgrade.h: ../tools/zr10_firmware.py ../packaging/zr10/upgrade_script
 RPI_MAVLINK := ../camera_app/build/mavlink/all/include
 rpi_libcam_caddx-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
-	$(RPI_CROSS_COMPILE)g++ $(WEB_CXXFLAGS) -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -o $@ $< -lm
+	$(RPI_CROSS_COMPILE)g++ $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -o $@ $< -lm
 
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include

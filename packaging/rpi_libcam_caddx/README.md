@@ -15,15 +15,20 @@ The web interface is served at `http://<pi>:8080/`. The CADDX gimbal is
 controlled over a UART, or through a flight controller's serial passthrough;
 see [Gimbal](#gimbal).
 
-Not yet supported: photos, zoom and overlays. A Pi 5 / CM5 needs a software
-encoder, which is not implemented yet.
+Photos are taken from the video stream at its 1920x1080 resolution, without
+interrupting streaming or recording, from the GCS (including interval
+capture) or the web Photos page. They are saved as JPEGs with GPS and
+attitude metadata under `/var/lib/ap_cameragimbal/capture`.
+
+Not yet supported: photos above the video resolution, zoom and overlays. A
+Pi 5 / CM5 needs a software encoder, which is not implemented yet.
 
 ## Build
 
 On the Pi (Raspberry Pi OS Bookworm or later):
 
 ```sh
-sudo apt install build-essential git python3 libcamera-dev pkg-config
+sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config
 git submodule update --init --recursive
 make dependencies
 make rpi_libcam_caddx
