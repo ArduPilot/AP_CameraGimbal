@@ -1,0 +1,134 @@
+# Raspberry Pi + libcamera + CADDX gimbal
+
+The `rpi_libcam_caddx` target runs AP_CameraGimbal on a Raspberry Pi CM4
+companion computer with an IMX477 CSI camera and a CADDX gimbal, same as
+XFRobot C20-T. It runs alongside [Rpanion-server](https://github.com/stephendade/Rpanion-server), which
+keeps ownership of networking and the flight-controller link.
+
+Video is captured with libcamera and encoded by the Pi 4 / CM4 hardware H.264
+encoder. A single 1080p30 stream is served at `rtsp://<pi>:8554/video1` (and
+`/video2`) and used for recording. The `IMG_*` camera parameters (brightness,
+contrast, saturation, exposure compensation, ISO, shutter, metering and white
+balance) can be changed from the GCS while streaming.
+
+The web interface is served at `http://<pi>:8080/`. The CADDX gimbal is
+controlled over a UART, or through a flight controller's serial passthrough;
+see [Gimbal](#gimbal).
+
+Not yet supported: photos, zoom and overlays. A Pi 5 / CM5 needs a software
+encoder, which is not implemented yet.
+
+## Build
+
+On the Pi (Raspberry Pi OS Bookworm or later):
+
+```sh
+sudo apt install build-essential git python3 libcamera-dev pkg-config
+git submodule update --init --recursive
+make dependencies
+make rpi_libcam_caddx
+```
+
+The binaries are `camera_app/build/rpi_libcam_caddx/camera-app` and
+`web/rpi_libcam_caddx-web`.
+
+## Install
+
+```sh
+sudo install -m 755 camera_app/build/rpi_libcam_caddx/camera-app /usr/local/bin/ap-camera-app
+sudo install -m 755 web/rpi_libcam_caddx-web /usr/local/bin/ap-camera-web
+sudo install -D -m 644 -t /usr/local/share/ap_cameragimbal/webroot web/webroot/*.*
+sudo install -D -m 644 packaging/rpi_libcam_caddx/camera.ini /etc/ap_cameragimbal/camera.ini
+sudo install -m 644 packaging/rpi_libcam_caddx/ap-cameragimbal.service \
+    packaging/rpi_libcam_caddx/ap-cameragimbal-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ap-cameragimbal ap-cameragimbal-web
+journalctl -u ap-cameragimbal -f
+```
+
+Only one process can use the camera, so leave Rpanion-server's video
+streaming stopped.
+
+To update, `git pull`, rebuild, repeat the first three install commands and run
+`sudo systemctl restart ap-cameragimbal ap-cameragimbal-web`. Installing
+`camera.ini` again replaces any settings changed from the GCS or web page.
+
+## Web interface
+
+Browse to `http://<pi>:8080/` (for example `http://10.0.2.100:8080/` over
+Rpanion-server's WiFi access point) and log in as `admin` with password
+`ardupilot`; the first start writes it to `/etc/ap_cameragimbal/web.pass`.
+Change it on the Users page.
+
+The Live tab plays the camera's video in the browser, the Parameters page
+edits `/etc/ap_cameragimbal/camera.ini`, the Debug tab shows the camera
+service's journal, and the file browser covers recordings under
+`/var/lib/ap_cameragimbal`. Restarting the camera app stops it and lets
+systemd start it again; Reboot reboots the Pi. Firmware upload is not offered.
+The web page sends its camera controls to camera-app's MAVLink TCP port
+(`[mavlink] tcp_port`, 14570).
+
+## MAVLink
+
+The camera listens for MAVLink on UDP port 14570. In Rpanion-server's
+Flight Controller page, add a UDP output to `127.0.0.1:14570` so mavlink-router
+forwards traffic between the flight controller, the GCS and the camera.
+
+Behind mavlink-router the camera cannot tell which network the GCS is on, so
+the RTSP address it advertises in `VIDEO_STREAM_INFORMATION` is a guess: an
+address on 192.168.144.0/24 if the Pi has one (the usual SIYI/MT11 camera
+subnet), otherwise the numerically lowest non-loopback IPv4 address. When the
+Pi has more than one network, for example Ethernet to the flight controller
+and WiFi to the GCS, set the address the GCS can reach with a drop-in:
+
+```sh
+sudo mkdir -p /etc/systemd/system/ap-cameragimbal.service.d
+printf '[Service]\nEnvironment=CAMERA_APP_VIDEO_ADDRESS=10.0.2.100\n' |
+    sudo tee /etc/systemd/system/ap-cameragimbal.service.d/video-address.conf
+sudo systemctl daemon-reload
+sudo systemctl restart ap-cameragimbal
+```
+
+## Gimbal
+
+The CADDX gimbal uses the protocol of ArduPilot's `AP_Mount_CADDX` driver
+(115200 8N1). It sends no feedback, so the attitude reported to the GCS is the
+commanded target. Nothing is sent to the gimbal until the first gimbal command.
+Set the link with `CAMERA_APP_UART`, for example with a systemd drop-in:
+
+```sh
+sudo mkdir -p /etc/systemd/system/ap-cameragimbal.service.d
+printf '[Service]\nEnvironment=CAMERA_APP_UART=/dev/ttyAMA0\n' |
+    sudo tee /etc/systemd/system/ap-cameragimbal.service.d/gimbal-uart.conf
+sudo systemctl daemon-reload
+sudo systemctl restart ap-cameragimbal
+```
+
+Without `CAMERA_APP_UART` no gimbal is advertised: camera-app sends no gimbal
+heartbeat or `GIMBAL_DEVICE_INFORMATION` and reports gimbal device ID 0 in
+`CAMERA_INFORMATION`, so a gimbal connected to the flight controller is not
+duplicated.
+
+When the gimbal is wired to the flight controller instead, ArduPilot's serial
+passthrough can forward it to the Pi over Ethernet. For a gimbal on SERIAL3
+and network port 2 as a UDP server:
+
+```
+NET_P2_TYPE = 2         (UDP server; reboot after setting)
+NET_P2_PORT = 15002
+NET_P2_PROTOCOL = -1
+SERIAL_PASS1 = 3        (SERIAL3, keeping SERIAL3_BAUD = 115)
+SERIAL_PASS2 = 22       (network ports are numbered from 21)
+SERIAL_PASSTIMO = -1    (no timeout, kept across reboots)
+```
+
+then use `CAMERA_APP_UART=udp://<flight controller IP>:15002`. While
+passthrough is active ArduPilot's own mount driver cannot reach the gimbal;
+set `MNT1_TYPE = 0` so only the camera reports the gimbal.
+
+## Environment variables
+
+- `CAMERA_APP_RPI_CAMERA`: libcamera camera ID (default: first camera).
+- `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
+- `CAMERA_APP_VIDEO_ADDRESS`: IPv4 address advertised in RTSP URIs.
+- `CAMERA_APP_UART`: gimbal link, a serial device or `udp://IPv4:PORT`.
