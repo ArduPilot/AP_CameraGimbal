@@ -503,6 +503,7 @@ RPI_CROSS_COMPILE ?=
 .PHONY: rpi_libcam_caddx
 rpi_libcam_caddx:
 	$(MAKE) -C camera_app CAMERA_BACKEND=rpi_libcam_caddx CROSS_COMPILE='$(RPI_CROSS_COMPILE)'
+	$(MAKE) -C web CAMERA_BACKEND=rpi_libcam_caddx RPI_CROSS_COMPILE='$(RPI_CROSS_COMPILE)' rpi_libcam_caddx-web
 
 Z1MINI_SITL_BUILD ?= build/z1mini-sitl
 $(Z1MINI_SITL_BUILD)/main.h264: $(A8_SITL_BUILD)/main.h264
