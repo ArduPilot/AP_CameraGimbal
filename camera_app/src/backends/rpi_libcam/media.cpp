@@ -40,10 +40,15 @@ struct APC_Media_RPiLibcam_State {
     uint64_t pts_offset, last_pts;
     struct ca_exposure exposure;
     pthread_mutex_t photo_lock;
+    atomic_int photo_resolution; /* enum ca_photo_resolution, from PHOTO_RES */
 };
 
 #define RPI_JPEG_QUALITY 90
 #define RPI_STILL_TIMEOUT_MS 1000U
+/* A sensor mode switch normally captures within 400 ms (configuration and a
+ * few settling frames at the slower full-resolution rate). The main loop
+ * waits for it, so keep the failure case short. */
+#define RPI_MODE_SWITCH_TIMEOUT_MS 1500U
 
 // One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves both RTSP
 // paths, the web live view and recording. The pipeline's encoder thread is
@@ -148,6 +153,7 @@ int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
     m->config = *c;
     pthread_mutex_init(&m->lock, NULL);
     pthread_mutex_init(&m->photo_lock, NULL);
+    atomic_init(&m->photo_resolution, (int)c->settings.photo_resolution);
     const unsigned fps = c->frame_rate ? c->frame_rate : APCAM_FRAME_RATE;
     struct ca_rpi_pipeline_config pipeline = {
         .width = 1920, .height = 1080, .frame_rate = fps,
@@ -226,8 +232,9 @@ int APC_Media_RPiLibcam::autofocus(uint16_t x, uint16_t y) { (void)x; (void)y; r
 int APC_Media_RPiLibcam::manual_focus(int d) { (void)d; return unsupported(); }
 int APC_Media_RPiLibcam::set_focus_percent(float p) { (void)p; return unsupported(); }
 bool APC_Media_RPiLibcam::thermal_range(struct ca_thermal_range *r) { (void)r; return false; }
-/* A still from the next video frame: no interruption to streaming or
- * recording, at the video resolution. */
+/* PHOTO_RES "video" copies the next video frame: no interruption, at the
+ * video resolution. Larger sizes switch the sensor mode, pausing video and
+ * recording for about a second. */
 int APC_Media_RPiLibcam::capture_photo(enum ca_photo_scope scope)
 {
     auto *m = _state;
@@ -242,9 +249,17 @@ int APC_Media_RPiLibcam::capture_photo(enum ca_photo_scope scope)
     size_t length = 0;
     char path[PATH_MAX];
     int result = clock_gettime(CLOCK_REALTIME, &captured_at);
-    if (result == 0) result = ca_rpi_pipeline_grab_still(m->pipeline, &frame, RPI_STILL_TIMEOUT_MS);
+    const int resolution = atomic_load(&m->photo_resolution);
+    if (result == 0 && resolution == CA_PHOTO_RES_BINNED)
+        result = ca_rpi_pipeline_capture_still(m->pipeline, APCAM_PHOTO_BINNED_WIDTH, APCAM_PHOTO_BINNED_HEIGHT,
+                                               &frame, RPI_MODE_SWITCH_TIMEOUT_MS);
+    else if (result == 0 && resolution == CA_PHOTO_RES_FULL)
+        result = ca_rpi_pipeline_capture_still(m->pipeline, APCAM_PHOTO_FULL_WIDTH, APCAM_PHOTO_FULL_HEIGHT,
+                                               &frame, RPI_MODE_SWITCH_TIMEOUT_MS);
+    else if (result == 0)
+        result = ca_rpi_pipeline_grab_still(m->pipeline, &frame, RPI_STILL_TIMEOUT_MS);
     if (result == 0) {
-        ca_rpi_jpeg_convert(&frame);
+        if (!frame.jpeg_colour) ca_rpi_jpeg_convert(&frame);
         result = ca_rpi_jpeg_encode(&frame, RPI_JPEG_QUALITY, &jpeg, &length);
         free(frame.data);
     }
@@ -297,6 +312,7 @@ int APC_Media_RPiLibcam::apply_image(const struct ca_config *settings)
 {
     auto *m = _state;
     if (ca_rpi_pipeline_set_image(m->pipeline, settings) < 0) return -1;
+    atomic_store(&m->photo_resolution, (int)settings->photo_resolution);
     ca_log("RPi image brightness=%d saturation=%d contrast=%d ev=%d iso=%d shutter=%d "
            "metering=%d white_balance=%d", settings->brightness, settings->saturation,
            settings->contrast, settings->exposure_compensation, settings->iso,
