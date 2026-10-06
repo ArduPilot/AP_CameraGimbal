@@ -4,12 +4,25 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Target-independent code (for example the camera FTP service) builds
+ * without a target; every file of a target build defines APCAM_TARGET. */
+#ifdef APCAM_TARGET
+#include "target.h"
+#endif
+
 #define CA_CONFIG_DEFAULT_PATH "/app/camera.ini"
 #define CA_CONFIG_TIMEZONE_MAX 128U
 
 enum ca_photo_scope {
     CA_PHOTO_SCOPE_THERMAL = 0,
     CA_PHOTO_SCOPE_ALL = 1,
+};
+
+/* Photo size: a video frame, or a sensor mode switch to a larger size. */
+enum ca_photo_resolution {
+    CA_PHOTO_RES_VIDEO = 0,
+    CA_PHOTO_RES_BINNED,
+    CA_PHOTO_RES_FULL,
 };
 
 enum ca_mount_orientation {
@@ -156,6 +169,9 @@ struct ca_config {
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;
+#if defined(APCAM_HAVE_PHOTO_RESOLUTION) && APCAM_HAVE_PHOTO_RESOLUTION
+    enum ca_photo_resolution photo_resolution;
+#endif
     enum ca_mount_orientation orientation;
     enum ca_uart_protocol uart_protocol;
     enum ca_thermal_palette thermal_palette;
