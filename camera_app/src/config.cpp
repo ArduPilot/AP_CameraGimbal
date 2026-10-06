@@ -446,8 +446,14 @@ int ca_config_param_save(struct ca_config *config, const char *path,
     return 0;
 }
 
+/* The photo size travels with the image settings to the media backend. */
+#if APCAM_HAVE_PHOTO_RESOLUTION
+#define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
+    X(iso) X(shutter) X(metering) X(white_balance) X(photo_resolution)
+#else
 #define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
     X(iso) X(shutter) X(metering) X(white_balance)
+#endif
 
 bool ca_config_image_equal(const struct ca_config *a, const struct ca_config *b)
 {

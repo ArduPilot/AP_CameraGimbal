@@ -503,6 +503,14 @@ static const struct option photo_scope_options[] = {
     {"all", S_OPT_SCOPE_ALL},
 };
 
+#if APCAM_HAVE_PHOTO_RESOLUTION
+static const struct option photo_resolution_options[] = {
+    {"video", S_OPT_PHOTO_RES_VIDEO},
+    {APCAM_PHOTO_BINNED_NAME, S_OPT_PHOTO_RES_BINNED},
+    {APCAM_PHOTO_FULL_NAME, S_OPT_PHOTO_RES_FULL},
+};
+#endif
+
 static const struct option replacement_boolean_options[] = {
     {"false", S_OPT_DISABLED}, {"true", S_OPT_ENABLED},
 };
@@ -613,6 +621,10 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
     {"photo_scope", "capture", "photo_scope", S_P_PHOTO_SCOPE, S_H_PHOTO_SCOPE,
      PARAM_ENUM, 0, 0, 0, photo_scope_options, 2},
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    {"photo_resolution", "capture", "resolution", S_P_PHOTO_RESOLUTION, S_H_PHOTO_RESOLUTION,
+     PARAM_ENUM, 0, 0, 0, photo_resolution_options, 3},
+#endif
     {"orientation", "mount", "orientation", S_P_ORIENTATION, S_H_ORIENTATION,
      PARAM_ENUM, 0, 0, 0, orientation_options, 3},
     {"uart_protocol", "uart", "protocol", S_P_UART_PROTOCOL,
@@ -751,6 +763,9 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
 
 static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    "video",
+#endif
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",

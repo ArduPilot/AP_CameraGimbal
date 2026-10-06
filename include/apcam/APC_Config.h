@@ -44,6 +44,13 @@ private:
         {"all", CA_PHOTO_SCOPE_ALL},
     };
 
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    inline static constexpr ca_config_option photo_resolution_options[] = {
+        {"video", CA_PHOTO_RES_VIDEO},
+        {APCAM_PHOTO_BINNED_NAME, CA_PHOTO_RES_BINNED},
+        {APCAM_PHOTO_FULL_NAME, CA_PHOTO_RES_FULL},
+    };
+#endif
     inline static constexpr ca_config_option autorecord_options[] = {
         {"false", CA_AUTORECORD_DISABLED}, {"true", CA_AUTORECORD_ENABLED},
         {"while_armed", CA_AUTORECORD_WHILE_ARMED},
@@ -154,6 +161,12 @@ private:
          offsetof(struct ca_config, photo_scope),
          sizeof(((struct ca_config *)0)->photo_scope), photo_scope_options,
          sizeof(photo_scope_options) / sizeof(photo_scope_options[0]), 0, 0, "PHOTO_SCOPE"},
+#if APCAM_HAVE_PHOTO_RESOLUTION
+        {"capture", "resolution", Kind::Enum,
+         offsetof(struct ca_config, photo_resolution),
+         sizeof(((struct ca_config *)0)->photo_resolution), photo_resolution_options,
+         sizeof(photo_resolution_options) / sizeof(photo_resolution_options[0]), 0, 0, "PHOTO_RES"},
+#endif
         {"mount", "orientation", Kind::Enum, offsetof(struct ca_config, orientation),
          sizeof(((struct ca_config *)0)->orientation), orientation_options,
          sizeof(orientation_options) / sizeof(orientation_options[0]), 0, 0, "MOUNT_ORIENT"},
