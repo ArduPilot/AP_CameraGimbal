@@ -53,6 +53,8 @@ private:
     struct LiveControls;
     struct SurveyWorker;
     SurveyWorker *_survey = nullptr;
+    ca_survey_result _survey_completion{};
+    bool _survey_completed = false;
     void _stop_survey();
     int _open_backend(const ca_media_config *config);
     void _apply_overlay_after_control(const char *control);

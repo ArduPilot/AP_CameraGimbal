@@ -228,7 +228,8 @@ static void survey_status_file(ca_mavlink_server *s,uint64_t now)
             v.state="survey unavailable for selected camera";
     }
     char path[4096],tmp[4100];
-    snprintf(path,sizeof(path),"%s.survey.json",s->config_path); snprintf(tmp,sizeof(tmp),"%s.tmp",path);
+    if (!apcam_survey_status_path(s->config_path, path, sizeof(path))) return;
+    snprintf(tmp,sizeof(tmp),"%s.tmp",path);
     FILE *f=fopen(tmp,"w"); if(!f) return;
     fprintf(f,"{\"mode\":%u,\"state\":\"%s\",\"leg\":%u,\"cycle\":%lld,\"slot\":%u,\"positions\":%u,\"pattern\":%u,"
         "\"captured\":%u,\"skipped\":%u,\"unsettled\":%u,\"cycle_seconds\":%.2f,"

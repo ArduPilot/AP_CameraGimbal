@@ -97,6 +97,10 @@ jobs:
           python3 sitl/test_network.py --sudo
           python3 camera_app/tests/test_network_status.py camera_app/tests/camera-app-host
           make -C web network-status-test
+      - name: Test survey geometry, capture lifecycle, metadata history and terrain cache
+        run: |
+          make -C camera_app survey-test survey-lifecycle-test metadata-history-test terrain-test
+          python3 sitl/test_survey_controls.py
       - name: Test system health BIN logging
         run: make -C camera_app system-stats-test
       - name: Test Raspberry Pi image controls and CADDX gimbal, and build against libcamera 0.2

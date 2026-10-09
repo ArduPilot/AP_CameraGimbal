@@ -11,7 +11,7 @@ import time
 os.environ.setdefault('MAVLINK20', '1')
 from pymavlink import mavutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'sitl'))
-from test_mavlink_parameters import port, stop, wait_ready
+from test_mavlink_parameters import survey_status_path, port, stop, wait_ready
 
 ROOT = Path(__file__).resolve().parents[1]
 M = mavutil.mavlink
@@ -141,7 +141,7 @@ def run(args):
         navigation_seen = False
         while time.monotonic() < deadline:
             receive()
-            status_path = Path(str(cfg)+'.survey.json')
+            status_path = survey_status_path(cfg)
             if status_path.exists():
                 navigation_seen |= json.loads(status_path.read_text()).get('path_source') == 'navigation'
         captures = [m for m in messages if m['mavpackettype'] == 'CAMERA_IMAGE_CAPTURED' and m['capture_result'] == 1]
@@ -153,7 +153,7 @@ def run(args):
         deadline = time.monotonic()+4
         while time.monotonic() < deadline:
             receive()
-        status = json.loads(Path(str(cfg)+'.survey.json').read_text())
+        status = json.loads(survey_status_path(cfg).read_text())
         assert 'paused' in status['state'], status
         # Restart by command, then kill the camera and check lease expiry.
         ack = command(M.MAV_CMD_SET_CAMERA_MODE, [100, 2])
@@ -174,7 +174,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--arduplane', type=Path, default=Path('/data/APM.mavlink_camera/build/sitl/bin/arduplane'))
+    parser.add_argument('--arduplane', type=Path, required=True)
     parser.add_argument('--output', type=Path, default=ROOT/'build/survey-plane')
     parser.add_argument('--timeout', type=float, default=240)
     run(parser.parse_args())

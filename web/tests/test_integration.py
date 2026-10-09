@@ -2,6 +2,7 @@
 
 import base64
 import http.client
+import json
 import html
 import os
 from pathlib import Path
@@ -731,7 +732,22 @@ try:
     assert status == 303 and headers["Location"] == "/parameters#survey"
     assert (root / "app" / "camera.ini.survey.command").read_text().strip() == "2"
     assert form("/survey", "initial-password", csrf, {"survey_mode": "9"})[0] == 400
-    assert request("GET", "/survey/status", "initial-password")[0] == 200
+    # Match the shared runtime filename and verify both live and stale status.
+    config_hash = 14695981039346656037
+    for byte in os.fsencode(root / "app" / "camera.ini"):
+        config_hash = ((config_hash ^ byte) * 1099511628211) & 0xffffffffffffffff
+    runtime_root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else "/tmp")
+    status_path = Path(runtime_root) / f"apcam-survey-{config_hash:016x}.json"
+    try:
+        status_path.write_text('{"state":"surveying","captured":17}')
+        status, body, _ = request("GET", "/survey/status", "initial-password")
+        assert status == 200 and json.loads(body)["captured"] == 17, (status, body)
+        stale = time.time() - 10
+        os.utime(status_path, (stale, stale))
+        status, body, _ = request("GET", "/survey/status", "initial-password")
+        assert status == 200 and json.loads(body)["state"] == "camera unavailable"
+    finally:
+        status_path.unlink(missing_ok=True)
     saved_config = (root / "app" / "camera.ini").read_text(encoding="utf-8")
     assert saved_config.count("[mavlink]") == 1
     assert "[uart]" not in saved_config

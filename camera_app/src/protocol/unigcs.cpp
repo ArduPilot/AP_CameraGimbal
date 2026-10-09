@@ -4,6 +4,7 @@
 #include "camera_app/unigcs.h"
 #include "camera_app/backend.h"
 #include "camera_app/media.h"
+#include "camera_app/mavlink_server.h"
 #include "camera_app/log.h"
 #include "camera_app/binlog.h"
 #include "camera_app/siyi.h"
@@ -49,6 +50,7 @@ struct ca_unigcs {
     ca_private_parser parser {};
     ca_media *media=nullptr;
     ca_backend *backend=nullptr;
+    ca_mavlink_server *mavlink=nullptr;
     bool manual=false;
     uint8_t source=0;
     bool long_format=false;
@@ -493,8 +495,10 @@ static void request(void *opaque,const ca_private_frame *f)
     if(s->manual && !(f->payload_length==0 &&
        (f->command==0xa0 || f->command==0xb4 || f->command==0xc2))) return;
     s->gimbal_requested[f->command]=true;
-    if(f->command==0x9a || f->command==0x9b)
+    if(f->command==0x9a || f->command==0x9b) {
         ca_media_tracking_stop(s->media);
+        ca_mavlink_server_suspend_gimbal(s->mavlink);
+    }
     if(ca_backend_handle_private(s->backend,f)<0)
         ca_log("UniGCS gimbal forwarding failed: %s",strerror(errno));
 }
@@ -675,10 +679,11 @@ int ca_unigcs_open(ca_unigcs **out,ca_media *media,unsigned tcp_port,unsigned di
     *out=s; return 0;
 }
 
-void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual)
+void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual,ca_mavlink_server *mavlink)
 {
     if(!s) return;
     s->backend=backend; s->manual=manual;
+    s->mavlink=mavlink;
     bool recording=ca_media_recording(s->media);
     if(recording!=s->recording) { s->recording_since=recording ? now_ms() : 0; s->recording=recording; }
     if(s->discovery>=0) {

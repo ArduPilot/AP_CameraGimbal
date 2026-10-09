@@ -1,12 +1,12 @@
 #include "camera_app/terrain.h"
 #include "apcam/terrain_format.h"
+#include "apcam/APC_Resource.h"
 #include <cstdio>
 #include <tuple>
 #include <algorithm>
 #include <ctype.h>
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -25,8 +25,8 @@ struct Key {
 struct Block { std::array<uint8_t,2048> data{}; uint64_t used=0; bool ready=false; };
 struct File { unsigned spacing=0; bool pending=true; };
 struct Terrain {
-    std::mutex mutex;
-    std::condition_variable wake;
+    APC_Mutex mutex;
+    APC_Condition wake;
     std::thread worker;
     std::string root, active;
     std::map<std::pair<int,int>,File> files;
@@ -37,7 +37,7 @@ struct Terrain {
     void run();
     ~Terrain() { shutdown(); }
     void shutdown() {
-        { std::lock_guard<std::mutex> g(mutex); stop=true; wake.notify_all(); }
+        { std::lock_guard<APC_Mutex> g(mutex); stop=true; wake.signal(); }
         if(worker.joinable()) worker.join();
     }
 } db;
@@ -45,7 +45,7 @@ void Terrain::run() {
 
     auto check=clock_type::now();
     while(true) {
-        std::unique_lock<std::mutex> lock(mutex);
+        std::unique_lock<APC_Mutex> lock(mutex);
         if(stop) break;
         if(clock_type::now()>=check) {
             lock.unlock();
@@ -62,7 +62,20 @@ void Terrain::run() {
             }
             check=clock_type::now()+std::chrono::seconds(1);
         }
-        if(jobs.empty()) { wake.wait_until(lock,check); continue; }
+        if(jobs.empty()) {
+            // pthread_cond_clockwait needs glibc 2.30; Z1-Mini has 2.25.
+            // Keep manifest scheduling monotonic but use a realtime deadline
+            // with the compatible pthread_cond_timedwait wrapper.
+            auto remaining=std::chrono::duration_cast<std::chrono::nanoseconds>(check-clock_type::now()).count();
+            if(remaining>0) {
+                timespec until{}; clock_gettime(CLOCK_REALTIME,&until);
+                until.tv_sec+=remaining/1000000000;
+                until.tv_nsec+=remaining%1000000000;
+                if(until.tv_nsec>=1000000000) { ++until.tv_sec; until.tv_nsec-=1000000000; }
+                wake.wait_until(mutex,until);
+            }
+            continue;
+        }
         Key key=jobs.front(); jobs.pop_front();
         char name[32]; snprintf(name,sizeof(name),"/%c%02d%c%03d.DAT",key.lat<0?'S':'N',abs(key.lat),key.lon<0?'W':'E',abs(key.lon));
         const auto filekey=std::make_pair(key.lat,key.lon);
@@ -101,14 +114,14 @@ void Terrain::run() {
 }
 void ca_terrain_start(const char *directory) {
     db.shutdown();
-    std::lock_guard<std::mutex> g(db.mutex);
+    std::lock_guard<APC_Mutex> g(db.mutex);
     db.root=directory; db.active.clear(); db.files.clear(); db.blocks.clear(); db.jobs.clear(); db.stop=false;
     db.worker=std::thread(&Terrain::run,&db);
 }
 void ca_terrain_stop() { db.shutdown(); }
 ca_terrain_state ca_terrain_height(int32_t lat,int32_t lon,float &height) {
     if(lat<=-900000000 || lat>=900000000 || lon< -1800000000 || lon>=1800000000) return CA_TERRAIN_MISSING;
-    std::lock_guard<std::mutex> g(db.mutex);
+    std::lock_guard<APC_Mutex> g(db.mutex);
     if(db.stop || !db.worker.joinable()) return CA_TERRAIN_MISSING;
     int ld=ap_terrain::degree(lat), od=ap_terrain::degree(lon);
     auto fk=std::make_pair(ld,od);
@@ -116,7 +129,7 @@ ca_terrain_state ca_terrain_height(int32_t lat,int32_t lon,float &height) {
     if(file==db.files.end()) {
         if(db.jobs.size()>=64) return CA_TERRAIN_PENDING;
         if(db.files.size()>=64) db.files.clear();
-        db.files[fk]={}; db.jobs.push_back({ld,od,UINT32_MAX,0}); db.wake.notify_one();
+        db.files[fk]={}; db.jobs.push_back({ld,od,UINT32_MAX,0}); db.wake.signal();
         return CA_TERRAIN_PENDING;
     }
     if(file->second.pending) return CA_TERRAIN_PENDING;
@@ -133,7 +146,7 @@ ca_terrain_state ca_terrain_height(int32_t lat,int32_t lon,float &height) {
         for(const auto &j:db.jobs) if(!(j<key) && !(key<j)) queued=true;
         // A second request while the worker reads may queue one duplicate;
         // the fixed queue bound still applies.
-        if(!queued && db.jobs.size()<64) { db.jobs.push_back(key); db.wake.notify_one(); }
+        if(!queued && db.jobs.size()<64) { db.jobs.push_back(key); db.wake.signal(); }
         return CA_TERRAIN_PENDING;
     }
     block->second.used=++db.ticks;
