@@ -9,6 +9,18 @@ struct ca_survey_pose {
     float alt, ground, vn, ve;
 };
 
+// Reconstruct and smooth a straight waypoint leg from L1 telemetry. The caller
+// must verify this is a waypoint leg: loiter cross-track error is radial.
+struct ca_survey_path {
+    ca_survey_pose anchor{};
+    double course=0;
+    unsigned last_distance=0;
+    uint64_t updated_ms=0, stable_ms=0;
+    bool update(const ca_survey_pose &, float bearing_deg, unsigned distance_m,
+                float xtrack_m, uint64_t now);
+    bool project(const ca_survey_pose &, uint64_t now, ca_survey_pose &) const;
+};
+
 inline unsigned ca_survey_positions(unsigned pattern)
 {
     switch (pattern) {

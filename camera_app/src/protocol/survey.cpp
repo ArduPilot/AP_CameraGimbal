@@ -8,6 +8,78 @@
 static constexpr double R = 6378137.0, rad = 0.017453292519943295;
 static double wrap(double a) { return remainder(a, 2*M_PI); }
 
+bool ca_survey_path::update(const ca_survey_pose &p, float bearing, unsigned distance,
+                            float error, uint64_t now)
+{
+    // Integer bearing/range and asynchronous telemetry are ill-conditioned
+    // near the endpoint or abeam it. Do not clamp impossible geometry into a leg.
+    if (!isfinite(bearing) || fabs(bearing)>180 || !isfinite(error) ||
+        distance<50 || distance>=UINT16_MAX || fabs(error)>.8*distance ||
+        !isfinite(p.vn) || !isfinite(p.ve) || hypot(p.vn,p.ve)<1) {
+        updated_ms=stable_ms=0;
+        return false;
+    }
+    const double direction=wrap(bearing*rad-asin(error/distance));
+    const double motion=atan2(p.ve,p.vn);
+    // Select the forward solution, rejecting passage beyond the waypoint and
+    // large intercepts. Actual turning is checked separately by the scheduler.
+    if (fabs(wrap(direction-motion))>60*rad || fabs(wrap(bearing*rad-motion))>80*rad) {
+        updated_ms=stable_ms=0;
+        return false;
+    }
+    ca_survey_pose point=p;
+    if (!ca_targeting_predict_position(&point.lat,&point.lon,&point.alt,
+            -error*sin(direction),error*cos(direction),0,1)) {
+        updated_ms=stable_ms=0;
+        return false;
+    }
+    // A waypoint replacement/jump can retain its sequence number. A range jump
+    // larger than possible aircraft motion must not blend two different legs.
+    const bool fresh=updated_ms && now>=updated_ms && now-updated_ms<=1500 &&
+        fabs(double(distance)-last_distance)<=20+2*hypot(p.vn,p.ve)*(now-updated_ms)*.001;
+    ca_survey_pose previous{};
+    if (fresh && fabs(wrap(direction-course))<15*rad) {
+        // Transport the old line to this sample before blending; averaging
+        // moving aircraft positions would introduce an along-track lag.
+        const double north=(double(point.lat)-anchor.lat)*1e-7*rad*R;
+        const double east=remainder((double(point.lon)-anchor.lon)*1e-7,360.0)*rad*R*cos(point.lat*1e-7*rad);
+        const double cross=-north*sin(course)+east*cos(course);
+        const double dt=(now-updated_ms)*.001;
+        const double alpha=dt/(1+dt);
+        previous=point;
+        if (fabs(cross)<100 && ca_targeting_predict_position(&previous.lat,&previous.lon,&previous.alt,
+                (1-alpha)*cross*sin(course),-(1-alpha)*cross*cos(course),0,1)) {
+            point=previous;
+            course=wrap(course+alpha*wrap(direction-course));
+        } else {
+            stable_ms=now;
+            course=direction;
+        }
+    } else {
+        stable_ms=now;
+        course=direction;
+    }
+    anchor=point;
+    updated_ms=now;
+    last_distance=distance;
+    return true;
+}
+
+bool ca_survey_path::project(const ca_survey_pose &p, uint64_t now, ca_survey_pose &out) const
+{
+    if (!updated_ms || now<updated_ms || now-updated_ms>1500 ||
+        now<stable_ms || now-stable_ms<1000) return false;
+    const double north=(double(p.lat)-anchor.lat)*1e-7*rad*R;
+    const double east=remainder((double(p.lon)-anchor.lon)*1e-7,360.0)*rad*R*cos(p.lat*1e-7*rad);
+    const double cross=-north*sin(course)+east*cos(course);
+    const double speed=p.vn*cos(course)+p.ve*sin(course);
+    if (!isfinite(speed) || speed<1 || fabs(wrap(atan2(p.ve,p.vn)-course))>60*rad) return false;
+    out=p;
+    out.vn=speed*cos(course); out.ve=speed*sin(course);
+    return ca_targeting_predict_position(&out.lat,&out.lon,&out.alt,
+        cross*sin(course),-cross*cos(course),0,1);
+}
+
 static int view_row(unsigned view, int fore_rows, int aft_rows)
 {
     // IDs 0..8 retain the nine-view grid; 9..11 are far/middle/near forward.

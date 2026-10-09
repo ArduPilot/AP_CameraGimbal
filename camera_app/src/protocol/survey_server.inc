@@ -7,6 +7,13 @@ struct survey_runtime {
     uint64_t cycle_start=0, steady_ms=0, next_image_ms=0, straight_ms=0, status_ms=0;
     uint64_t last_course_ms=0;
     float last_course=0, course_rate=0;
+    ca_survey_path path{};
+    uint64_t mission_ms=0, mission_request_ms=0, mission_item_ms=0, auto_ms=0;
+    uint16_t mission_seq=UINT16_MAX, mission_command=0;
+    bool mission_active=false, auto_mode=false, grid_navigation=false;
+    bool vtol_type=false;
+    uint8_t vtol_state=MAV_VTOL_STATE_UNDEFINED;
+    uint64_t vtol_ms=0;
     uint32_t leg=0, captured=0, skipped=0, unsettled=0;
     int64_t cycle=0;
     unsigned slot=0, burst=0;
@@ -20,6 +27,17 @@ struct survey_runtime {
 
 static bool survey_running(const ca_mavlink_server *s)
 { return s->survey && s->camera_mode==CAMERA_MODE_IMAGE_SURVEY && !s->survey->paused; }
+
+static bool survey_navigation_allowed(const survey_runtime &v,uint64_t now)
+{
+    // QuadPlane can use a different cross-track convention while hovering.
+    // Plain fixed-wing senders may omit EXTENDED_SYS_STATE entirely.
+    const bool fixed_wing=(!v.vtol_type && v.vtol_state==MAV_VTOL_STATE_UNDEFINED) ||
+        (v.vtol_state==MAV_VTOL_STATE_FW && v.vtol_ms && now-v.vtol_ms<=2500);
+    return fixed_wing && v.auto_mode && now-v.auto_ms<=3000 && v.mission_active &&
+        now-v.mission_ms<=2500 && v.mission_command==MAV_CMD_NAV_WAYPOINT &&
+        v.mission_item_ms && now-v.mission_item_ms<=2500;
+}
 
 static bool survey_acquiring(ca_mavlink_server *s,float pitch,float yaw,const ca_gimbal_attitude &a)
 {
@@ -87,7 +105,48 @@ static void survey_message(ca_mavlink_server *s, const mavlink_message_t *m)
 {
     if(!s->survey || m->sysid!=s->autopilot_system_id || m->compid!=s->autopilot_component_id) return;
     auto &v=*s->survey;
-    if(m->msgid==MAVLINK_MSG_ID_TERRAIN_REPORT) {
+    const uint64_t now=monotonic_ms();
+    if(m->msgid==MAVLINK_MSG_ID_HEARTBEAT) {
+        mavlink_heartbeat_t h; mavlink_msg_heartbeat_decode(m,&h);
+        // ArduPlane deliberately never sets MAV_MODE_FLAG_AUTO_ENABLED.
+        // The reconstruction uses ArduPilot L1's signed error convention.
+        const bool plane=h.type==MAV_TYPE_FIXED_WING || h.type==MAV_TYPE_VTOL_DUOROTOR ||
+            h.type==MAV_TYPE_VTOL_QUADROTOR || h.type==MAV_TYPE_VTOL_TILTROTOR;
+        v.vtol_type=h.type!=MAV_TYPE_FIXED_WING;
+        v.auto_mode=plane && h.autopilot==MAV_AUTOPILOT_ARDUPILOTMEGA &&
+            (h.base_mode&MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) && h.custom_mode==10;
+        v.auto_ms=now;
+        if(!v.auto_mode) v.path={};
+    } else if(m->msgid==MAVLINK_MSG_ID_EXTENDED_SYS_STATE) {
+        mavlink_extended_sys_state_t state; mavlink_msg_extended_sys_state_decode(m,&state);
+        v.vtol_state=state.vtol_state; v.vtol_ms=now;
+        if(v.vtol_state!=MAV_VTOL_STATE_UNDEFINED && v.vtol_state!=MAV_VTOL_STATE_FW) v.path={};
+    } else if(m->msgid==MAVLINK_MSG_ID_MISSION_CURRENT) {
+        mavlink_mission_current_t c; mavlink_msg_mission_current_decode(m,&c);
+        if(c.seq!=v.mission_seq) {
+            v.path={}; v.mission_seq=c.seq; v.mission_command=0;
+            v.mission_item_ms=0; v.mission_request_ms=0;
+        }
+        // Zero extensions mean an older sender; heartbeat still gates AUTO.
+        v.mission_active=c.mission_mode!=2 && (c.mission_state==0 || c.mission_state==MISSION_STATE_ACTIVE);
+        v.mission_ms=now;
+        if(!v.mission_active) v.path={};
+    } else if(m->msgid==MAVLINK_MSG_ID_MISSION_ITEM_INT) {
+        mavlink_mission_item_int_t item; mavlink_msg_mission_item_int_decode(m,&item);
+        if(item.target_system!=s->system_id || item.target_component!=s->camera_component_id ||
+            item.mission_type!=MAV_MISSION_TYPE_MISSION || item.seq!=v.mission_seq ||
+            !v.mission_request_ms || now-v.mission_request_ms>2000) return;
+        if(item.command!=v.mission_command) v.path={};
+        v.mission_command=item.command; v.mission_item_ms=now;
+    } else if(m->msgid==MAVLINK_MSG_ID_NAV_CONTROLLER_OUTPUT) {
+        mavlink_nav_controller_output_t nav; mavlink_msg_nav_controller_output_decode(m,&nav);
+        ca_survey_pose p{};
+        if(survey_navigation_allowed(v,now) && now-s->vehicle_position_updated_ms<=500 &&
+            current_vehicle_position(s,&p.lat,&p.lon,&p.alt)) {
+            p.vn=s->vehicle_vn_m_s; p.ve=s->vehicle_ve_m_s;
+            v.path.update(p,nav.target_bearing,nav.wp_dist,nav.xtrack_error,now);
+        } else v.path={};
+    } else if(m->msgid==MAVLINK_MSG_ID_TERRAIN_REPORT) {
         mavlink_msg_terrain_report_decode(m,&v.terrain); v.terrain_ms=monotonic_ms();
     } else if(m->msgid==MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS) {
         mavlink_gimbal_manager_status_t g; mavlink_msg_gimbal_manager_status_decode(m,&g);
@@ -96,6 +155,24 @@ static void survey_message(ca_mavlink_server *s, const mavlink_message_t *m)
         if(survey_running(s) && v.owned && !ours) survey_pause(s,"survey paused: gimbal takeover");
         if(ours && survey_running(s)) { v.owned=true; v.manager_ms=monotonic_ms(); }
     }
+}
+
+static void survey_request_mission_item(ca_mavlink_server *s,uint64_t now)
+{
+    auto &v=*s->survey;
+    if(!s->have_flight_controller_route || !v.auto_mode || now-v.auto_ms>3000 ||
+        !v.mission_active || !v.mission_ms || now-v.mission_ms>2500 || v.mission_seq==UINT16_MAX ||
+        (v.mission_item_ms && now-v.mission_item_ms<1000) ||
+        (v.mission_request_ms && now-v.mission_request_ms<1000)) return;
+    // Fetch just the active item's type to exclude loiters, takeoff and landing.
+    // Periodic refresh also notices an in-place mission edit at the same index.
+    mavlink_mission_request_int_t r{};
+    r.target_system=s->autopilot_system_id; r.target_component=s->autopilot_component_id;
+    r.seq=v.mission_seq; r.mission_type=MAV_MISSION_TYPE_MISSION;
+    mavlink_message_t m;
+    mavlink_msg_mission_request_int_encode_status(s->system_id,s->camera_component_id,&s->encode_status,&m,&r);
+    send_message(s,&s->flight_controller_route,&m);
+    v.mission_request_ms=now;
 }
 
 static void survey_capture_notice(ca_mavlink_server *s,const ca_survey_result &r)
@@ -155,10 +232,11 @@ static void survey_status_file(ca_mavlink_server *s,uint64_t now)
     FILE *f=fopen(tmp,"w"); if(!f) return;
     fprintf(f,"{\"mode\":%u,\"state\":\"%s\",\"leg\":%u,\"cycle\":%lld,\"slot\":%u,\"positions\":%u,\"pattern\":%u,"
         "\"captured\":%u,\"skipped\":%u,\"unsettled\":%u,\"cycle_seconds\":%.2f,"
-        "\"row_spacing_m\":%.2f,\"nominal_overlap_pct\":%.1f,\"terrain_source\":\"%s\",\"terrain_age_ms\":%llu}\n",
+        "\"row_spacing_m\":%.2f,\"nominal_overlap_pct\":%.1f,\"path_source\":\"%s\",\"terrain_source\":\"%s\",\"terrain_age_ms\":%llu}\n",
         s->camera_mode,v.state,v.leg,(long long)v.cycle,v.grid_valid?v.slot+1:0,
         ca_survey_positions(s->settings.survey.pattern),s->settings.survey.pattern,v.captured,v.skipped,v.unsettled,
         v.grid_valid?v.grid.cycle_s:0,v.grid_valid?v.grid.spacing:0,v.grid_valid?v.grid.nominal_overlap:0,
+        v.grid_valid?(v.grid_navigation?"navigation":"ground track"):"none",
         v.local_terrain?"uploaded":"flight controller",
         (unsigned long long)(v.terrain_ms?now-v.terrain_ms:0));
     if(fclose(f)==0) rename(tmp,path); else unlink(tmp);
@@ -181,6 +259,7 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     }
     survey_status_file(s,now);
     if(!survey_running(s)) return;
+    survey_request_mission_item(s,now);
     const auto tracking=ca_media_tracking_status(s->media);
     if(tracking.state==CA_TRACK_ACQUIRING || tracking.state==CA_TRACK_ACTIVE || tracking.state==CA_TRACK_COASTING) {
         survey_pause(s,"survey paused: image tracking"); return;
@@ -202,6 +281,11 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     v.local_terrain=ca_terrain_height(pose.lat,pose.lon,pose.ground)==CA_TERRAIN_READY;
     valid=valid && (v.local_terrain || report_valid) && pose.alt-pose.ground>5;
     float speed=hypotf(pose.vn,pose.ve),course=atan2f(pose.ve,pose.vn);
+    ca_survey_pose path_pose=pose;
+    const bool navigation=survey_navigation_allowed(v,now) &&
+        now-s->vehicle_position_updated_ms<=500 && v.path.project(pose,now,path_pose);
+    if(!navigation) path_pose=pose;
+    const float path_course=atan2f(path_pose.ve,path_pose.vn);
     // Differentiate new position samples, not the faster control-loop ticks.
     // Smooth GPS velocity quantisation before deciding a straight leg ended.
     uint64_t sample_ms=s->vehicle_position_updated_ms;
@@ -215,7 +299,8 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     }
     float course_rate=fabsf(v.course_rate);
     if(!valid || speed<cfg.min_speed || course_rate>5 ||
-        (v.grid_valid && fabs(wrap_pi_f(course-v.grid.course))*180/PI_F>cfg.turn_deg)) {
+        (navigation && fabs(wrap_pi_f(course-path_course))*180/PI_F>cfg.turn_deg) ||
+        (v.grid_valid && fabs(wrap_pi_f(path_course-v.grid.course))*180/PI_F>cfg.turn_deg)) {
         if(v.grid_valid || v.target_valid) { ++v.generation; ca_media_survey_cancel(s->media); }
         v.grid_valid=false; v.target_valid=false; v.straight_ms=0;
         s->target_location_active=false; stop_tracking_rate(s);
@@ -230,9 +315,9 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     bool realigning=false;
     if(v.grid_valid && !v.pending &&
         (!v.burst || v.burst>=cfg.burst || now>=v.grid.deadline(v.cycle_start,v.slot)) &&
-        v.grid.alignment_error(pose)>v.grid.alignment_limit(pose)) {
+        (navigation!=v.grid_navigation || v.grid.alignment_error(path_pose)>v.grid.alignment_limit(path_pose))) {
         ca_log("Survey grid realign: cross %.1fm, alignment %.1fm, limit %.1fm",
-            v.grid.cross_track(pose),v.grid.alignment_error(pose),v.grid.alignment_limit(pose));
+            v.grid.cross_track(path_pose),v.grid.alignment_error(path_pose),v.grid.alignment_limit(path_pose));
         if(v.target_valid && v.burst<cfg.burst) v.skipped+=cfg.burst-v.burst;
         ++v.generation; v.grid_valid=false; v.target_valid=false;
         // Telemetry and turn checks already passed; avoid another startup gap
@@ -247,14 +332,15 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         if(now-v.straight_ms<2000) return;
         float hfov=ca_media_survey_hfov(s->media,cfg.lens);
         float aspect=cfg.lens==0?1.25f:16.0f/9;
-        if(!v.grid.init(pose,cfg,hfov,aspect,APCAM_GIMBAL_RATE_MAX,now)) return;
+        if(!v.grid.init(path_pose,cfg,hfov,aspect,APCAM_GIMBAL_RATE_MAX,now)) return;
+        v.grid_navigation=navigation;
         ++v.leg; v.grid_valid=true; v.cycle=0; v.slot=0;
         v.burst=0; v.steady_ms=0; v.next_image_ms=0;
         // Centre the first sweep on where the aircraft will be halfway
         // through it. Start tracking immediately instead of waiting half a sweep.
         float ground=v.grid.origin.ground;
         ca_targeting_predict_position(&v.grid.origin.lat,&v.grid.origin.lon,&ground,
-            pose.vn,pose.ve,0,v.grid.cycle_s/2);
+            path_pose.vn,path_pose.ve,0,v.grid.cycle_s/2);
         v.cycle_start=now;
         v.request.hfov=hfov; v.request.aspect=aspect;
         v.state="survey leg started";
@@ -267,10 +353,11 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
         v.target_valid=false; v.burst=0; v.steady_ms=0;
         if(++v.slot==v.grid.slot_count) {
             v.slot=0; ++v.cycle;
-            double along=v.grid.along(pose);
-            int64_t next=int64_t(floor((along+speed*v.grid.cycle_s/2)/v.grid.spacing));
+            double along=v.grid.along(path_pose);
+            const float along_speed=fmaxf(cfg.min_speed,path_pose.vn*cos(v.grid.course)+path_pose.ve*sin(v.grid.course));
+            int64_t next=int64_t(floor((along+along_speed*v.grid.cycle_s/2)/v.grid.spacing));
             if(next>v.cycle) { v.skipped+=unsigned(next-v.cycle)*v.grid.slot_count*cfg.burst; v.cycle=next; }
-            double dt=(v.cycle*v.grid.spacing-along)/speed-v.grid.cycle_s/2;
+            double dt=(v.cycle*v.grid.spacing-along)/along_speed-v.grid.cycle_s/2;
             v.cycle_start=now+uint64_t(fmax(0,dt)*1000);
             // Keep the ground rows fixed for repeat views. Terrain/AGL and
             // speed changes must not discard the lattice and add a startup gap.

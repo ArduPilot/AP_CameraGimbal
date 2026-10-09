@@ -1286,6 +1286,9 @@ static void request_telemetry_intervals(struct ca_mavlink_server *server,
         {MAVLINK_MSG_ID_SYSTEM_TIME, 1000000U},
         {MAVLINK_MSG_ID_TERRAIN_REPORT, 500000U},
         {MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS, 1000000U},
+        {MAVLINK_MSG_ID_NAV_CONTROLLER_OUTPUT, 200000U},
+        {MAVLINK_MSG_ID_MISSION_CURRENT, 500000U},
+        {MAVLINK_MSG_ID_EXTENDED_SYS_STATE, 1000000U},
     };
     server->last_telemetry_request_ms = now;
     for (unsigned i = 0; i < sizeof(messages) / sizeof(messages[0]); i++) {
