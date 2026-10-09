@@ -19,6 +19,16 @@ os.environ.setdefault("MAVLINK20", "1")
 import pexpect
 from pymavlink import mavutil
 
+
+def survey_status_path(config):
+    """Match apcam_survey_status_path(), including isolated SITL configs."""
+    value = 14695981039346656037
+    for byte in os.fsencode(config):
+        value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
+    root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else "/tmp")
+    return pathlib.Path(root) / f"apcam-survey-{value:016x}.json"
+
+
 M = mavutil.mavlink
 CAMERA = M.MAV_COMP_ID_CAMERA
 GIMBAL = M.MAV_COMP_ID_GIMBAL

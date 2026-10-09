@@ -7,11 +7,11 @@ terrain surface (or a local plane when only flight-controller terrain is availab
 Successive sweeps revisit ground rows from different angles.
 The camera compensates for aircraft translation and yaw while exposing each burst.
 
-This implementation needs the matching ArduPilot `pr-mavlink-camera2` changes in
-`/data/APM.mavlink_camera`, and MAVProxy `pr-camera2` in
-`/home/tridge/project/UAV/MAVProxy.wt/mavcamera`. The camera worktree is
-`pr-survey-mode`. Plane requests and mission execution use the normal camera ID
-selection (0 all, 1–6 configured camera instance, or a MAVLink camera component ID).
+This implementation needs the matching ArduPilot
+[`pr-mavlink-camera2`](https://github.com/tridge/ardupilot/tree/pr-mavlink-camera2)
+and MAVProxy [`pr-camera2`](https://github.com/tridge/MAVProxy/tree/pr-camera2)
+branches. The camera branch is `pr-survey-mode`. Plane requests and mission
+execution use the normal camera ID selection (0 all, 1–6 configured camera instance, or a MAVLink camera component ID).
 No custom MAVLink dialect is required on the camera/GCS link.
 
 ## Controls
@@ -22,6 +22,10 @@ resume survey**, or choose **Survey** in MAVProxy's camera Mode menu. Selecting
 Survey starts capture as soon as telemetry, terrain, straight flight and gimbal
 ownership are available. Saving survey settings pauses an active survey; resume
 after saving. Start/stop buttons use the saved settings.
+
+The status heartbeat uses temporary storage (`/tmp` on cameras, or `TMPDIR`
+when set), with a filename derived from the configuration path. It does not
+write periodic status updates to camera flash.
 
 Choose **Survey pattern** before saving:
 
@@ -222,14 +226,16 @@ make -j8 sitl
 make -C camera_app -j8 test
 make -C web -j8 test
 make camera-definition-test
-python3 sitl/test_survey.py --speed 25 --duration 110 --output /tmp/survey25
-python3 sitl/test_survey.py --speed 18 --duration 100 --terrain-dropout --output /tmp/survey18
-python3 tests/test_survey_plane.py --output /tmp/survey-plane
+python3 sitl/test_survey_controls.py
+python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 25 --duration 110 --output /tmp/survey25
+python3 sitl/test_survey.py --mavproxy /path/to/MAVProxy --speed 18 --duration 100 --terrain-dropout --output /tmp/survey18
+python3 tests/test_survey_plane.py --arduplane /path/to/ardupilot/build/sitl/bin/arduplane --output /tmp/survey-plane
 make -j8
 ```
 
-The Plane test requires the rebuilt ArduPlane SITL binary at
-`/data/APM.mavlink_camera/build/sitl/bin/arduplane` (or `--arduplane PATH`). It flies
+The Plane test requires a rebuilt ArduPlane SITL binary, selected with
+`--arduplane PATH`; synthetic tests require the MAVProxy checkout selected with
+`--mavproxy PATH`. The Plane test flies
 a real AUTO mission at approximately 400 m AGL, supplies terrain tiles to Plane,
 checks mission mode round-trip, capture, manual takeover, and lease expiry after
 camera termination. Synthetic flight tests verify distinct bursts and exact

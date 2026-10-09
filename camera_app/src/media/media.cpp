@@ -37,6 +37,18 @@ void APC_Media::_stop_survey()
         _survey->wake.notify_one();
     }
     if(_survey->thread.joinable()) _survey->thread.join();
+    // The scheduler must receive one terminal result even if a queued request
+    // never reached the backend. Preserve a finished image rather than losing
+    // its completion when a pipeline change destroys the worker.
+    if(_survey->done) {
+        _survey_completion=_survey->result;
+        _survey_completed=true;
+    } else if(_survey->pending) {
+        _survey_completion={};
+        _survey_completion.request=_survey->request;
+        _survey_completion.error=ECANCELED;
+        _survey_completed=true;
+    }
     delete _survey; _survey=nullptr;
 }
 
@@ -51,7 +63,7 @@ void APC_Media::survey_cancel()
 
 bool APC_Media::survey_start(const ca_survey_request &request)
 {
-    if(!survey_available(request.lens)) return false;
+    if(_survey_completed || !survey_available(request.lens)) return false;
     if(!_survey) {
         _survey=new(std::nothrow) SurveyWorker;
         if(!_survey) return false;
@@ -81,6 +93,9 @@ bool APC_Media::survey_start(const ca_survey_request &request)
 
 bool APC_Media::survey_poll(ca_survey_result &result)
 {
+    if(_survey_completed) {
+        result=_survey_completion; _survey_completed=false; return true;
+    }
     if(!_survey) return false;
     std::lock_guard<std::mutex> g(_survey->lock);
     if(!_survey->done) return false;
@@ -273,8 +288,8 @@ int APC_Media::configure(const struct ca_config *settings)
         old->recording_resolution != settings->recording_resolution ||
         old->main_codec != settings->main_codec || old->sub_codec != settings->sub_codec;
     if (pipeline) {
-        _stop_survey();
         if (_backend && _backend->recording()) { errno = EBUSY; return -1; }
+        _stop_survey();
         LiveControls state = {};
         state.zoom = 1;
         state.lens_zoom[0] = state.lens_zoom[1] = 1;

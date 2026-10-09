@@ -233,7 +233,7 @@ static void log_unknown_siyi(const struct ca_siyi_packet *packet)
            packet->payload_length, payload_hex);
 }
 
-struct siyi_request_context { ca_backend *backend; ca_media *media; };
+struct siyi_request_context { ca_backend *backend; ca_media *media; ca_mavlink_server *mavlink; };
 static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
 {
     auto &context = *static_cast<siyi_request_context *>(opaque);
@@ -251,6 +251,7 @@ static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
         (packet.opcode == 0x0c && packet.payload_length == 1 &&
          packet.payload[0] >= 3 && packet.payload[0] <= 5)) {
         ca_media_tracking_stop(context.media);
+        ca_mavlink_server_suspend_gimbal(context.mavlink);
     }
     if (ca_backend_handle_siyi(backend, raw, length) < 0) {
         ca_log("opcode 0x%02x failed: %s", packet.opcode, strerror(errno));
@@ -618,7 +619,7 @@ int APC_CameraApp::run(int argc, char **argv)
             ca_log("SIYI server descriptor failed");
             return result;
         }
-        siyi_request_context siyi_context {_backend, _media};
+        siyi_request_context siyi_context {_backend, _media, _mavlink_server};
         if (((items[0].revents & POLLIN) != 0 || items[0].fd < 0) &&
             ca_siyi_server_handle(_server, handle_siyi_request, &siyi_context) < 0) {
             ca_log("SIYI server failed: %s", strerror(errno));
@@ -637,7 +638,7 @@ int APC_CameraApp::run(int argc, char **argv)
         ca_backend_periodic(_backend);
         ca_mavlink_server_periodic(_mavlink_server);
 #if APCAM_HAVE_SIYI
-        ca_unigcs_update(_unigcs, _backend, _manual.active);
+        ca_unigcs_update(_unigcs, _backend, _manual.active, _mavlink_server);
 #endif
         ca_media_tracking_update(_media, _backend, _manual.active);
         _network_capture.configure(ca_media_settings(_media)->network_capture);

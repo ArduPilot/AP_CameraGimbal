@@ -201,7 +201,7 @@ static bool survey_acquiring(ca_mavlink_server *,float,float,const ca_gimbal_att
 static uint8_t set_camera_mode(ca_mavlink_server *, unsigned);
 static void survey_pause(ca_mavlink_server *, const char *);
 static void survey_message(ca_mavlink_server *,const mavlink_message_t *);
-static void survey_capture_start(ca_mavlink_server *, int32_t, float);
+static uint8_t survey_capture_start(ca_mavlink_server *, int32_t, float);
 
 static void update_binlog(struct ca_mavlink_server *server, bool allow_stop);
 
@@ -1739,8 +1739,7 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
             return MAV_RESULT_DENIED;
         }
         if(server->camera_mode==CAMERA_MODE_IMAGE_SURVEY) {
-            survey_capture_start(server,count,params[1]);
-            return MAV_RESULT_ACCEPTED;
+            return survey_capture_start(server,count,params[1]);
         }
         server->next_image_index = index + 1;
         if (count == 1) {
@@ -2044,6 +2043,7 @@ void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server)
 {
     /* Preserve the ROI for release, but discard its controller history. */
     if (!server) return;
+    survey_pause(server,"survey paused: manual gimbal control");
     ca_media_tracking_stop(server->media);
     stop_tracking_rate(server);
     server->last_target_location_ms=0;
@@ -3106,13 +3106,16 @@ static int read_uart(struct ca_mavlink_server *server)
     }
 }
 
+#include "apcam/survey_runtime.h"
 #include "survey_server.inc"
 
-static void survey_capture_start(ca_mavlink_server *s,int32_t count,float interval)
+static uint8_t survey_capture_start(ca_mavlink_server *s,int32_t count,float interval)
 {
-    set_camera_mode(s,CAMERA_MODE_IMAGE_SURVEY);
+    const uint8_t result=set_camera_mode(s,CAMERA_MODE_IMAGE_SURVEY);
+    if(result!=MAV_RESULT_ACCEPTED) return result;
     s->survey->remaining=count?count:-1;
     s->survey->interval_ms=unsigned(fminf(interval*1000,UINT32_MAX));
+    return MAV_RESULT_ACCEPTED;
 }
 
 int ca_mavlink_server_open(struct ca_mavlink_server **result,

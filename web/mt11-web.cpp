@@ -58,6 +58,7 @@
 #include "../include/apcam/APC_Config.h"
 #include "../include/apcam/gimbal_transform.h"
 #include "../include/apcam/manual_control.h"
+#include "../include/apcam/survey_runtime.h"
 #define SERVER_NAME APCAM_NAME "-web/2.0"
 #define PRODUCT_NAME APCAM_PRODUCT_NAME
 #define WEB_HAVE_THERMAL APCAM_HAVE_THERMAL
@@ -7286,7 +7287,11 @@ static void handle_request(int fd, const char *peer)
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/rebooting") == 0) {
         send_rebooting_page(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/survey/status") == 0) {
-        char path[4096]; snprintf(path,sizeof(path),"%s.survey.json",REPLACEMENT_CONFIG_PATH);
+        char path[4096];
+        if (!apcam_survey_status_path(REPLACEMENT_CONFIG_PATH, path, sizeof(path))) {
+            send_text_errorf(fd, 500, "Error", S_E_PATH_LONG_OR_INVALID);
+            return;
+        }
         struct stat st{};
         size_t length=0; char *body=stat(path,&st)==0 && time(NULL)-st.st_mtime<=5 ? read_file(path,4096,&length) : NULL;
         const char *empty="{\"state\":\"camera unavailable\"}";
@@ -7318,7 +7323,8 @@ static void handle_request(int fd, const char *peer)
             if(!mode || length!=1 || (mode[0]!='0' && mode[0]!='2')) {
                 send_response(fd,400,"Bad Request","text/plain","Invalid survey mode",19,NULL);
             } else {
-                char path[4096],tmp[4100];
+                char path[sizeof(REPLACEMENT_CONFIG_PATH) + sizeof(".survey.command")];
+                char tmp[sizeof(path) + sizeof(".tmp")];
                 snprintf(path,sizeof(path),"%s.survey.command",REPLACEMENT_CONFIG_PATH);
                 snprintf(tmp,sizeof(tmp),"%s.tmp",path);
                 FILE *f=fopen(tmp,"w"); bool ok=false;

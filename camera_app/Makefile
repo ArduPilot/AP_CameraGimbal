@@ -1038,6 +1038,16 @@ tests/test_survey: tests/test_survey.cpp src/protocol/survey.cpp src/protocol/ta
 survey-test: tests/test_survey
 	./tests/test_survey
 
+.PHONY: survey-lifecycle-test
+survey-lifecycle-test: build/tests/test_survey_lifecycle
+	$(PYTHON) -c 'import subprocess; subprocess.run(["./build/tests/test_survey_lifecycle"], check=True, timeout=15)'
+
+build/tests/test_survey_lifecycle: tests/test_survey_lifecycle.cpp tests/test_media_backend.h src/media/media.cpp src/media/tracking.cpp src/config.cpp build/host/tracking_dlib.o $(APCAM_HEADERS) $(wildcard include/camera_app/APC_*.h)
+	mkdir -p $(@D)
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $(filter %.cpp %.o,$^) -lpthread -lm
+
+test: survey-lifecycle-test
+
 .PHONY: metadata-history-test
 metadata-history-test: tests/test_metadata_history
 	./tests/test_metadata_history

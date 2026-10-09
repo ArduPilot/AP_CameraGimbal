@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 
-from test_mavlink_parameters import port, stop, wait_ready, connect
+from test_mavlink_parameters import survey_status_path, port, stop, wait_ready, connect
 from pymavlink import mavutil
 from pymavlink.quaternion import Quaternion
 
@@ -145,7 +145,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                         128|auto_flag|M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 10 if auto_flag else 0, 4)
                     if navigation:
                         link.mav.mission_current_send(nav_seq)
-                        state_path = Path(str(cfg)+'.survey.json')
+                        state_path = survey_status_path(cfg)
                         if state_path.exists():
                             path_status = json.loads(state_path.read_text())
                             path_sources[elapsed] = path_status['path_source']
@@ -177,7 +177,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     if dropout_count is None:
                         dropout_count = len(captures)
                     assert len(captures) == dropout_count, 'captures continued with stale terrain'
-                    status = json.loads(Path(str(cfg)+'.survey.json').read_text())
+                    status = json.loads(survey_status_path(cfg).read_text())
                     assert 'terrain' in status['state'], status
                 until = time.monotonic()+.05
                 while time.monotonic() < until:
@@ -222,7 +222,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                 assert any(m.param_id=='CAM_MODE' and m.param_result==M.PARAM_ACK_ACCEPTED for m in mode_acks), mode_acks
             else:
                 assert any(a['command'] == M.MAV_CMD_SET_CAMERA_MODE and a['result'] == M.MAV_RESULT_ACCEPTED for a in acks), acks
-            assert len(records) >= (count or 9), (len(records), (output/'camera.ini.survey.json').read_text())
+            assert len(records) >= (count or 9), (len(records), survey_status_path(cfg).read_text())
             assert len(captures) <= stopped_count+1, 'capture continued after stop'
             assert len({r['capture_monotonic_ms'] for r in records}) == len(records), 'duplicate frames'
             if count:
@@ -278,7 +278,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                 assert observed and all(v=='waiting for straight flight' for v in observed), observed
                 assert not any(82<r['capture_monotonic_ms']*.001-start<89 for r in records), 'captured during off-course departure'
                 print('PASS navigation centreline, stale fallback, in-place loiter edit, parallel leg change, AUTO exit and off-course suspension')
-            status=json.loads(Path(str(cfg)+'.survey.json').read_text())
+            status=json.loads(survey_status_path(cfg).read_text())
             assert status['positions']==len(allowed), status
 
             if terrain_root or terrain_variation:
@@ -311,7 +311,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, default=ROOT/'build/survey-test')
     parser.add_argument('--speed', type=float, default=25)
     parser.add_argument('--duration', type=float, default=80)
-    parser.add_argument('--mavproxy', type=Path, default=Path('/home/tridge/project/UAV/MAVProxy.wt/mavcamera'))
+    parser.add_argument('--mavproxy', type=Path, required=True)
     parser.add_argument("--terrain-dropout", action="store_true")
     parser.add_argument("--lens", choices=("thermal","wide","zoom"), default="thermal")
     parser.add_argument("--count", type=int, default=0)
