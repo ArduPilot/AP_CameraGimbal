@@ -199,7 +199,7 @@
       const response = await fetch('/survey/status', {cache: 'no-store'});
       if (!response.ok) throw new Error('Status unavailable');
       const s = await response.json();
-      status.textContent = `${s.state}\nCaptured: ${s.captured || 0}  Skipped: ${s.skipped || 0}  Unsettled: ${s.unsettled || 0}\nLeg: ${s.leg || 0}  Cycle: ${s.cycle || 0}  Position: ${s.slot || 0}/${s.positions || 9}\nSweep: ${s.cycle_seconds || 0}s  Row spacing: ${s.row_spacing_m || 0}m\nNominal along-track overlap: ${s.nominal_overlap_pct || 0}%  Terrain: ${s.terrain_source || "flight controller"}  Report age: ${s.terrain_age_ms || 0}ms`;
+      status.textContent = `${s.state}\nCaptured: ${s.captured || 0}  Skipped: ${s.skipped || 0}  Unsettled: ${s.unsettled || 0}\nLeg: ${s.leg || 0}  Cycle: ${s.cycle || 0}  Position: ${s.slot || 0}/${s.positions || 9}\nSweep: ${s.cycle_seconds || 0}s  Row spacing: ${s.row_spacing_m || 0}m\nNominal along-track overlap: ${s.nominal_overlap_pct || 0}%  Path: ${s.path_source || "ground track"}  Terrain: ${s.terrain_source || "flight controller"}  Report age: ${s.terrain_age_ms || 0}ms`;
     } catch (e) { status.textContent = e.message; }
     setTimeout(poll, 1000);
   }

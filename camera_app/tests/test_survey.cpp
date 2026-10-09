@@ -7,6 +7,48 @@
 
 int main()
 {
+    // L1 reports positive error LEFT of the line. Recover both the direction
+    // and centreline across every quadrant, independent of wind correction.
+    for(double heading: {0.0,45.0,90.0,179.0,-179.0,-90.0}) for(float error: {-100.0f,100.0f}) {
+        const double course=heading*M_PI/180;
+        ca_survey_pose p{-350000000,1490000000,1000,600,float(25*cos(course)),float(25*sin(course))};
+        const auto centre=p;
+        assert(ca_targeting_predict_position(&p.lat,&p.lon,&p.alt,error*sin(course),-error*cos(course),0,1));
+        const double beta=remainder(course+asin(error/1000),2*M_PI)*180/M_PI;
+        ca_survey_path path{};
+        ca_survey_pose projected{};
+        assert(path.update(p,beta,1000,error,1000));
+        assert(!path.project(p,1000,projected)); // acquire a stable estimate first
+        for(unsigned now=1200;now<=2400;now+=200) assert(path.update(p,beta,1000,error,now));
+        assert(path.project(p,2400,projected));
+        assert(abs(projected.lat-centre.lat)<4 && abs(projected.lon-centre.lon)<4);
+        assert(fabs(remainder(path.course-course,2*M_PI))<1e-6);
+        assert(!path.project(p,4001,projected));
+        assert(!path.update(p,beta,10,error,4200));
+        assert(!path.project(p,4200,projected));
+        assert(!path.update(p,beta,UINT16_MAX,error,4400));
+        assert(!path.update(p,NAN,1000,error,4600));
+        assert(!path.update(p,beta,1000,NAN,4800));
+        assert(!path.update(p,beta,1000,900,5000));
+    }
+    {
+        ca_survey_path path{};
+        ca_survey_pose p{-350000000,1490000000,1000,600,25,0}, projected{};
+        assert(!path.update(p,180,1000,0,1000)); // waypoint already behind us
+        for(unsigned now=2000;now<=6000;now+=200) {
+            assert(path.update(p,now%400?0:1,1000,0,now)); // integer-degree steps
+        }
+        assert(path.project(p,6000,projected));
+        assert(path.course>0 && path.course<M_PI/180);
+        assert(!path.project(p,5999,projected));
+        p.vn=0; p.ve=25;
+        assert(path.update(p,90,1000,0,6200)); // new leg must reacquire stability
+        assert(!path.project(p,6200,projected));
+        for(unsigned now=6400;now<=7600;now+=200) assert(path.update(p,90,1000,0,now));
+        assert(path.project(p,7600,projected));
+        assert(path.update(p,90,2000,0,7800)); // same sequence, changed destination
+        assert(!path.project(p,7800,projected));
+    }
     ca_config config; ca_config_defaults(&config);
     for(float speed: {18.0f,25.0f}) {
         ca_survey_pose p{-350000000,1490000000,1000,600,speed,0};

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 M = mavutil.mavlink
 
 
-def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal", count=0, xml_mode=False, terrain_root=None, terrain_variation=False, replay=None, pattern="both", gentle_turn=False, no_stream=False):
+def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal", count=0, xml_mode=False, terrain_root=None, terrain_variation=False, replay=None, pattern="both", gentle_turn=False, no_stream=False, navigation=False):
     sys.path.insert(0,str(mavproxy))
     spec=importlib.util.spec_from_file_location("survey_coverage_under_test",
         mavproxy/'MAVProxy/modules/mavproxy_camera/survey.py')
@@ -52,6 +52,8 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
     for ready in output.glob('*.ready'):
         ready.unlink()
     captures, frames, acks, intervals, capabilities, mode_acks = [], {}, [], set(), [], []
+    path_sources = {}
+    path_states = {}
     camera = gimbal = link = None
     finished = threading.Event()
     errors = []
@@ -114,9 +116,40 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     p = track[min(bisect.bisect_left(track_times, elapsed), len(track)-1)]
                     lat, lon, altitude, ground = p['lat'], p['lon'], p['alt'], p['ground']
                     vn, ve, vd, yaw, roll, pitch = (p[k] for k in ('vn', 've', 'vd', 'yaw', 'roll', 'pitch'))
+                if navigation:
+                    # The aircraft flies 80m east of a northbound mission leg.
+                    # Recover the intended line, then exercise telemetry loss,
+                    # loiter rejection, a new parallel leg and leaving AUTO.
+                    east_offset = 80
+                    if elapsed >= 75:
+                        yaw = math.radians(20)
+                        vn,ve = speed*math.cos(yaw),speed*math.sin(yaw)
+                        east_offset += ve*(elapsed-75)
+                        lat -= math.degrees((speed-vn)*(elapsed-75)/6378137)
+                    lon += math.degrees(east_offset/(6378137*math.cos(math.radians(lat))))
+                    nav_seq = 4 if elapsed < 50 else 6
+                    nav_command = M.MAV_CMD_NAV_LOITER_UNLIM if 35 <= elapsed < 50 else M.MAV_CMD_NAV_WAYPOINT
+                    nav_auto = elapsed < 65 or elapsed >= 75
+                    line_east = 150 if elapsed >= 50 else 0
+                    east_error = east_offset-line_east
+                    north_distance = 5000-speed*elapsed
+                    bearing = math.degrees(math.atan2(-east_error,north_distance))
+                    if not 20 <= elapsed < 35:
+                        link.mav.srcSystem, link.mav.srcComponent = 42, 1
+                        link.mav.nav_controller_output_send(0,0,0,int(bearing),round(math.hypot(north_distance,east_error)),0,0,-east_error)
                 link.mav.srcSystem, link.mav.srcComponent = 42, 1
                 if elapsed-last_heartbeat > .5:
-                    link.mav.heartbeat_send(M.MAV_TYPE_FIXED_WING, M.MAV_AUTOPILOT_ARDUPILOTMEGA, 128, 0, 4)
+                    # Plane AUTO uses GUIDED and STABILIZE, never AUTO_ENABLED.
+                    auto_flag = M.MAV_MODE_FLAG_GUIDED_ENABLED|M.MAV_MODE_FLAG_STABILIZE_ENABLED if navigation and nav_auto else 0
+                    link.mav.heartbeat_send(M.MAV_TYPE_FIXED_WING, M.MAV_AUTOPILOT_ARDUPILOTMEGA,
+                        128|auto_flag|M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 10 if auto_flag else 0, 4)
+                    if navigation:
+                        link.mav.mission_current_send(nav_seq)
+                        state_path = Path(str(cfg)+'.survey.json')
+                        if state_path.exists():
+                            path_status = json.loads(state_path.read_text())
+                            path_sources[elapsed] = path_status['path_source']
+                            path_states[elapsed] = path_status['state']
                     link.mav.gimbal_manager_status_send(int(elapsed*1000), 0, 154, 42 if owned else 0, 154 if owned else 0, 0, 0)
                     last_heartbeat = elapsed
                 link.mav.global_position_int_send(int(elapsed*1000), round(lat*1e7), round(lon*1e7),
@@ -160,6 +193,11 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                                 owned = False
                         if msg.command == M.MAV_CMD_SET_MESSAGE_INTERVAL:
                             intervals.add(int(msg.param1))
+                    elif msg.get_type() == 'MISSION_REQUEST_INT' and navigation:
+                        link.mav.srcSystem, link.mav.srcComponent = 42, 1
+                        link.mav.mission_item_int_send(msg.get_srcSystem(),msg.get_srcComponent(),msg.seq,
+                            M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,nav_command,1,1,0,0,0,0,
+                            round((-35.2785018+math.degrees(5000/6378137))*1e7),round(148.9534632*1e7),400)
                     elif msg.get_type() == 'CAMERA_IMAGE_CAPTURED':
                         captures.append(msg.to_dict())
                     elif msg.get_type() == 'CAMERA_INFORMATION':
@@ -189,7 +227,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
             assert len({r['capture_monotonic_ms'] for r in records}) == len(records), 'duplicate frames'
             if count:
                 assert len(records)==count, (len(records),count)
-            if not terrain_dropout and not count:
+            if not terrain_dropout and not count and not navigation:
                 cycles=sorted({r['cycle'] for r in records})
                 assert cycles == list(range(cycles[0],cycles[-1]+1)), ('skipped ground rows',cycles)
                 views={}
@@ -207,7 +245,7 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
             assert all(r['pattern']=={'both':0,'left_right':1,'fore_aft':2,'fore_only':3}[pattern] for r in records)
             if pattern=='fore_only':
                 assert all(r['row']>r['cycle'] and r['column']==0 for r in records), 'invalid forward grid'
-                if not replay and not gentle_turn:
+                if not replay and not gentle_turn and not navigation:
                     assert all(r['target'][0]>r['lat'] and abs(r['target'][1]-r['lon'])<1e-6 for r in records), 'target passed behind aircraft'
                     assert all(abs(Quaternion(c['q']).euler[2])<math.radians(1) for c in captures if c['capture_result']==1), 'fore-only yawed away from flight path'
             bursts={}
@@ -225,6 +263,21 @@ def run(output, speed, duration, mavproxy, terrain_dropout=False, lens="thermal"
                     cross.append(abs(-north*math.sin(heading)+east*math.cos(heading)))
                 assert max(cross)<50, ('target drifted outside flight swath',max(cross))
                 print(f'Gentle turn: max target cross-track {max(cross):.1f}m; burst targets fixed')
+            if navigation:
+                assert M.MAVLINK_MSG_ID_NAV_CONTROLLER_OUTPUT in intervals
+                assert M.MAVLINK_MSG_ID_MISSION_CURRENT in intervals
+                for lo,hi,source,east in ((8,19,'navigation',0),(26,34,'ground track',80),
+                        (41,49,'ground track',80),(57,64,'navigation',150),(71,74,'ground track',80)):
+                    observed = [v for t,v in path_sources.items() if lo<t<hi]
+                    assert observed and all(v==source for v in observed), (lo,source,observed)
+                    selected = [r for r in records if lo<r['capture_monotonic_ms']*.001-start<hi]
+                    assert selected, ('no captures in navigation phase',lo)
+                    errors_m = [(r['target'][1]-148.9534632)*111319.5*math.cos(math.radians(r['lat']))-east for r in selected]
+                    assert max(abs(e) for e in errors_m)<20, (lo,errors_m)
+                observed = [v for t,v in path_states.items() if 82<t<89]
+                assert observed and all(v=='waiting for straight flight' for v in observed), observed
+                assert not any(82<r['capture_monotonic_ms']*.001-start<89 for r in records), 'captured during off-course departure'
+                print('PASS navigation centreline, stale fallback, in-place loiter edit, parallel leg change, AUTO exit and off-course suspension')
             status=json.loads(Path(str(cfg)+'.survey.json').read_text())
             assert status['positions']==len(allowed), status
 
@@ -269,7 +322,10 @@ if __name__ == '__main__':
     parser.add_argument('--pattern', choices=('both','left_right','fore_aft','fore_only'), default='both')
     parser.add_argument('--gentle-turn', action='store_true', help='regress grid drift after a gentle 5.4-degree turn')
     parser.add_argument('--no-stream', action='store_true', help='verify SD capture with no thermal stream consumer')
+    parser.add_argument('--navigation', action='store_true', help='exercise waypoint-path telemetry and fallbacks for 95 seconds')
     args = parser.parse_args()
     if args.gentle_turn and (args.replay or args.terrain_root or args.pattern not in ('fore_only','fore_aft')):
         parser.error('--gentle-turn requires fore_only/fore_aft and no replay/uploaded terrain')
-    run(args.output, args.speed, args.duration, args.mavproxy, args.terrain_dropout, args.lens, args.count, args.xml_mode, args.terrain_root, args.terrain_variation, args.replay, args.pattern, args.gentle_turn, args.no_stream)
+    if args.navigation and (args.pattern!='fore_only' or args.duration<95 or args.count or args.gentle_turn or args.replay or args.terrain_root or args.terrain_dropout):
+        parser.error('--navigation requires fore_only, duration >=95 and no count/turn/replay/terrain overrides')
+    run(args.output, args.speed, args.duration, args.mavproxy, args.terrain_dropout, args.lens, args.count, args.xml_mode, args.terrain_root, args.terrain_variation, args.replay, args.pattern, args.gentle_turn, args.no_stream, args.navigation)

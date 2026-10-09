@@ -153,6 +153,26 @@ remain on fixed rows for repeat views; current speed controls sweep timing and
 current terrain supplies each new target height. The first sweep starts immediately
 after straight flight/ownership acquisition, rather than waiting half a sweep.
 Turns, missing terrain or stale telemetry still suspend capture and end the leg.
+
+In ArduPilot AUTO waypoint flight, the camera requests `NAV_CONTROLLER_OUTPUT` at 5 Hz
+and `MISSION_CURRENT` at 2 Hz. It retrieves only the active mission item
+(`MISSION_REQUEST_INT`/`MISSION_ITEM_INT`, refreshed every second) to
+confirm a straight `MAV_CMD_NAV_WAYPOINT` leg. It does not download the mission.
+Loiter cross-track error is radial, so loiters and other command types retain
+the ground-track fallback.
+
+The intended leg bearing is `target_bearing - asin(xtrack_error / wp_dist)`
+when the waypoint is ahead. The grid is anchored on the resulting centreline,
+not on the displaced aircraft track. Estimates are filtered and must be stable
+for one second. Integer-degree bearings limit accuracy; invalid geometry,
+nearby or passed endpoints, stale telemetry, and leaving AUTO use the existing
+ground-track method. Source changes realign the grid between bursts; targets
+remain fixed within a burst. Actual aircraft position and velocity always drive
+the gimbal LOS controller. The Survey status reports the active path source.
+This describes the current leg only and cannot anticipate the next leg's turn.
+`EXTENDED_SYS_STATE` is requested at 1 Hz to exclude QuadPlane hover and
+transition phases; VTOL vehicle types require fresh fixed-wing state. Position
+samples used for path reconstruction must be no more than 500 ms old.
 Explicit takeover, storage errors and stop commands require resume.
 
 Small course changes also trigger grid realignment when lateral drift, including

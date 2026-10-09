@@ -138,10 +138,15 @@ def run(args):
         first = wait(lambda m: m.get_type() == 'CAMERA_IMAGE_CAPTURED' and m.capture_result == 1, args.timeout)
         assert first.relative_alt > 300000, first
         deadline = time.monotonic()+70
+        navigation_seen = False
         while time.monotonic() < deadline:
             receive()
+            status_path = Path(str(cfg)+'.survey.json')
+            if status_path.exists():
+                navigation_seen |= json.loads(status_path.read_text()).get('path_source') == 'navigation'
         captures = [m for m in messages if m['mavpackettype'] == 'CAMERA_IMAGE_CAPTURED' and m['capture_result'] == 1]
         assert len(captures) >= 9, len(captures)
+        assert navigation_seen, 'camera did not reconstruct the AUTO waypoint leg'
         assert any(m.get('primary_control_compid') == 154 for m in messages), 'no device ownership confirmation'
         # Explicit manager pointing must interrupt survey, not fight it.
         command(M.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW, [-45, 0, 0, 0, 0, 0, 154])
