@@ -241,7 +241,6 @@ static void request_complete(struct ca_rpi_pipeline *p, Request *request)
     if (atomic_load(&p->paused)) return;
     FrameBuffer *buffer = request->findBuffer(p->stream);
     if (!buffer) return;
-#if RPI_LIBCAMERA_AT_LEAST(0, 7)
     /* After a restart the IPA flags its first frames as start-up: keep them
      * out of the video and out of the exposure the next photo locks to. */
     if (buffer->metadata().status != FrameMetadata::FrameSuccess) {
@@ -250,7 +249,6 @@ static void request_complete(struct ca_rpi_pipeline *p, Request *request)
         pthread_mutex_unlock(&p->video_lock);
         return;
     }
-#endif
     report_exposure(p, request->metadata());
     const auto sensor_ns = request->metadata().get(controls::SensorTimestamp);
     const uint64_t timestamp_us = sensor_ns ? (uint64_t)*sensor_ns / 1000U : monotonic_us();
@@ -743,6 +741,7 @@ int ca_rpi_pipeline_capture_still(struct ca_rpi_pipeline *p, unsigned width, uns
     atomic_store(&p->paused, true);
     pthread_mutex_unlock(&p->video_lock);
     for (unsigned i = 0; i < 50U && atomic_load(&p->encoder_queued) > 0; i++) usleep(5000);
+    bool encoder_ok = true;
     if (atomic_load(&p->encoder_queued) > 0) {
         /* Take the buffers back by restarting the encoder's input queue, so
          * no late dequeue can reach a freed or reused request. */
@@ -753,8 +752,10 @@ int ca_rpi_pipeline_capture_still(struct ca_rpi_pipeline *p, unsigned width, uns
             int type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             if (xioctl(p->encoder, VIDIOC_STREAMOFF, &type) < 0)
                 ca_log("RPi encoder input stop failed: %s", strerror(errno));
-            if (xioctl(p->encoder, VIDIOC_STREAMON, &type) < 0)
+            if (xioctl(p->encoder, VIDIOC_STREAMON, &type) < 0) {
                 ca_log("RPi encoder input restart failed: %s", strerror(errno));
+                encoder_ok = false;
+            }
             atomic_store(&p->encoder_queued, 0);
         }
         pthread_mutex_unlock(&p->video_lock);
@@ -821,7 +822,9 @@ int ca_rpi_pipeline_capture_still(struct ca_rpi_pipeline *p, unsigned width, uns
         atomic_store(&p->paused, false);
         pthread_mutex_unlock(&p->video_lock);
         (void)set_encoder_control(p->encoder, V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME, 1, "key frame");
-        resumed = queue_requests(p) == 0;
+        /* A dead encoder input is reported, so the caller sees the failure;
+         * the next photo's reset tries to restart it again. */
+        resumed = queue_requests(p) == 0 && encoder_ok;
     }
     const uint64_t finished = monotonic_us();
     ca_log("RPi still %ux%u: pause %llu ms, capture %llu ms, resume %llu ms", width, height,
