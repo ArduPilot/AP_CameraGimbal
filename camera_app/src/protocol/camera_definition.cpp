@@ -76,6 +76,9 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    CONFIG("PHOTO_RES", "Photo resolution (larger sizes briefly pause video)"),
+#endif
     CONFIG("OSD_CROSS", "Targeting cross"),
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
     CONFIG("OSD_RECORD", "Overlays in recordings"),

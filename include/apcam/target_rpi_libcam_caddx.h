@@ -13,7 +13,16 @@
 #define APCAM_NUM_STREAMS 2
 #define APCAM_STREAM1_LENS_MASK 1
 #define APCAM_STREAM2_LENS_MASK 1
-#define APCAM_HAVE_PHOTO 0
+#define APCAM_HAVE_PHOTO 1
+/* Photos from a video frame, or from the IMX477 2x2 binned or full sensor
+ * modes after a brief switch away from video. */
+#define APCAM_HAVE_PHOTO_RESOLUTION 1
+#define APCAM_PHOTO_BINNED_WIDTH 2028
+#define APCAM_PHOTO_BINNED_HEIGHT 1520
+#define APCAM_PHOTO_BINNED_NAME "2028x1520"
+#define APCAM_PHOTO_FULL_WIDTH 4056
+#define APCAM_PHOTO_FULL_HEIGHT 3040
+#define APCAM_PHOTO_FULL_NAME "4056x3040"
 #define APCAM_HAVE_ZOOM 0
 #define APCAM_NUM_RECORDING_CHANNELS 1
 /* MAVLink only; the companion computer has no vendor control service. */

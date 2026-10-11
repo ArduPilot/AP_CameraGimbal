@@ -85,6 +85,11 @@ enum string_id {
     S_OPT_WB_INCANDESCENT,
     S_OPT_SCOPE_THERMAL,
     S_OPT_SCOPE_ALL,
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    S_OPT_PHOTO_RES_VIDEO,
+    S_OPT_PHOTO_RES_BINNED,
+    S_OPT_PHOTO_RES_FULL,
+#endif
     S_OPT_ORIENT_AUTO,
     S_OPT_ORIENT_UPRIGHT,
     S_OPT_ORIENT_INVERTED,
@@ -122,6 +127,10 @@ enum string_id {
     S_H_TIMEZONE,
     S_P_PHOTO_SCOPE,
     S_H_PHOTO_SCOPE,
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    S_P_PHOTO_RESOLUTION,
+    S_H_PHOTO_RESOLUTION,
+#endif
     S_P_ORIENTATION,
     S_H_ORIENTATION,
     S_P_UART_PROTOCOL,
@@ -681,6 +690,11 @@ static constexpr Translations translations = [] {
     result[S_OPT_WB_INCANDESCENT] = {"Incandescent", "白炽灯", "白熱灯"};
     result[S_OPT_SCOPE_THERMAL] = {"Thermal only", "仅热成像", "サーマルのみ"};
     result[S_OPT_SCOPE_ALL] = {"All lenses", "全部镜头", "すべてのレンズ"};
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    result[S_OPT_PHOTO_RES_VIDEO] = {"Video frame 1920x1080 (no pause)", "视频帧 1920x1080（不中断）", "動画フレーム 1920x1080（中断なし）"};
+    result[S_OPT_PHOTO_RES_BINNED] = {"Binned sensor " APCAM_PHOTO_BINNED_NAME " (pauses video)", "传感器合并模式 " APCAM_PHOTO_BINNED_NAME "（暂停视频）", "ビニング " APCAM_PHOTO_BINNED_NAME "（動画を一時停止）"};
+    result[S_OPT_PHOTO_RES_FULL] = {"Full sensor " APCAM_PHOTO_FULL_NAME " (pauses video)", "传感器全分辨率 " APCAM_PHOTO_FULL_NAME "（暂停视频）", "フル解像度 " APCAM_PHOTO_FULL_NAME "（動画を一時停止）"};
+#endif
     result[S_OPT_ORIENT_AUTO] = {"Automatic (gimbal-reported)", "自动（由云台上报）", "自動（ジンバルの報告に従う）"};
     result[S_OPT_ORIENT_UPRIGHT] = {"Upright", "正装", "正立"};
     result[S_OPT_ORIENT_INVERTED] = {"Inverted", "倒装", "倒立"};
@@ -718,6 +732,10 @@ static constexpr Translations translations = [] {
     result[S_H_TIMEZONE] = {"Built-in IANA timezone name. GMT (UTC+0) is the default; daylight saving is automatic.", "内置 IANA 时区名称。默认为 GMT（UTC+0），自动应用夏令时。", "内蔵 IANA タイムゾーン名。デフォルトは GMT（UTC+0）で、夏時間は自動適用されます。"};
     result[S_P_PHOTO_SCOPE] = {"Photo capture scope", "拍照范围", "静止画の撮影範囲"};
     result[S_H_PHOTO_SCOPE] = {"Thermal saves the radiometric plane only. All saves both visible lenses, the thermal display and the radiometric plane.", "“仅热成像”只保存辐射测温数据；“全部镜头”保存两个可见光镜头的图像、热成像显示图像和辐射测温数据。", "「サーマルのみ」は放射温度データのみを保存します。「すべてのレンズ」は 2 つの可視光レンズの画像、サーマル表示画像、放射温度データをすべて保存します。"};
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    result[S_P_PHOTO_RESOLUTION] = {"Photo resolution", "照片分辨率", "写真の解像度"};
+    result[S_H_PHOTO_RESOLUTION] = {"A video frame is captured without interrupting streaming or recording. Larger photos switch the camera sensor mode, pausing video and recording for under a second per photo (about 0.3 s binned, 0.5 s full), and also show the full sensor height.", "视频帧拍照不会中断视频流或录像。更大的照片需要切换传感器模式，每张照片会暂停视频和录像不到一秒（合并模式约 0.3 秒，全分辨率约 0.5 秒），并包含传感器的完整高度。", "動画フレームはストリーミングや録画を中断せずに撮影します。より大きな写真はセンサーモードを切り替えるため、1 枚ごとに動画と録画が 1 秒未満（ビニング約 0.3 秒、フル解像度約 0.5 秒）停止し、センサーの全高を写します。"};
+#endif
     result[S_P_ORIENTATION] = {"Mounting orientation", "安装方向", "取り付け方向"};
     result[S_H_ORIENTATION] = {"Automatic follows the direction reported by the gimbal controller; a forced mode rotates all video paths by 180 degrees when needed.", "“自动”跟随云台控制器上报的方向；强制模式会在需要时将所有视频通路旋转 180 度。", "「自動」はジンバルコントローラーが報告する向きに従います。固定モードでは必要に応じてすべての映像経路を 180 度回転します。"};
     result[S_P_UART_PROTOCOL] = {"UART4 protocol", "UART4 协议", "UART4 プロトコル"};

@@ -15,15 +15,36 @@ The web interface is served at `http://<pi>:8080/`. The CADDX gimbal is
 controlled over a UART, or through a flight controller's serial passthrough;
 see [Gimbal](#gimbal).
 
-Not yet supported: photos, zoom and overlays. A Pi 5 / CM5 needs a software
-encoder, which is not implemented yet.
+Photos are taken from the GCS (including interval capture) or the web
+Photos page and saved as JPEGs with GPS metadata under
+`/var/lib/ap_cameragimbal/capture`. Their size is set by `[capture]
+resolution` (MAVLink parameter `PHOTO_RES`, also on the web Parameters page):
+
+| Setting | Photo | Video during the photo |
+|---|---|---|
+| `video` (default) | 1920x1080 video frame | not interrupted |
+| `2028x1520` | 2x2 binned sensor, full field of view | paused about 0.3 s |
+| `4056x3040` | full sensor resolution | paused about 0.5 s |
+
+The larger sizes switch the sensor mode and back, holding the exposure and
+white balance of the last video frame, so they match the video's brightness
+and colour. A 4056x3040 photo takes about 0.7 s in all, so interval capture
+at one photo per second works. RTSP viewers see a frozen frame. Recordings
+skip the paused frames: the MP4 plays continuously and is shorter than the
+real time by the pauses. Photos are taken one at a time: while one is being
+taken (up to about 0.7 s, or about 2 s if the capture fails) the camera app
+handles no other MAVLink messages, so later requests and gimbal commands wait
+until it is saved.
+
+Not yet supported: zoom and overlays. A Pi 5 / CM5 needs a software encoder,
+which is not implemented yet.
 
 ## Build
 
 On the Pi (Raspberry Pi OS Bookworm or later):
 
 ```sh
-sudo apt install build-essential git python3 libcamera-dev pkg-config
+sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config
 git submodule update --init --recursive
 make dependencies
 make rpi_libcam_caddx

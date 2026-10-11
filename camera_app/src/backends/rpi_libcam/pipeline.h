@@ -33,6 +33,29 @@ int ca_rpi_pipeline_set_image(struct ca_rpi_pipeline *pipeline,
                               const struct ca_config *settings);
 void ca_rpi_pipeline_close(struct ca_rpi_pipeline *pipeline);
 
+/* A copy of one camera frame: planar YUV420 (I420), U and V planes at half
+ * the luma stride. Video frames use limited-range Rec.709; frames from a
+ * still capture are already full-range BT.601 (JPEG colour). */
+struct ca_rpi_still_frame {
+    uint8_t *data; /* malloc()ed; Y, then U, then V */
+    unsigned width, height, stride;
+    uint64_t timestamp_us;
+    bool jpeg_colour;
+};
+
+/* Copy the next camera frame without interrupting video. The caller frees
+ * frame->data. Returns -1 with errno ETIMEDOUT if no frame arrives. */
+int ca_rpi_pipeline_grab_still(struct ca_rpi_pipeline *pipeline,
+                               struct ca_rpi_still_frame *frame, unsigned timeout_ms);
+
+/* Capture one frame at a larger size by switching the sensor mode: video
+ * pauses, the camera runs a still configuration with exposure and white
+ * balance locked to the last video frame, then video resumes. Encoded video
+ * and recording continue across the gap. Fails with errno EIO if video could
+ * not be restarted. The caller frees frame->data. */
+int ca_rpi_pipeline_capture_still(struct ca_rpi_pipeline *pipeline, unsigned width, unsigned height,
+                                  struct ca_rpi_still_frame *frame, unsigned timeout_ms);
+
 /* libcamera control values for the IMG_* settings, independent of libcamera
  * so they can be tested on the host. Zero gain/exposure means automatic. */
 struct ca_rpi_image_controls {
