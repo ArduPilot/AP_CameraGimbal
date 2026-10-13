@@ -136,7 +136,9 @@ int main(void) {
         (self.session / 'start').touch()
 
     def verify_restart(self, expected_rc=0):
-        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists())
+        # Vendor stop, experiment deadline and TERM/KILL grace can exceed10s.
+        # Bound this host observation independently of the camera's watchdog.
+        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists(), seconds=20)
         self.vendor.wait(timeout=5)
         restored = int((self.session / 'vendor-restored.pid').read_text())
         self.wait_for(lambda: self.capture.read_text().splitlines()[0] == str(restored))
@@ -172,7 +174,9 @@ int main(void) {
     def test_repeated_signals_during_verification_do_not_interrupt_rollback(self):
         self.launch(['/bin/true'])
         self.start()
-        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists())
+        # Vendor stop, experiment deadline and TERM/KILL grace can exceed10s.
+        # Bound this host observation independently of the camera's watchdog.
+        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists(), seconds=20)
         for sig in [signal.SIGHUP, signal.SIGTERM, signal.SIGINT, signal.SIGTERM]:
             os.kill(self.wd.pid, sig)
             time.sleep(0.05)
@@ -265,7 +269,9 @@ int main(void) {
     def test_missing_external_verification_leaves_supervisor_suspended(self):
         self.launch(['/bin/true'])
         self.start()
-        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists())
+        # Vendor stop, experiment deadline and TERM/KILL grace can exceed10s.
+        # Bound this host observation independently of the camera's watchdog.
+        self.wait_for(lambda: (self.session / 'vendor-restored.pid').exists(), seconds=20)
         self.assertEqual(self.wd.wait(timeout=15), 5)
         self.assertEqual(state(self.restore.pid), 'T')
         self.assertIn('verification missing', (self.session / 'result').read_text())

@@ -4,7 +4,7 @@ from pathlib import Path
 import secrets,subprocess,struct,unittest,shutil
 ROOT=Path(__file__).resolve().parents[1]
 class IoctlTrace(unittest.TestCase):
-    def fixture(self,count=2,existing=False,collision=False,inactive=False,distinct=False,counts_existing=False,abrupt=False,zero=False,negative=False):
+    def fixture(self,count=2,existing=False,collision=False,inactive=False,distinct=False,counts_existing=False,abrupt=False,zero=False,negative=False,usb=False,missing=False,reuse=False,reuse_counts=False):
         root=Path('/tmp/apcg-zt30.session.'+secrets.token_hex(3));root.mkdir();self.addCleanup(lambda:shutil.rmtree(root))
         app=root/'app';source=root/'app.c'
         source.write_text('''#ifndef EXPECTED_RC
@@ -20,6 +20,10 @@ class IoctlTrace(unittest.TestCase):
 int main(void) {
  int fd=open("/dev/null",O_RDWR);if(fd<0)return 2;
  int other=open("/dev/zero",O_RDWR);if(other<0)return 6;
+#ifdef REUSE_OUTPUT
+ int sink=open("output-sink",O_RDWR|O_CREAT|O_TRUNC,0600);if(sink<0)return 20;
+ if(write(sink,"keep original sink",18)!=18 || dup2(sink,OUTPUT_FD)!=OUTPUT_FD)return 21;close(sink);
+#endif
  for(unsigned i=0;i<COUNT;i++) {
   unsigned long command=0x6900U+(i&255U)+((unsigned long)((i>>8)&3U)<<30);
 #ifdef COLLISION
@@ -43,7 +47,7 @@ int main(void) {
  close(fd);puts("PASSTHROUGH PASS");return 0;
 }
 ''')
-        subprocess.run(['cc','-O2','-DCOUNT='+str(count),*(['-DCOLLISION'] if collision else []),*(['-DDISTINCT'] if distinct else []),*(['-DABRUPT'] if abrupt else []),*(['-DZERO'] if zero else []),*(['-DEXPECTED_RC=-1','-DEXPECTED_ERR=9'] if negative else []),str(source),'-o',str(app)],check=True)
+        subprocess.run(['cc','-O2','-DCOUNT='+str(count),*(['-DREUSE_OUTPUT','-DOUTPUT_FD='+str(513 if reuse_counts else 512)] if reuse or reuse_counts else []),*(['-DCOLLISION'] if collision else []),*(['-DDISTINCT'] if distinct else []),*(['-DABRUPT'] if abrupt else []),*(['-DZERO'] if zero else []),*(['-DEXPECTED_RC=-1','-DEXPECTED_ERR=9'] if negative else []),str(source),'-o',str(app)],check=True)
         mock=root/'mock.c';mock.write_text('''#ifndef EXPECTED_RC
 #define EXPECTED_RC 123
 #define EXPECTED_ERR 16
@@ -77,12 +81,14 @@ int ioctl(int fd,unsigned long command,...) {
 }
 ''');real=root/'real.so';subprocess.run(['cc','-shared','-fPIC','-DCOUNT='+str(count),*(['-DCOLLISION'] if collision else []),*(['-DDISTINCT'] if distinct else []),*(['-DZERO'] if zero else []),*(['-DEXPECTED_RC=-1','-DEXPECTED_ERR=9'] if negative else []),str(mock),'-o',str(real)],check=True)
         observer=root/'observer.c';observer.write_text((ROOT/'tools/zt30_ioctl_trace.c').read_text().replace('fs.f_type!=TMPFS_MAGIC','0'))
-        lib=root/'observer.so';subprocess.run(['cc','-std=gnu11','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared','-DZT30_IOCTL_VENDOR_EXE="'+(str(root/'different') if inactive else str(app))+'"','-DZT30_IOCTL_FIRST_DEVICE="/dev/null"',str(observer),'-ldl','-o',str(lib)],check=True)
-        output=root/'ioctl.bin'
+        (root/'zt30_trace_output.h').write_text((ROOT/'tools/zt30_trace_output.h').read_text().replace('fs.f_type!=TMPFS_MAGIC','0'))
+        lib=root/'observer.so';subprocess.run(['cc','-std=gnu11','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared','-DZT30_IOCTL_VENDOR_EXE="'+(str(root/'different') if inactive else str(app))+'"','-DZT30_IOCTL_FIRST_DEVICE="/dev/null"',*(['-DZT30_USB_TRACE','-DZT30_USB_DEVICE="'+('/dev/does-not-exist' if missing else '/dev/null')+'"'] if usb else []),str(observer),'-ldl','-o',str(lib)],check=True)
+        output=root/('usb.bin' if usb else 'ioctl.bin');count_file=root/('usb-counts.bin' if usb else 'ioctl-counts.bin')
         if existing:output.write_bytes(b'do not overwrite')
-        if counts_existing:(root/'ioctl-counts.bin').write_bytes(b'keep original counts')
-        result=subprocess.run([str(app)],env={'LD_PRELOAD':str(lib)+':'+str(real),'APCG_IOCTL_TRACE':str(output)},capture_output=True,text=True,timeout=10)
-        return result,output.read_bytes() if output.exists() else b'',(root/'ioctl-counts.bin').read_bytes() if (root/'ioctl-counts.bin').exists() else b''
+        if counts_existing:count_file.write_bytes(b'keep original counts')
+        result=subprocess.run([str(app)],env={'LD_PRELOAD':str(lib)+':'+str(real),('APCG_USB_TRACE' if usb else 'APCG_IOCTL_TRACE'):str(output)},capture_output=True,text=True,timeout=10,cwd=root)
+        if reuse or reuse_counts:self.assertEqual((root/'output-sink').read_bytes(),b'keep original sink')
+        return result,output.read_bytes() if output.exists() else b'',count_file.read_bytes() if count_file.exists() else b''
     def test_return_errno_and_opaque_invalid_pointer(self):
         result,data,counts=self.fixture();self.assertEqual(result.returncode,0,result.stderr);self.assertIn('PASSTHROUGH PASS',result.stdout)
         self.assertEqual(data[:8],b'ZT30IOT0');self.assertEqual((len(data)-8)%64,0)
