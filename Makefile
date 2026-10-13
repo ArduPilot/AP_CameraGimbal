@@ -57,6 +57,7 @@ export A8_WEB_PASSWORD
 SUPPORTPROXY_ROOT ?= $(abspath ../SupportProxy)
 SITL_BUILD := build/sitl
 A8_SITL_BUILD := build/a8-sitl
+ZT30_SITL_BUILD := build/zt30-sitl
 export MT11_WEB_PASSWORD
 export MT11_ROOT_PASSWORD
 export MT11_ROOT_PASSWORD_HASH_FILE
@@ -534,7 +535,7 @@ z1mini_sitl-run: z1mini_sitl
 targets:
 	python3 tools/export_targets.py
 
-sitl a8_sitl zr10_sitl z1mini_sitl: targets
+sitl a8_sitl zr10_sitl z1mini_sitl zt30_sitl: targets
 
 .PHONY: targets-test
 targets-test: targets
@@ -544,3 +545,203 @@ targets-test: targets
 z1mini_sitl-test: z1mini_sitl
 	python3 sitl/test_z1mini_sitl.py --build $(Z1MINI_SITL_BUILD) --orientation upright
 	python3 sitl/test_z1mini_sitl.py --build $(Z1MINI_SITL_BUILD) --orientation inverted
+
+.PHONY: zt30_sitl zt30_sitl-run zt30_sitl-test zt30_package
+zt30_sitl: generated $(ZT30_SITL_BUILD)/rgb.h264 $(ZT30_SITL_BUILD)/thermal.h264 $(ZT30_SITL_BUILD)/photo.jpg
+	$(MAKE) -C camera_app sitl CAMERA_BACKEND=zt30 SITL_OBJDIR=build/zt30-sitl SITL_TARGET=$(abspath $(ZT30_SITL_BUILD)/camera-app)
+	$(MAKE) -C web sitl CAMERA_BACKEND=zt30 SITL_TARGET=$(abspath $(ZT30_SITL_BUILD)/zt30-web) SITL_WEB_BINARY=zt30-web SITL_ROOT=$(abspath $(ZT30_SITL_BUILD)/runtime) SITL_BIN_ROOT=$(abspath $(ZT30_SITL_BUILD))
+	python3 sitl/prepare_runtime.py $(ZT30_SITL_BUILD)/runtime packaging/zt30/camera.ini
+
+$(ZT30_SITL_BUILD)/rgb.h264: $(SITL_BUILD)/rgb.h264
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(ZT30_SITL_BUILD)/photo.jpg: $(SITL_BUILD)/photo.jpg
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(ZT30_SITL_BUILD)/thermal.h264:
+	mkdir -p $(dir $@)
+	ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=640x512:rate=15 -vf format=gray -t 2 -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -x264-params keyint=15:min-keyint=15:scenecut=0:repeat-headers=1:aud=1 -f h264 -y $@
+
+zt30_sitl-run: zt30_sitl
+	CAMERA_GIMBAL_SITL_BACKEND=zt30 CAMERA_GIMBAL_SITL_BUILD=$(abspath $(ZT30_SITL_BUILD)) sh sitl/run.sh
+
+zt30_sitl-test: zt30_sitl camera-definitions
+	python3 sitl/test_zt30.py --build $(ZT30_SITL_BUILD)
+	python3 sitl/test_zt30.py --build $(ZT30_SITL_BUILD) --orientation upright --no-version-reply
+
+# Do not generate a deployable image until native drivers and recovery qualify.
+zt30_package:
+	@echo 'ZT30 native packaging is not qualified; use make zt30_sitl' >&2
+	@exit 2
+
+# ABI observation probe; no explicit pipeline Init/Exit/bind/buffer calls.
+ZT30_CROSS_COMPILE ?= $(A8_CROSS_COMPILE)
+.PHONY: zt30_abi_probe zt30_abi_probe-test
+zt30_abi_probe: build/zt30/abi-probe
+build/zt30/abi-probe: tools/zt30_abi_probe.cpp tools/check_zt30_elf.py $(wildcard camera_app/src/backends/a8/mi/star/*.h) camera_app/src/backends/a8/mi/symbols.h camera_app/src/backends/a8/mi/types.h camera_app/src/backends/a8/mi/macros.h
+	mkdir -p $(dir $@)
+	$(ZT30_CROSS_COMPILE)g++ -O2 -std=gnu++17 -Wall -Wextra -Werror -Wno-unused-function -I. $< -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_abi_probe-test:
+	python3 tests/test_zt30_abi_probe.py
+	python3 tests/test_zt30_elf.py
+
+.PHONY: zt30_ram_watchdog-test
+zt30_ram_watchdog-test:
+	python3 tests/test_zt30_vendor_exec.py
+	python3 tests/test_zt30_ram_watchdog.py
+
+.PHONY: zt30_vendor_exec
+zt30_vendor_exec: build/zt30/vendor-exec
+build/zt30/vendor-exec: tools/zt30_vendor_exec.c tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror $< -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+
+# Diagnostic UART observation library; never included in installed firmware.
+.PHONY: zt30_uart_trace zt30_uart_trace-test
+zt30_uart_trace: build/zt30/uart-trace.so
+build/zt30/uart-trace.so: tools/zt30_uart_trace.c tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC -shared $< -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf --shared-library
+zt30_uart_trace-test:
+	python3 tests/test_zt30_uart_trace.py
+
+.PHONY: zt30_control_probe zt30_control_probe-test
+zt30_control_probe: build/zt30/control-probe
+build/zt30/control-probe: tools/zt30_control_probe.cpp camera_app/src/protocol/siyi.cpp camera_app/src/protocol/private_uart.cpp tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror -Icamera_app/include $(filter %.cpp,$^) -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_control_probe-test:
+	python3 tests/test_zt30_control_probe.py
+
+ZT30_HOST_CXX ?= c++
+.PHONY: zt30_focus-test
+zt30_focus-test:
+	@mkdir -p build/tests
+	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -I. tests/test_zt30_focus.cpp -o build/tests/zt30-focus-test
+	build/tests/zt30-focus-test
+
+.PHONY: zt30_owned_sys_probe zt30_owned_sys_probe-test
+zt30_owned_sys_probe: build/zt30/owned-sys-probe
+build/zt30/owned-sys-probe: tools/zt30_owned_sys_probe.cpp tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror $< -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_owned_sys_probe-test:
+	python3 tests/test_zt30_owned_sys_probe.py
+
+.PHONY: zt30_kmsg_capture zt30_kmsg_capture-test
+zt30_kmsg_capture: build/zt30/kmsg-capture
+build/zt30/kmsg-capture: tools/zt30_kmsg_capture.c tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror $< -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_kmsg_capture-test:
+	python3 tests/test_zt30_kmsg_capture.py
+
+.PHONY: zt30_ioctl_trace zt30_ioctl_trace-test
+zt30_ioctl_trace: build/zt30/ioctl-trace.so
+build/zt30/ioctl-trace.so: tools/zt30_ioctl_trace.c tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC -shared $< -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf --shared-library
+zt30_ioctl_trace-test:
+	python3 tests/test_zt30_ioctl_trace.py
+
+.PHONY: zt30_self_read_probe zt30_self_read_probe-test
+zt30_self_read_probe: build/zt30/self-read-probe
+build/zt30/self-read-probe: tools/zt30_self_read_probe.c tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
+	@mkdir -p $(dir $@)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror $< -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_self_read_probe-test:
+	python3 tests/test_zt30_self_read_probe.py
+	python3 tests/test_zt30_stack_guard.py
+
+.PHONY: zt30_payload_probe zt30_payload_probe-test
+zt30_payload_probe: build/zt30/payload-probe
+build/zt30/payload-probe: tools/zt30_payload_probe.c tools/zt30_ioctl_payload.h tools/zt30_ioctl_registry.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
+	@mkdir -p $(dir $@)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror $< -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_payload_probe-test:
+	python3 tests/test_zt30_payload_probe.py
+
+.PHONY: zt30_ioctl_payload_trace
+zt30_ioctl_payload_trace: build/zt30/ioctl-payload-trace.so
+build/zt30/ioctl-payload-trace.so: tools/zt30_ioctl_payload_trace.c tools/zt30_trace_output.h tools/zt30_ioctl_trace.c tools/zt30_ioctl_payload.h tools/zt30_ioctl_registry.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
+	@mkdir -p $(dir $@)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -shared -fPIC $< -ldl -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --shared-library --readelf $(ZT30_CROSS_COMPILE)readelf
+
+.PHONY: zt30_ioctl_payload_trace-test
+zt30_ioctl_payload_trace-test:
+	python3 tests/test_zt30_ioctl_payload_trace.py
+
+.PHONY: zt30_media_abi-test
+zt30_media_abi-test:
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_media_abi.cpp -o /tmp/apcg-test-zt30-media-abi
+	/tmp/apcg-test-zt30-media-abi
+
+.PHONY: zt30_rgb_probe zt30_rgb_owner-test
+zt30_rgb_probe: build/zt30/rgb-probe build/zt30/rgb-sdk.so
+build/zt30/rgb-probe: tools/zt30_rgb_probe.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/rgb_owner.h camera_app/src/backends/zt30/media_graph.h camera_app/src/backends/zt30/mi/abi.h camera_app/src/backends/zt30/mi/api.h camera_app/src/backends/zt30/mi/encoder_abi.h camera_app/src/backends/zt30/mi/native_sdk.h
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror $(filter %.cpp,$^) -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_rgb_owner-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_rgb_owner.cpp camera_app/src/backends/zt30/rgb_owner.cpp -o build/tests/zt30-rgb-owner-test
+	build/tests/zt30-rgb-owner-test
+
+ZT30_SDK_LIBDIR ?=
+build/zt30/rgb-sdk.so: tools/zt30_rgb_sdk.c
+	@test -n '$(ZT30_SDK_LIBDIR)' || { echo 'ZT30_SDK_LIBDIR must point to the captured ZT30 /config/lib' >&2; exit 1; }
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_sensor -lmi_vif -lispalgo -lcus3a -lmi_isp -lmi_scl -lm -lpthread -Wl,--as-needed -o $@
+	python3 tools/check_zt30_elf.py $@ --shared-library --readelf $(ZT30_CROSS_COMPILE)readelf
+
+.PHONY: zt30_rgb_sdk-test
+zt30_rgb_sdk-test:
+	python3 tests/test_zt30_rgb_sdk.py
+
+.PHONY: zt30_encoder_owner-test
+zt30_encoder_owner-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_encoder_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp -o build/tests/zt30-encoder-owner-test
+	build/tests/zt30-encoder-owner-test
+
+.PHONY: zt30_encoder_probe
+zt30_encoder_probe: build/zt30/encoder-probe build/zt30/encoder-sdk.so
+build/zt30/encoder-probe: tools/zt30_rgb_probe.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp camera_app/src/backends/zt30/rgb_owner.h camera_app/src/backends/zt30/encoder_owner.h camera_app/src/backends/zt30/media_graph.h camera_app/src/backends/zt30/mi/abi.h camera_app/src/backends/zt30/mi/api.h camera_app/src/backends/zt30/mi/encoder_abi.h camera_app/src/backends/zt30/mi/native_sdk.h
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror -DZT30_ENCODER_PROBE $(filter %.cpp,$^) -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+build/zt30/encoder-sdk.so: tools/zt30_rgb_sdk.c
+	@test -n '$(ZT30_SDK_LIBDIR)' || { echo 'ZT30_SDK_LIBDIR must point to the captured ZT30 /config/lib' >&2; exit 1; }
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_sensor -lmi_vif -lispalgo -lcus3a -lmi_isp -lmi_scl -lmi_venc -lm -lpthread -Wl,--as-needed -o $@
+	python3 tools/check_zt30_elf.py $@ --shared-library --readelf $(ZT30_CROSS_COMPILE)readelf
+
+.PHONY: zt30_pts_clock-test
+zt30_pts_clock-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_pts_clock.cpp -o build/tests/zt30-pts-clock-test
+	build/tests/zt30-pts-clock-test
+
+include tools/zt30_stream.mk
+
+.PHONY: zt30_vui_sdk-test
+zt30_vui_sdk-test:
+	python3 tests/test_zt30_vui_sdk.py
+
+.PHONY: zt30_media_backend-test
+zt30_media_backend-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror -Icamera_app/include -Iinclude tests/test_zt30_media_backend.cpp camera_app/src/backends/zt30/media_backend.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp -lpthread -Wl,--wrap=pthread_create -o build/tests/zt30-media-backend-test
+	build/tests/zt30-media-backend-test

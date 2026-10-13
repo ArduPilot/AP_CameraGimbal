@@ -56,7 +56,7 @@ The `apcg.thermal.v1` JSON contains:
 | `gain` | MT11 gain value (0 low, 1 high); -1 until known |
 | `minimum_raw`, `maximum_raw`, `minimum_c`, `maximum_c` | Actual extrema of this frame |
 | `rotation_deg` | Rotation to upright display, 0 or 180; native pixels remain untouched |
-| `hfov_deg`, `calibration` | Native thermal nominal horizontal FOV, `nominal_pinhole` |
+| `hfov_deg`, `calibration` | Native thermal nominal horizontal FOV and `nominal_pinhole`; unknown geometry is `null` with calibration `unknown` |
 | `altitude_datum`, `gimbal_frame` | AMSL; `roll_pitch_level_yaw_vehicle` |
 | `telemetry` | Existing `apcg.telemetry.v1` capture snapshot, including UTC microseconds, position, NED velocity, vehicle and gimbal attitudes, yaw rates and individual source ages |
 

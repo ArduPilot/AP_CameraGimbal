@@ -97,7 +97,7 @@ def main():
     parser.add_argument('--skip-system', action='store_true')
     parser.add_argument('--with-tool-build-deps', action='store_true',
                         help='also install prerequisites for rebuilding the prebuilt MT11 tools')
-    parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'z1mini'],
+    parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'zt30', 'z1mini'],
                         default=['mt11', 'a8', 'zr10', 'z1mini'])
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
@@ -123,8 +123,12 @@ def main():
     run('git', 'submodule', 'update', '--init', '--recursive')
     run('sh', 'tools/bootstrap_dependencies.sh', str(BUILD / 'deps'))
     settings = {}
-    if 'a8' in args.targets:
-        settings['A8_CROSS_COMPILE'] = toolchain('a8')
+    if 'a8' in args.targets or 'zt30' in args.targets:
+        compiler = toolchain('a8')
+        if 'a8' in args.targets:
+            settings['A8_CROSS_COMPILE'] = compiler
+        if 'zt30' in args.targets:
+            settings['ZT30_CROSS_COMPILE'] = compiler
     if 'zr10' in args.targets:
         run('sh', 'tools/bootstrap_zr10_toolchain.sh')
     if 'z1mini' in args.targets:

@@ -111,6 +111,9 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     }
     std::lock_guard<std::mutex> guard(s->lock);
     ++s->sequence;
+    char hfov_json[32] = "null";
+    const bool known_fov = isfinite(hfov) && hfov > 0 && hfov < 180;
+    if (known_fov) snprintf(hfov_json,sizeof(hfov_json),"%.6f",double(hfov));
     char json[CA_VIDEO_METADATA_JSON_MAX+2048];
     int n = snprintf(json,sizeof(json),
         "{\"schema\":\"apcg.thermal.v1\",\"frame_id\":%llu,\"capture_monotonic_us\":%llu,"
@@ -118,13 +121,13 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
         "\"pixel_format\":\"gray16le\",\"bits_per_sample\":16,"
         "\"temperature_scale_k\":0.015625,\"temperature_offset_k\":0,\"gain\":%d,"
         "\"minimum_raw\":%u,\"maximum_raw\":%u,\"minimum_c\":%.6f,\"maximum_c\":%.6f,"
-        "\"rotation_deg\":%u,\"hfov_deg\":%.6f,\"calibration\":\"nominal_pinhole\","
+        "\"rotation_deg\":%u,\"hfov_deg\":%s,\"calibration\":\"%s\","
         "\"altitude_datum\":\"AMSL\",\"gimbal_frame\":\"roll_pitch_level_yaw_vehicle\","
         "\"telemetry\":%s}",
         (unsigned long long)s->sequence,(unsigned long long)now,
         s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,gain==255?-1:int(gain),
         minimum,maximum,minimum/64.0-273.15,maximum/64.0-273.15,
-        rotated?180:0,double(hfov),telemetry);
+        rotated?180:0,hfov_json,known_fov?"nominal_pinhole":"unknown",telemetry);
     if (n<0 || size_t(n)>=sizeof(json)) return;
     memcpy(s->pixels.data(),pixels,640U*512U*sizeof(uint16_t));
     s->json.assign(json,size_t(n)); s->capture_us=now;

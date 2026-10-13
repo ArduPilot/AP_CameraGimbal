@@ -43,7 +43,7 @@ extern "C" void overlay_test_layout(unsigned out[5]) {
 ''')
         subprocess.run(['c++', '-std=gnu++17', '-Wno-missing-field-initializers', '-shared', '-fPIC', '-Wall', '-Wextra', '-Werror', '-std=gnu++17',
                         '-I'+str(ROOT/'include'), '-I'+str(ROOT/'camera_app/include'),
-                        '-DAPCAM_TARGET=APCAM_TARGET_MT11', str(ROOT/'camera_app/src/media/overlay.cpp'),
+                        '-DAPCAM_TARGET='+getattr(cls, 'target', 'APCAM_TARGET_MT11'), str(ROOT/'camera_app/src/media/overlay.cpp'),
                         str(layout_source), '-lm', '-o', str(path)], check=True)
         cls.lib = C.CDLL(str(path))
         cls.lib.overlay_test_layout.argtypes = [C.POINTER(C.c_uint)]
@@ -160,6 +160,17 @@ extern "C" void overlay_test_layout(unsigned out[5]) {
         finally:
             self.lib.ca_overlay_free(bitmaps)
         self.assertTrue(all(not b.pixels for b in bitmaps))
+
+
+class UnknownThermalFOV(unittest.TestCase):
+    target = 'APCAM_TARGET_ZT30'
+    setUpClass = classmethod(Overlays.setUpClass.__func__)
+    geometry = Overlays.geometry
+
+    def test_unknown_thermal_box_is_absent(self):
+        for fov in (84.5, 58.1, 2.14):
+            self.assertEqual(self.geometry(cross=False, fov=fov).count, 0)
+            self.assertEqual(self.geometry(cross=True, fov=fov).count, 4)
 
 
 if __name__ == '__main__':
