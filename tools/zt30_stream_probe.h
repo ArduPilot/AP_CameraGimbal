@@ -16,7 +16,8 @@ public:
 #endif
         ca_rtsp_close(server);
     }
-    bool open(const char *marker) {
+    bool open(const char *marker,bool wide=false) {
+        timed_gates=wide;
         char gate[160]{};
         std::memcpy(gate,marker,sizeof(gate));
         char *name=std::strrchr(gate,'/');
@@ -34,21 +35,31 @@ public:
         if(ca_rtsp_open(&server,18554,"video1",codec,30)) { std::fprintf(stderr,"RTSP OPEN FAIL errno=%d\n",errno);return false; }
         // This diagnostic builds xop without its asynchronous SIGTERM-ignore
         // policy; retain the explicit process-owned stop handlers.
+        #ifndef ZT30_RAM_FACTORY
         signal(SIGTERM,stop);signal(SIGINT,stop);
+#endif
         std::printf("RTSP_READY pid=%ld port=18554 path=video1\n",long(getpid()));
-        const uint64_t deadline=monotonic_ns()+8000000000ULL;
+        const uint64_t begin=monotonic_ns(),deadline=begin+(wide?6000000000ULL:8000000000ULL);
         while(!stopped && monotonic_ns()<deadline) {
-            if(!lstat(gate,&st))return S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+            if(!lstat(gate,&st)) {
+                const bool valid=S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+                if(timed_gates)std::printf("STREAM_CLIENT_GATE valid=%d elapsed_ns=%llu\n",int(valid),static_cast<unsigned long long>(monotonic_ns()-begin));
+                return valid;
+            }
             if(errno!=ENOENT)return false;
             pause_ms(20);
         }
         return false;
     }
     bool drained() {
-        const uint64_t deadline=monotonic_ns()+2000000000ULL;
+        const uint64_t begin=monotonic_ns(),deadline=begin+2000000000ULL;
         struct stat st{};
         while(!stopped && monotonic_ns()<deadline) {
-            if(!lstat(done,&st))return S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+            if(!lstat(done,&st)) {
+                const bool valid=S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+                if(timed_gates)std::printf("STREAM_DRAIN_GATE valid=%d elapsed_ns=%llu\n",int(valid),static_cast<unsigned long long>(monotonic_ns()-begin));
+                return valid;
+            }
             if(errno!=ENOENT)return false;
             pause_ms(20);
         }
@@ -92,6 +103,7 @@ private:
     static constexpr ca_video_codec codec=CA_VIDEO_H265;
 #endif
     char done[160]{};
+    bool timed_gates=false;
     ca_rtsp *server=nullptr;
     ca_zt30::PtsClock clock;
 };

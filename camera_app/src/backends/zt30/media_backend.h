@@ -19,11 +19,11 @@ struct MediaHooks {
 };
 // The production backend interface with an explicitly bounded first native
 // qualification. No factory/package activation or unqualified actuator control.
-class MediaBackend final : public APC_Media_Backend {
+class MediaBackend : public APC_Media_Backend {
 public:
     MediaBackend(Api &api,EncoderApi &enc,PacketMemory &memory):rgb(api),encoder(api,enc,memory) {}
     ~MediaBackend() override;
-    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity);
+    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom);
     int shutdown(); // join first, then encoder/RGB; caller must not unload SDK on error
     bool finished() const { return done.load(); }
     int result() const { return worker_result.load(); }
@@ -41,8 +41,8 @@ public:
     int set_lens_zoom(enum ca_media_lens,float) override { return unsupported(); }
     float hfov(bool) const override { return 0; } // physical zoom not known
     unsigned frame_rate(bool thermal) const override { return thermal?0:30; }
-    int set_lens(enum ca_media_lens value) override { return value==CA_MEDIA_LENS_ZOOM?0:unsupported(); }
-    enum ca_media_lens lens() const override { return CA_MEDIA_LENS_ZOOM; }
+    int set_lens(enum ca_media_lens value) override { return value==lens()?0:unsupported(); }
+    enum ca_media_lens lens() const override { return source==EncoderSource::Wide?CA_MEDIA_LENS_WIDE:CA_MEDIA_LENS_ZOOM; }
     int set_thermal_main(bool) override { return unsupported(); }
     bool thermal_main() const override { return false; }
     int set_side_by_side(bool) override { return unsupported(); }
@@ -69,6 +69,7 @@ private:
     RgbOwner rgb;
     EncoderOwner encoder;
     MediaHooks hooks{};
+    EncoderSource source=EncoderSource::Zoom;
     EncodedFrame copied{};
     pthread_t thread{};
     bool used=false,thread_started=false,unsafe_sdk_failure=false;

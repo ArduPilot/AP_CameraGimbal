@@ -10,6 +10,7 @@ namespace ca_zt30 {
  * channel state retains cached descriptors across DestroyChn/CreateChn.
  */
 enum class EncoderCodec : uint32_t { H264=2, H265=3 };
+enum class EncoderSource : uint32_t { Zoom=0, Wide=1 };
 // ReadOnly is the qualified default: never calls SetH264Vui.
 // Fixed30 is an explicit, unqualified live-write diagnostic.
 enum class H264Timing { Fixed30, ReadOnly };
@@ -29,7 +30,8 @@ public:
     ~EncoderOwner() { close(); }
     EncoderOwner(const EncoderOwner&)=delete;
     EncoderOwner &operator=(const EncoderOwner&)=delete;
-    int open(EncoderCodec codec=EncoderCodec::H265,H264Timing timing=H264Timing::ReadOnly); // zoom SCL0/channel0/port1, 1280x720
+    int open(EncoderCodec codec=EncoderCodec::H265,H264Timing timing=H264Timing::ReadOnly,
+             EncoderSource source=EncoderSource::Zoom); // SCL0/channel0 or1/port1, 1280x720
     // 1: copied frame, 0: no frame ready, -1: failure (raw_status retained).
     int copy_frame(EncodedFrame &output);
     int read_h264_vui(H264Vui &output); // only on a ready H264 channel; failure poisons owner
@@ -48,6 +50,7 @@ private:
     PacketMemory &m;
     H264Vui initial_vui{},verified_vui{};
     bool got_default_vui=false,h264=false;
+    uint32_t source_channel=0;
     bool used=false,unhealthy=false,device=false,channel=false,started=false,bound=false;
     EncoderPacket packets[32]{};
 };

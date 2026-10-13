@@ -87,7 +87,7 @@ static bool write_all(int fd,const uint8_t *data,size_t bytes) {
 #ifdef ZT30_NATIVE_MEDIA_PROBE
 #include "zt30_native_media_probe.h"
 #endif
-static int capture_encoder(ca_zt30::NativeSdk &sdk,const char *marker,uint8_t *buffer,bool observe_vui) {
+static int capture_encoder(ca_zt30::NativeSdk &sdk,const char *marker,uint8_t *buffer,bool observe_vui,bool wide=false) {
 #ifndef ZT30_H264_WEB_PROBE
     (void)observe_vui;
 #endif
@@ -111,16 +111,18 @@ static int capture_encoder(ca_zt30::NativeSdk &sdk,const char *marker,uint8_t *b
     if(!meta) { close(fd);close(meta_fd);return 20; }
 #ifdef ZT30_STREAM_PROBE
     StreamProbe stream;
-    if(!stream.open(marker) || !stream.observe(sdk)) { close(fd);std::fclose(meta);return 26; }
+    if(!stream.open(marker,wide) || !stream.observe(sdk)) { close(fd);std::fclose(meta);return 26; }
 #endif
     ca_zt30::EncodedFrame frame{};frame.data=buffer;frame.capacity=4*1024*1024;
     ca_zt30::PacketMemory memory{packet_slot,copy_packet};
     ca_zt30::EncoderOwner encoder(sdk.api,sdk.encoder,memory);
 #ifdef ZT30_H264_WEB_PROBE
     std::printf("H264_VUI_POLICY %s\n",observe_vui?"read-only":"fixed30");
-    const int opened=encoder.open(ca_zt30::EncoderCodec::H264,observe_vui?ca_zt30::H264Timing::ReadOnly:ca_zt30::H264Timing::Fixed30);
+    const int opened=encoder.open(ca_zt30::EncoderCodec::H264,observe_vui?ca_zt30::H264Timing::ReadOnly:ca_zt30::H264Timing::Fixed30,
+                                  wide?ca_zt30::EncoderSource::Wide:ca_zt30::EncoderSource::Zoom);
 #else
-    const int opened=encoder.open();
+    const int opened=encoder.open(ca_zt30::EncoderCodec::H265,ca_zt30::H264Timing::ReadOnly,
+                                  wide?ca_zt30::EncoderSource::Wide:ca_zt30::EncoderSource::Zoom);
 #endif
 #ifdef ZT30_H264_WEB_PROBE
     if(encoder.have_default_vui()) {
@@ -187,6 +189,29 @@ static int capture_encoder(ca_zt30::NativeSdk &sdk,const char *marker,uint8_t *b
     // before removing sessions; never infer network delivery from PushFrame.
     if(!code && !stream.drained())code=28;
 #endif
+    if(wide && !code) {
+        char consumer[160]{};
+        std::memcpy(consumer,marker,sizeof(consumer));
+        char *leaf=std::strrchr(consumer,'/');
+        if(!leaf || size_t(leaf+1-consumer)+sizeof("consumer.sampled")>sizeof(consumer))code=29;
+        else {
+            std::memcpy(leaf+1,"consumer.sampled",sizeof("consumer.sampled"));
+            std::printf("ENCODER_CAPTURE_READY source_scl=1 venc=1 frames=%u bytes=%zu\n",frames,bytes);
+            const uint64_t hold=monotonic_ns()+6000000000ULL;
+            bool sampled=false;
+            while(!stopped && monotonic_ns()<hold) {
+                struct stat st{};
+                if(!lstat(consumer,&st)) {
+                    sampled=S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+                    break;
+                }
+                if(errno!=ENOENT)break;
+                pause_ms(20);
+            }
+            if(!sampled || stopped) { std::fprintf(stderr,"CONSUMER_GATE FAIL\n");code=29; }
+            else std::printf("CONSUMER_GATE PASS wide bind snapshot acknowledged\n");
+        }
+    }
     const int closed=encoder.close();
     std::printf("ENCODER CLOSE raw=%d frames=%u bytes=%zu elapsed_ns=%llu\n",closed,frames,bytes,static_cast<unsigned long long>(monotonic_ns()-begin));
     if(closed)_exit(25); // callback/mapping cleanup must precede RGB/SYS exit
@@ -212,15 +237,28 @@ int main(int argc,char **argv) {
 #else
     const char *activation="--activate-owned-rgb";
 #endif
-    bool observe_vui=false,native_media=false;
+    bool observe_vui=false,native_media=false,wide=false,graph_only=false;
+#if defined(ZT30_H264_WEB_PROBE) && !defined(ZT30_NATIVE_MEDIA_PROBE)
+    wide=argc>=2 && !std::strcmp(argv[1],"--activate-owned-wide-h264-web");
+    if(wide)activation="--activate-owned-wide-h264-web";
+#elif !defined(ZT30_ENCODER_PROBE)
+    wide=argc>=2 && !std::strcmp(argv[1],"--activate-owned-wide-rgb");
+    graph_only=wide && argc==3 && !std::strcmp(argv[2],"--graph-only");
+    if(wide)activation="--activate-owned-wide-rgb";
+#elif !defined(ZT30_STREAM_PROBE)
+    // Standalone HEVC qualification only; streaming/web/full-app remain zoom.
+    wide=argc==2 && !std::strcmp(argv[1],"--activate-owned-wide-encoder");
+    if(wide)activation="--activate-owned-wide-encoder";
+#endif
 #ifdef ZT30_H264_WEB_PROBE
     observe_vui=argc==3 && !std::strcmp(argv[2],"--observe-h264-vui");
+    if(wide && !observe_vui)return 2; // Wide never writes H264 VUI.
 #ifdef ZT30_NATIVE_MEDIA_PROBE
     native_media=argc==4 && !std::strcmp(argv[2],"--observe-h264-vui") && !std::strcmp(argv[3],"--native-media");
     if(native_media)observe_vui=true;
 #endif
 #endif
-    if((argc!=2 && !observe_vui) || std::strcmp(argv[1],activation))return 2;
+    if((argc!=2 && !observe_vui && !graph_only) || std::strcmp(argv[1],activation))return 2;
 #ifdef ZT30_NATIVE_MEDIA_PROBE
     if(!native_media)return 2;
 #endif
@@ -234,6 +272,16 @@ int main(int argc,char **argv) {
     struct stat st{};
     if(!lstat(marker,&st) || errno!=ENOENT)return 3;
     if(!lstat(sampled,&st) || errno!=ENOENT)return 3;
+#ifdef ZT30_ENCODER_PROBE
+    if(wide) {
+        char consumer[160]{};
+        std::memcpy(consumer,marker,sizeof(consumer));
+        char *leaf=std::strrchr(consumer,'/');
+        if(!leaf || size_t(leaf+1-consumer)+sizeof("consumer.sampled")>sizeof(consumer))return 3;
+        std::memcpy(leaf+1,"consumer.sampled",sizeof("consumer.sampled"));
+        if(!lstat(consumer,&st) || errno!=ENOENT)return 3;
+    }
+#endif
     std::memcpy(bundle,marker,sizeof(bundle));
     name=std::strrchr(bundle,'/');
     if(!name || size_t(name+1-bundle)+sizeof("rgb-sdk.so")>sizeof(bundle))return 3;
@@ -264,14 +312,25 @@ int main(int argc,char **argv) {
 #endif
     ca_zt30::RgbOwner rgb(sdk.api);
     const uint64_t begin=monotonic_ns();
-    const int opened=rgb.open(false);
+    const int opened=rgb.open(wide);
     if(opened) { std::fprintf(stderr,"OPEN FAIL raw=%d call=%s\n",opened,rgb.failed_call?rgb.failed_call:"unknown");_exit(5); }
-    std::printf("BIND_READY pid=%ld elapsed_ns=%llu sensor=0 vif=0 isp=0 scl=0 port=1 size=1280x720\n",long(getpid()),static_cast<unsigned long long>(monotonic_ns()-begin));
+    const auto &path=wide?ca_zt30::WidePath:ca_zt30::ZoomPath;
+    std::printf("BIND_READY pid=%ld elapsed_ns=%llu sensor=%u vif=%u isp=%u scl=%u port=1 size=1280x720%s\n",long(getpid()),static_cast<unsigned long long>(monotonic_ns()-begin),path.sensor_pad,path.vif_device,path.isp_channel,path.scl_channel,graph_only?" graph_only=1":"");
     // Host requires independently parsed, advancing hardware frame counters.
+    const uint64_t pre_window=wide?15000000000ULL:10000000000ULL;
+#ifdef ZT30_ENCODER_PROBE
+#ifdef ZT30_H264_WEB_PROBE
+    const uint64_t deadline=monotonic_ns()+(wide?8000000000ULL:10000000000ULL);
+#else
     const uint64_t deadline=monotonic_ns()+10000000000ULL;
+#endif
+    (void)pre_window;
+#else
+    const uint64_t deadline=monotonic_ns()+(graph_only?25000000000ULL:pre_window);
+#endif
     bool frames=false;
     while(!stopped && monotonic_ns()<deadline) {
-        if(!lstat(marker,&st)) {
+        if(!lstat(graph_only?sampled:marker,&st)) {
             if(!S_ISREG(st.st_mode) || st.st_uid!=0 || st.st_nlink!=1 || st.st_size!=0)break;
             frames=true;break;
         }
@@ -280,12 +339,31 @@ int main(int argc,char **argv) {
     }
     int code=0;
     if(!frames || stopped) { std::fprintf(stderr,"FRAME_GATE FAIL stopped=%d\n",int(stopped));code=6; }
+    else if(graph_only)std::printf("GRAPH_ONLY PASS IQ not explicitly loaded; no frame consumer\n");
     else {
+        if(wide)std::printf("IQ_LOAD sensor=%u isp=%u path=%s key=1234\n",path.sensor_pad,path.isp_channel,path.iq_file);
+#ifdef ZT30_H264_WEB_PROBE
+        const uint64_t iq_begin=monotonic_ns();
+#endif
         const int iq=rgb.load_iq();
-        if(iq) { std::fprintf(stderr,"IQ FAIL raw=%d\n",iq);code=7; }
+        if(wide)std::printf("IQ_REPLY isp=%u raw=%d\n",path.isp_channel,iq);
+#ifdef ZT30_H264_WEB_PROBE
+        if(wide)std::printf("IQ_TIMING elapsed_ns=%llu\n",static_cast<unsigned long long>(monotonic_ns()-iq_begin));
+#endif
+        // Failed IQ initialization can leave SDK callback state uncertain.
+        // Let process teardown release ownership; never unload its code here.
+        if(iq) { std::fprintf(stderr,"IQ FAIL raw=%d\n",iq);_exit(7); }
         else {
             std::printf("IQ PASS key=1234\n");
+#ifdef ZT30_ENCODER_PROBE
+#ifdef ZT30_H264_WEB_PROBE
+            const uint64_t hold_deadline=monotonic_ns()+(wide?6000000000ULL:8000000000ULL);
+#else
             const uint64_t hold_deadline=monotonic_ns()+8000000000ULL;
+#endif
+#else
+            const uint64_t hold_deadline=monotonic_ns()+(wide?12000000000ULL:8000000000ULL);
+#endif
             bool complete=false;
             while(!stopped && monotonic_ns()<hold_deadline) {
                 if(!lstat(sampled,&st)) {
@@ -299,7 +377,7 @@ int main(int argc,char **argv) {
         }
     }
 #ifdef ZT30_ENCODER_PROBE
-    if(!code)code=capture_encoder(sdk,marker,encoder_buffer.get(),observe_vui);
+    if(!code)code=capture_encoder(sdk,marker,encoder_buffer.get(),observe_vui,wide);
 #endif
     const int closed=rgb.close();
     std::printf("CLOSE raw=%d elapsed_ns=%llu\n",closed,static_cast<unsigned long long>(monotonic_ns()-begin));
@@ -309,13 +387,13 @@ int main(int argc,char **argv) {
     if(stopped && !code)code=9;
     sdk.close();
 #ifdef ZT30_H264_WEB_PROBE
-    if(!code)std::printf("RESULT PASS owned zoom RGB IQ H264 RTSP web capture and unwind; no UART/USB\n");
+    if(!code)std::printf("RESULT PASS owned %s RGB IQ H264 RTSP web capture and unwind; no UART/USB\n",wide?"wide":"zoom");
 #elif defined(ZT30_STREAM_PROBE)
     if(!code)std::printf("RESULT PASS owned zoom RGB IQ H265 RTSP capture and unwind; no UART/USB\n");
 #elif defined(ZT30_ENCODER_PROBE)
-    if(!code)std::printf("RESULT PASS owned zoom RGB IQ H265 capture and unwind; no UART/USB\n");
+    if(!code)std::printf("RESULT PASS owned %s RGB IQ H265 capture and unwind; no UART/USB\n",wide?"wide":"zoom");
 #else
-    if(!code)std::printf("RESULT PASS owned zoom RGB graph and IQ load closed; no frame pointers/encoders/UART/USB\n");
+    if(!code)std::printf("RESULT PASS owned %s RGB graph%s closed; no frame pointers/encoders/UART/USB\n",wide?"wide":"zoom",graph_only?" without explicit IQ load":" and IQ load");
 #endif
     return code;
 }

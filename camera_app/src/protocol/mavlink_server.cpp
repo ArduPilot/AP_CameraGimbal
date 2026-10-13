@@ -26,6 +26,10 @@
 #include "camera_app/video_fov.h"
 
 #include <arpa/inet.h>
+#ifdef CAMERA_APP_ZT30_RAM
+#include "camera_app/zt30_ram_peer.h"
+#include "../backends/zt30/ram_protocol.h"
+#endif
 #include <algorithm>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -696,6 +700,9 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
     if(ca_media_survey_available(server->media,server->settings.survey.lens)) info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
+#ifdef CAMERA_APP_ZT30_RAM
+    info.flags=CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
+#endif
     info.cam_definition_version = server->definition_version;
     if(ca_media_tracking_available(server->media))
         info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
@@ -916,12 +923,15 @@ static void stream_properties(const struct ca_mavlink_server *server,
     bool thermal = APCAM_HAVE_THERMAL &&
         (ca_media_thermal_main(server->media) ? stream_id == 1U
                                              : stream_id == 2U);
+    #if APCAM_NUM_STREAMS > 1
     if (stream_id == 2U) {
         ca_video_resolution_size(server->settings.sub_resolution, width, height);
         *codec = server->settings.sub_codec;
         *flags = server->stream_enabled[1] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
                                            : 0U;
-    } else {
+    } else
+    #endif
+    {
         ca_video_resolution_size(server->settings.main_resolution, width, height);
         *codec = server->settings.main_codec;
         *flags = server->stream_enabled[0] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
@@ -988,7 +998,11 @@ static void send_stream_information(struct ca_mavlink_server *server,
 {
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
+#ifdef CAMERA_APP_ZT30_RAM
+    info.bitrate=1570000U;
+#else
     info.bitrate = 4096000U;
+#endif
     info.count = stream_count();
     info.type = VIDEO_STREAM_TYPE_RTSP;
     unsigned width, height;
@@ -1974,6 +1988,9 @@ static void handle_system_time(struct ca_mavlink_server *server,
                                const mavlink_message_t *message)
 {
     /* Adopt the autopilot's UTC date if ours predates 1 September 2026 UTC. */
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)server;(void)message;return;
+#else
     const time_t earliest_valid_time = 1788220800;
     mavlink_system_time_t time;
     uint64_t unix_us;
@@ -1997,6 +2014,7 @@ static void handle_system_time(struct ca_mavlink_server *server,
     } else {
         ca_log("system time setting from MAVLink failed: %s", strerror(errno));
     }
+#endif
 }
 
 static void handle_global_position_int(
@@ -2361,6 +2379,9 @@ static void config_status(struct ca_mavlink_server *server, uint64_t hash,
 
 static void reload_config(struct ca_mavlink_server *server, uint64_t now)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)server;(void)now;return; // fixed RAM configuration, no hot reload
+#else
     if (now - server->config_check_ms < 500U) return;
     server->config_check_ms = now;
     struct stat before, after;
@@ -2434,6 +2455,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     config_status(server, hash, restart ? "restart" : "applied", restart ?
         "Live settings applied. Restart to apply mount, identity, transport, network, stream alias or SupportProxy changes." :
         "All saved settings applied without restarting the camera app.");
+#endif
 }
 
 static uint8_t handle_parameter(struct ca_mavlink_server *server,
@@ -2864,6 +2886,19 @@ static void process_message(struct ca_mavlink_server *server,
                             const struct route *route,
                             const mavlink_message_t *message)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    // Qualification accepts camera information and one fixed lens read. No parameter,
+    // actuator, clock, stream configuration or recording mutations.
+    if(message->msgid==MAVLINK_MSG_ID_COMMAND_LONG) {
+        const auto command=mavlink_msg_command_long_get_command(message);
+        if(command!=MAV_CMD_REQUEST_MESSAGE && command!=MAV_CMD_REQUEST_CAMERA_INFORMATION &&
+           command!=MAV_CMD_REQUEST_CAMERA_CAPTURE_STATUS && command!=MAV_CMD_REQUEST_VIDEO_STREAM_INFORMATION)return;
+    } else if(message->msgid==MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ) {
+        mavlink_param_ext_request_read_t request{};
+        mavlink_msg_param_ext_request_read_decode(message,&request);
+        if(!ca_zt30::ram_lens_read(request.param_index,request.param_id))return;
+    } else if(message->msgid!=MAVLINK_MSG_ID_HEARTBEAT)return;
+#endif
     /* Stay silent until automatic identity is known. Never select a GCS,
      * even one which incorrectly advertises a valid autopilot type. */
     if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 6U &&
@@ -3026,6 +3061,9 @@ static int accept_clients(struct ca_mavlink_server *server)
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&address))) { close(fd);continue; }
+        #endif
         unsigned slot;
         for (slot = 0; slot < CA_MAVLINK_CLIENTS; slot++) {
             if (server->clients[slot].fd < 0) break;
@@ -3094,6 +3132,9 @@ static int read_udp(struct ca_mavlink_server *server)
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&route.address)))continue;
+        #endif
         server->last_udp = route;
         server->have_udp_peer = true;
         feed(server, &server->udp_parser, &route, data, (size_t)received);

@@ -42,7 +42,9 @@ jobs:
       - name: Build all camera release packages
         run: make -j8 release
       - name: Build and test ZT30 bring-up tools
-        run: make zt30_abi_probe zt30_vendor_exec zt30_uart_trace zt30_control_probe zt30_owned_sys_probe zt30_kmsg_capture zt30_ioctl_trace zt30_self_read_probe zt30_ioctl_payload_trace zt30_payload_probe zt30_abi_probe-test zt30_ram_watchdog-test zt30_uart_trace-test zt30_control_probe-test zt30_focus-test zt30_owned_sys_probe-test zt30_kmsg_capture-test zt30_ioctl_trace-test zt30_self_read_probe-test zt30_payload_probe-test zt30_ioctl_payload_trace-test zt30_media_abi-test zt30_rgb_owner-test zt30_rgb_sdk-test zt30_encoder_owner-test zt30_pts_clock-test zt30_vui_sdk-test zt30_media_backend-test
+        run: make zt30_abi_probe zt30_vendor_exec zt30_uart_trace zt30_control_probe zt30_owned_sys_probe zt30_kmsg_capture zt30_ioctl_trace zt30_self_read_probe zt30_ioctl_payload_trace zt30_payload_probe zt30_abi_probe-test zt30_ram_watchdog-test zt30_uart_trace-test zt30_control_probe-test zt30_focus-test zt30_owned_sys_probe-test zt30_kmsg_capture-test zt30_ioctl_trace-test zt30_self_read_probe-test zt30_payload_probe-test zt30_ioctl_payload_trace-test zt30_media_abi-test zt30_rgb_owner-test zt30_rgb_sdk-test zt30_encoder_owner-test zt30_pts_clock-test zt30_vui_sdk-test zt30_media_backend-test zt30_ram_frontend-test
+      - name: Compile and link the bounded ZT30 RAM application
+        run: make zt30_ram_camera_build
       - name: Check packaging and UUID helpers
         run: make release-test platform-test camera-definition-test targets-test
       - name: Test native Z1-Mini overlay failures and request ordering

@@ -13,6 +13,7 @@ static EncoderStream returned;
 static uint32_t query_count=2;
 static int scenario;
 static uint32_t expected_codec=3;
+static uint32_t expected_source=0;
 static H264Vui current_vui{};
 static unsigned vui_reads=0;
 static const uint8_t sample[]={9,8,7,6,5,4};
@@ -21,13 +22,14 @@ static void ids(uint32_t dev,uint32_t chn) { assert(dev==0 && chn==1); }
 static Api system_api() {
     Api s{};
     s.sys_bind=[](uint16_t chip,Port *src,Port *dst,uint32_t a,uint32_t b,uint32_t type,uint32_t p) {
-        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==0 && src->port==1);
+        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==1);
         assert(dst->module==Venc && dst->device==0 && dst->channel==1 && dst->port==0);
         assert(a==30 && b==30 && type==1 && p==0);
         const int rc=event("bind");if(!rc)resources.insert("bind");return rc;
     };
     s.sys_unbind=[](uint16_t chip,Port *src,Port *dst) {
-        assert(chip==0 && src->module==Scl && dst->module==Venc);
+        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==1);
+        assert(dst->module==Venc && dst->device==0 && dst->channel==1 && dst->port==0);
         const int rc=event("unbind");resources.erase("bind");return rc;
     };
     return s;
@@ -207,5 +209,22 @@ int main() {
     reset();auto s=system_api();auto a=encoder_api();auto m=memory_api();
     EncoderOwner invalid(s,a,m);assert(invalid.open(static_cast<EncoderCodec>(99))==-1);
     assert(calls.empty() && resources.empty() && !invalid.ready());
+    expected_source=1;
+    // Every startup failure must unwind the selected source, including a
+    // partially started encoder; success must unbind Wide rather than Zoom.
+    for(auto codec:{EncoderCodec::H265,EncoderCodec::H264}) {
+        expected_codec=uint32_t(codec);
+        for(unsigned step=0;step<=(codec==EncoderCodec::H264?6U:5U);step++) {
+            reset();failure=step;EncoderOwner wide(s,a,m);
+            const int rc=wide.open(codec,H264Timing::ReadOnly,EncoderSource::Wide);
+            assert(rc==(step?-99:0));
+            if(!step)assert(wide.ready());
+            for(const auto &call:calls)assert(call!="vui_set");
+            assert(wide.close()==0 && resources.empty());
+        }
+    }
+    reset();EncoderOwner bad_source(s,a,m);
+    assert(bad_source.open(EncoderCodec::H265,H264Timing::ReadOnly,static_cast<EncoderSource>(99))==-1);
+    assert(calls.empty() && resources.empty() && !bad_source.ready());
     return 0;
 }
