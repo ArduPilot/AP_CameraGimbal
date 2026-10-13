@@ -236,11 +236,13 @@ class Gimbal:
         _control, sequence, opcode, payload = parse_siyi(packet)
         reply = None
         if opcode == 0x01:
-            reply = bytes((0, 4, 9, 1, 0, 0, 0, 4, 9, 0, 0, 0))
+            if getattr(self, "no_version_reply", False): return None
+            reply = (bytes.fromhex("0901007b0102007a06010079") if self.backend=="zt30"
+                     else bytes((0, 4, 9, 1, 0, 0, 0, 4, 9, 0, 0, 0)))
         elif opcode == 0x02:
             # AP_Mount_Siyi recognises the MT11's ZT30-compatible command set
             # from the standard SIYI 7A hardware prefix.
-            reply = {"mt11": b"7A-MT11-SITL", "a8": b"73-A8-SITL", "zr10": b"6B-ZR10-SITL"}[self.backend]
+            reply = {"mt11": b"7A-MT11-SITL", "a8": b"73-A8-SITL", "zr10": b"6B-ZR10-SITL", "zt30": b"7A-ZT30-SITL"}[self.backend]
         elif opcode == 0x07 and len(payload) == 2:
             self.update()
             self.target = None
@@ -426,6 +428,7 @@ def parse_args():
     parser.add_argument("--port", type=int, default=37261)
     parser.add_argument("--backend", choices=tuple(TARGETS), default="mt11")
     parser.add_argument("--orientation", choices=("upright", "inverted"), default="upright")
+    parser.add_argument("--no-version-reply", action="store_true", help="simulate unknown MCU firmware versions")
     parser.add_argument("--ready-file", type=Path,
                         help="create this file after the UDP socket is bound")
     return parser.parse_args()
@@ -447,6 +450,7 @@ def main():
     sock.bind((args.host, args.port))
     bound_host, bound_port = sock.getsockname()
     gimbal = Gimbal(2 if args.orientation == "inverted" else 1, args.backend)
+    gimbal.no_version_reply = args.no_version_reply
     if args.ready_file is not None:
         args.ready_file.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.ready_file.with_name(

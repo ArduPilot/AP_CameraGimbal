@@ -23,7 +23,8 @@ def main():
     ffmpeg = PAYLOAD / 'native/ffmpeg.exe'
     shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)
     for backend, source in (('mt11', 'camera_app/camera.ini'), ('a8', 'packaging/a8/camera.ini'),
-                            ('zr10', 'sitl/zr10.ini'), ('z1mini', 'packaging/z1mini/camera.ini')):
+                            ('zr10', 'sitl/zr10.ini'), ('zt30', 'packaging/zt30/camera.ini'),
+                            ('z1mini', 'packaging/z1mini/camera.ini')):
         shutil.copy2(ROOT / source, PAYLOAD / 'configs' / (backend + '.ini'))
     for name, filter_ in [('rgb.h264', 'testsrc2=size=1920x1080:rate=20'),
                            ('thermal.h264', 'testsrc2=size=1280x720:rate=20')]:

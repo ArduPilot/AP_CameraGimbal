@@ -194,3 +194,8 @@ $(Z1MINI_MAVLINK)/all/mavlink.h:
 .PHONY: network-status-test
 network-status-test: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER)
 	python3 tests/test_network_status.py
+
+# Initial ZT30 RAM services: no video ownership or persistent camera changes.
+ZT30_CROSS_COMPILE ?= arm-linux-
+zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DZT30_WEB_DEV -o $@ $< -lm

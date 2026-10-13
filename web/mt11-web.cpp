@@ -50,6 +50,10 @@
 #include <libproc.h>
 #endif
 
+#ifdef ZT30_WEB_DEV
+#include "zt30-dev-paths.h"
+#endif
+
 /* Shared web UI with target-specific paths, capabilities and update formats.
  * Z1-Mini uses the kernel SoC thermal sensor and MAVLink for web controls. */
 #define APCAM_WEB_BUILD 1
@@ -106,7 +110,9 @@
 #include "z1mini_mavlink.h"
 #else
 #define DEFAULT_PORT APCAM_WEB_PORT
+#ifndef CAMERA_API_PORT
 #define CAMERA_API_PORT 37260U
+#endif
 #endif
 #define LIVE_VIDEO_PORT 8555U
 #define ARDUPILOT_LOGO_URL \
@@ -859,6 +865,14 @@ static void log_message(const char *fmt, ...)
     struct tm tm_now;
     va_list ap;
 
+#ifdef ZT30_WEB_DEV
+    /* Development services can run for hours in tmpfs; bound the regular log. */
+    struct stat log_stat {};
+    if (fstat(STDERR_FILENO, &log_stat) == 0 && S_ISREG(log_stat.st_mode) &&
+        log_stat.st_size >= 1024 * 1024 && ftruncate(STDERR_FILENO, 0) == 0) {
+        (void)lseek(STDERR_FILENO, 0, SEEK_SET);
+    }
+#endif
     localtime_r(&now, &tm_now);
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_now);
     fprintf(stderr, "[%s] ", timestamp);
@@ -4386,6 +4400,10 @@ static void append_head(APC_StringBuffer *page, const char *title,
     webroot.render(*page, "head.html", {
         languages[current_language].html_lang, extra_head ? extra_head : "",
         escaped.data(), style});
+#ifdef ZT30_WEB_DEV
+    page->append("<p role=status>ZT30 development load: temporary web and SSH services. "
+                 "Vendor video remains separate; camera changes are unavailable in this load.</p>");
+#endif
 }
 
 static void append_language_select(APC_StringBuffer *page, const char *id)
@@ -5819,7 +5837,11 @@ static void send_sensors_json(int fd)
     struct camera_sensor_values sensors;
     APC_StringBuffer json;
     int cpu_millidegrees = 0;
+#if WEB_HAVE_SOC_TEMPERATURE
     bool have_cpu = read_soc_temperature(&cpu_millidegrees);
+#else
+    bool have_cpu = false;
+#endif
 
     read_camera_sensors(&sensors);
     json.reset();
@@ -7292,6 +7314,18 @@ static void handle_request(int fd, const char *peer)
         }
         goto done;
     }
+#ifdef ZT30_WEB_DEV
+    /* This initial load has no replacement camera process. Only authentication
+     * changes are writable, and their files live entirely under the RAM root.
+     * SSH keys are installed by the host controller, never via the web login. */
+    if (strcmp(request.method, "POST") == 0 && !login_route &&
+        strcmp(request.path, "/logout") != 0 && strcmp(request.path, "/language") != 0 &&
+        strcmp(request.path, "/users/password") != 0) {
+        send_text_error(fd, 503, "Service Unavailable",
+                        "Camera changes are unavailable in the initial ZT30 development load.", NULL);
+        goto done;
+    }
+#endif
     if (login_route) {
         if (strcmp(request.method, "POST") == 0) handle_login(fd, &request, peer);
         else send_redirect(fd, "/");
