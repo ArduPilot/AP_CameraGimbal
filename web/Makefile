@@ -145,7 +145,7 @@ tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WE
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
-tests/test_zt30_process: tests/test_zt30_process.cpp zt30-process.h
+tests/test_zt30_process: tests/test_zt30_process.cpp zt30-process.h ../include/apcam/zt30_slots.h
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
 .PHONY: zt30-parameters-test

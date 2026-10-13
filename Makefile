@@ -920,7 +920,7 @@ ZT30_DEV_TOOLS ?= build/deps/zt30-dev-tools/bin
 .PHONY: zt30_dev_package-test zt30_dev_package
 zt30_dev_package-test:
 	python3 tests/test_zt30_dev_package.py
-zt30_dev_package: zt30_dev_camera
+zt30_dev_package: zt30_dev_camera build/zt30/zt30-slot
 	@test -n '$(ZT30_CUSTOMER_ROOT)' || { echo 'Set ZT30_CUSTOMER_ROOT to this device captured customer filesystem' >&2; exit 1; }
 	$(MAKE) -C web zt30-web ZT30_CROSS_COMPILE=$(ZT30_CROSS_COMPILE)
 	python3 tools/build_zt30_dev_package.py build --customer-root '$(ZT30_CUSTOMER_ROOT)' --camera-app camera_app/build/zt30-dev/camera-app --web-app web/zt30-web --sdk build/zt30/encoder-sdk.so --dropbear '$(ZT30_DEV_TOOLS)/dropbear' --dropbearkey '$(ZT30_DEV_TOOLS)/dropbearkey' --output '$(ZT30_DEV_PACKAGE_OUT)'
@@ -948,3 +948,12 @@ zt30_jpeg_owner-test:
 	mkdir -p build/tests
 	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror tests/test_zt30_jpeg_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp -o build/tests/zt30-jpeg-owner-test
 	build/tests/zt30-jpeg-owner-test
+
+.PHONY: zt30_slots-test
+zt30_slots-test:
+	python3 tests/test_zt30_slots.py
+
+build/zt30/zt30-slot: tools/zt30_slots.cpp include/apcam/zt30_slots.h tools/check_zt30_elf.py
+	mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror -fno-exceptions -fno-rtti -static-libstdc++ -static-libgcc -Iinclude $< -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf

@@ -3147,6 +3147,7 @@ static enum camera_kind pid_camera_kind(pid_t pid)
 #ifdef ZT30_WEB_NATIVE
     // An atomically installed inode may retain its original staging dentry.
     // Match only our updater path and the canonical launch argument.
+    if (zt30_slot_app_pid(pid, executable, APP_DIR)) return CAMERA_REPLACEMENT;
     if (zt30_staged_app_pid(pid, executable, REPLACEMENT_CAMERA_PATH,
                             "/customer/.apcg-update.")) return CAMERA_REPLACEMENT;
 #endif
@@ -7829,6 +7830,11 @@ int main(int argc, char **argv)
 #define WEBROOT_PATH ""
 #endif
     const char *assets = WEBROOT_PATH;
+#ifdef ZT30_WEB_NATIVE
+    // The listener keeps its own release's assets while another is staged.
+    const char *slot_assets = getenv("CAMERA_APP_WEBROOT");
+    if (slot_assets && *slot_assets) assets = slot_assets;
+#endif
 #ifdef WEB_PORTABLE_SITL
     assets = getenv("CAMERA_GIMBAL_SITL_WEBROOT");
 #endif
