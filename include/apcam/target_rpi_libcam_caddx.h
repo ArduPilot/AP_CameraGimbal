@@ -10,7 +10,8 @@
 #define APCAM_MODEL_NAME "RPi IMX477 CADDX"
 #define APCAM_MANUFACTURER "RPi"
 #define APCAM_NUM_LENSES 1
-#define APCAM_NUM_STREAMS 2
+/* One encoded stream, served as /video1 and used for recording. */
+#define APCAM_NUM_STREAMS 1
 #define APCAM_STREAM1_LENS_MASK 1
 #define APCAM_STREAM2_LENS_MASK 1
 #define APCAM_HAVE_PHOTO 1
@@ -68,7 +69,7 @@
 #define APCAM_THERMAL_FRAME_RATE 0
 #define APCAM_THERMAL_STREAM_WIDTH 0
 #define APCAM_THERMAL_STREAM_HEIGHT 0
-/* One encoded 1080p stream serves both RTSP paths and recording. */
+/* One encoded 1080p stream serves the RTSP path (/video1) and recording. */
 #define APCAM_MAIN_RESOLUTIONS APCAM_RES_MASK_1080P
 #define APCAM_SUB_RESOLUTIONS APCAM_RES_MASK_1080P
 #define APCAM_RECORDING_RESOLUTIONS APCAM_RES_MASK_1080P
@@ -81,7 +82,7 @@
 #define APCAM_DEFAULT_ORIENTATION 1
 #define APCAM_DEFAULT_PHOTO_SCOPE 1
 #define APCAM_DEFAULT_TIMEZONE "GMT"
-/* vendor-compatible RTSP path aliases for /video1 and /video2 */
+/* vendor-compatible RTSP path alias for /video1; the sub alias is unused (one stream) */
 #define APCAM_DEFAULT_MAIN_ALIAS ""
 #define APCAM_DEFAULT_SUB_ALIAS ""
 #define APCAM_GIMBAL_PITCH_MIN -90.0f

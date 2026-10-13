@@ -124,8 +124,39 @@ static void caddx_udp(void)
     close(server);
 }
 
+/* With one stream the SupportProxy video2 port and name are not offered, so a stored
+ * video2 port must not make a valid save (for example a video1 port equal to it)
+ * unloadable. The video1 rules still apply. */
+static void single_stream_support_proxy(void)
+{
+    static const struct { const char *ini; bool loads; } cases[] = {
+        /* A video1 port equal to the stored video2 port, and an empty video2 name. */
+        {"[support_proxy]\nenabled = true\nhost = localhost\nvideo1_port = 40002\n"
+         "video1_name = video1\nvideo2_port = 40002\n", true},
+        {"[support_proxy]\nenabled = true\nhost = localhost\nvideo1_port = 40001\n"
+         "video1_name = video1\nvideo2_port = 40002\nvideo2_name =\n", true},
+        /* The video1 name and the other SupportProxy rules still apply. */
+        {"[support_proxy]\nenabled = true\nhost = localhost\nvideo1_port = 40001\nvideo1_name =\n", false},
+        {"[support_proxy]\nenabled = true\nhost = localhost\nsigning = true\n", false},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[] = "/tmp/camera-support-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        size_t length = strlen(cases[i].ini);
+        assert(write(fd, cases[i].ini, length) == (ssize_t)length);
+        close(fd);
+        struct ca_config config;
+        ca_config_defaults(&config);
+        char error[256] = "";
+        assert((ca_config_load(&config, path, error, sizeof(error)) == 0) == cases[i].loads);
+        unlink(path);
+    }
+}
+
 int main(void)
 {
+    single_stream_support_proxy();
     struct ca_config settings;
     ca_config_defaults(&settings);
     struct ca_rpi_image_controls c;

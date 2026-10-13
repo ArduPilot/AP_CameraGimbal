@@ -900,6 +900,12 @@ static void broadcast_image_captured(struct ca_mavlink_server *server,
     broadcast_message(server, &message);
 }
 
+/* Whether a stream is streaming; false for a stream the target does not have. */
+static bool stream_running(const struct ca_mavlink_server *server, unsigned index)
+{
+    return index < APCAM_NUM_STREAMS && server->stream_enabled[index];
+}
+
 static void stream_properties(const struct ca_mavlink_server *server,
                               unsigned stream_id, unsigned *width,
                               unsigned *height, enum ca_video_codec *codec,
@@ -911,13 +917,13 @@ static void stream_properties(const struct ca_mavlink_server *server,
     if (stream_id == 2U) {
         ca_video_resolution_size(server->settings.sub_resolution, width, height);
         *codec = server->settings.sub_codec;
-        *flags = server->stream_enabled[1] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
-                                           : 0U;
+        *flags = stream_running(server, 1U) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
+                                            : 0U;
     } else {
         ca_video_resolution_size(server->settings.main_resolution, width, height);
         *codec = server->settings.main_codec;
-        *flags = server->stream_enabled[0] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
-                                           : 0U;
+        *flags = stream_running(server, 0U) ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
+                                            : 0U;
     }
     if (thermal) {
         *width = APCAM_THERMAL_STREAM_WIDTH;

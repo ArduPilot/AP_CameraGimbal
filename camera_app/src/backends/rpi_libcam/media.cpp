@@ -33,7 +33,6 @@ struct APC_Media_RPiLibcam_State {
     pthread_mutex_t lock;
     struct ca_rtsp *rtsp;
     struct ca_live_video_server *live;
-    unsigned sub;
     struct ca_mp4 *mp4;
     struct ca_rpi_pipeline *pipeline;
     char path[PATH_MAX];
@@ -50,8 +49,8 @@ struct APC_Media_RPiLibcam_State {
  * waits for it, so keep the failure case short. */
 #define RPI_MODE_SWITCH_TIMEOUT_MS 1500U
 
-// One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves both RTSP
-// paths, the web live view and recording. The pipeline's encoder thread is
+// One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves the RTSP
+// path, the web live view and recording. The pipeline's encoder thread is
 // joined before any of those outputs are released.
 class APC_Media_RPiLibcam final : public APC_Media_Backend {
 public:
@@ -113,10 +112,8 @@ static void consume(void *opaque, const uint8_t *data, size_t n, uint64_t pts, b
     pts += m->pts_offset;
     if (pts <= m->last_pts) pts = m->last_pts + 1;
     m->last_pts = pts;
-    for (unsigned i = 0; i < 2; i++) {
-        (void)ca_rtsp_push_video_timed(m->rtsp, i ? m->sub : 0, data, n, key, RPI_HFOV_DEG, pts);
-        (void)ca_live_video_server_publish(m->live, i, data, n, pts, key, RPI_HFOV_DEG);
-    }
+    (void)ca_rtsp_push_video_timed(m->rtsp, 0, data, n, key, RPI_HFOV_DEG, pts);
+    (void)ca_live_video_server_publish(m->live, 0, data, n, pts, key, RPI_HFOV_DEG);
     pthread_mutex_lock(&m->lock);
     if (m->mp4 && key) m->wait_key = false;
     if (m->mp4 && !m->wait_key && ca_mp4_write_h264(m->mp4, data, n, pts, key, RPI_HFOV_DEG) < 0) {
@@ -141,10 +138,9 @@ int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
     if (!c || !c->backend || strcmp(c->backend, APCAM_NAME) ||
         !c->record_root || !c->capture_root) { errno = EINVAL; return -1; }
     if (c->settings.main_resolution != CA_VIDEO_1080P ||
-        c->settings.sub_resolution != CA_VIDEO_1080P ||
         c->settings.recording_resolution != CA_VIDEO_1080P ||
-        c->settings.main_codec != CA_VIDEO_H264 || c->settings.sub_codec != CA_VIDEO_H264) {
-        ca_log("RPi media requires 1080p H264 streams and 1080p recording");
+        c->settings.main_codec != CA_VIDEO_H264) {
+        ca_log("RPi media requires a 1080p H264 stream and 1080p recording");
         errno = ENOTSUP; return -1;
     }
     auto *m = new (std::nothrow) APC_Media_RPiLibcam_State{};
@@ -163,10 +159,8 @@ int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
         .frame = consume, .exposure = consume_exposure, .opaque = m,
     };
     if (ca_rtsp_open(&m->rtsp, c->rtsp_port, "video1", CA_VIDEO_H264, fps) < 0 ||
-        ca_rtsp_add_video(m->rtsp, "video2", CA_VIDEO_H264, fps, &m->sub) < 0 ||
         ca_live_video_server_open(&m->live, c->rtsp_port + 1U) < 0 ||
-        ca_live_video_server_configure(m->live, 0, 1920, 1080, fps, true) < 0 ||
-        ca_live_video_server_configure(m->live, 1, 1920, 1080, fps, true) < 0) goto fail;
+        ca_live_video_server_configure(m->live, 0, 1920, 1080, fps, true) < 0) goto fail;
     ca_rtsp_add_config_aliases(m->rtsp, &c->settings);
     if (ca_rtsp_support_proxy(m->rtsp, &c->settings.support) < 0)
         ca_log("RPi SupportProxy startup failed: %s", strerror(errno));
