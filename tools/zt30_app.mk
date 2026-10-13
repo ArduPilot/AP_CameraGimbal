@@ -1,11 +1,25 @@
-# Explicit dynamically linked, bounded RAM full-app integration only.
-# No default native build or package activation; no SIYI UART driver linked.
+# Reuse the common app with the qualified native media resource owners.
+# Development build is continuous; RAM qualification remains independently bounded.
+# Default native/package release remains guarded. MCU integration follows.
+ifeq ($(ZT30_DEV_BUILD),1)
+ZT30_APP_DIR := build/zt30-dev
+ZT30_APP_FACTORY := src/backends/zt30/factory.cpp
+ZT30_APP_CONTROL := $(CONTROL_DIR)/control.cpp
+ZT30_APP_MODE := -DCAMERA_APP_ZT30_DEV
+else
 ZT30_APP_DIR := build/zt30-ram
+ZT30_APP_FACTORY := src/backends/zt30/ram_factory.cpp
+ZT30_APP_CONTROL := src/backends/zt30/ram_control.cpp
+ZT30_APP_MODE := -DCAMERA_APP_ZT30_RAM
+endif
 ZT30_APP_SRC := $(filter-out $(CONTROL_DIR)/control.cpp,$(COMMON_SOURCES)) \
- src/backends/zt30/ram_control.cpp src/backends/zt30/ram_factory.cpp \
+ $(ZT30_APP_CONTROL) $(ZT30_APP_FACTORY) \
  src/backends/zt30/media_backend.cpp src/backends/zt30/rgb_owner.cpp src/backends/zt30/encoder_owner.cpp \
  src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp src/streaming/rtsp_xop.cpp
-ZT30_APP_CPPFLAGS := $(CPPFLAGS) -DCAMERA_APP_ZT30_RAM -D_FILE_OFFSET_BITS=64 \
+ifeq ($(ZT30_DEV_BUILD),1)
+ZT30_APP_SRC += src/backends/zt30/input_buffer.cpp src/backends/zt30/input_mapping.cpp src/backends/zt30/thermal_encoder.cpp src/backends/zt30/thermal_live.cpp src/backends/zt30/thermal_pixels.cpp src/backends/zt30/usb_iso.cpp src/backends/zt30/uvc_frame.cpp
+endif
+ZT30_APP_CPPFLAGS := $(CPPFLAGS) $(ZT30_APP_MODE) -D_FILE_OFFSET_BITS=64 \
  -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop -I$(RTSP_ROOT)/3rdpart
 ZT30_APP_XOP := $(filter-out $(RTSP_ROOT)/net/TaskScheduler.cpp $(RTSP_ROOT)/xop/RtspConnection.cpp $(RTSP_ROOT)/xop/RtpConnection.cpp,$(wildcard $(RTSP_ROOT)/net/*.cpp $(RTSP_ROOT)/xop/*.cpp))
 ZT30_APP_OBJECTS := $(patsubst %.cpp,$(ZT30_APP_DIR)/c/%.o,$(ZT30_APP_SRC)) \

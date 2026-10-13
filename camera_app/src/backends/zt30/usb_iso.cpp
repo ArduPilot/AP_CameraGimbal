@@ -11,6 +11,26 @@ static_assert(sizeof(usbdevfs_urb)==44 && offsetof(usbdevfs_urb,buffer)==12 &&
     offsetof(usbdevfs_urb,number_of_packets)==28 && offsetof(usbdevfs_urb,usercontext)==40,"ARM32 URB ABI");
 static_assert(USBDEVFS_SUBMITURB==0x802c550a && USBDEVFS_REAPURBNDELAY==0x4004550d,"ARM32 USB commands");
 #endif
+bool thermal_usb_descriptors(const uint8_t *desc,size_t bytes) {
+    if(!desc || bytes<18 || bytes>4096 || desc[0]!=18 || desc[1]!=1 ||
+       desc[8]!=0xda || desc[9]!=0x0b || desc[10]!=0x30 || desc[11]!=0x58)return false;
+    bool endpoint=false;unsigned interface=999,alt=999;
+    for(size_t at=18;at<bytes;) {
+        if(bytes-at<2)return false;
+        const unsigned length=desc[at];if(length<2 || length>bytes-at)return false;
+        if(desc[at+1]==4) {
+            if(length<9)return false;
+            interface=desc[at+2];alt=desc[at+3];
+        }
+        if(desc[at+1]==5) {
+            if(length<7)return false;
+            if(interface==1 && alt==7 && desc[at+2]==0x81 &&
+               (desc[at+3]&3)==1 && desc[at+4]==0 && desc[at+5]==0x14 && desc[at+6]==1)endpoint=true;
+        }
+        at+=length;
+    }
+    return endpoint;
+}
 static const uint8_t request[26]={
     0x01,0x00,0x01,0x02,0x2a,0x2c,0x0a,0x00,
     0,0,0,0,0,0,0,0,0x20,0,0,0,0x14,0,0,0x0c,0,0

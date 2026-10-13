@@ -17,20 +17,21 @@ struct MediaHooks {
     bool (*frame)(void*,const EncodedFrame&,uint64_t before_ns,uint64_t after_ns)=nullptr;
     bool (*drain)(void*)=nullptr;
 };
-// The production backend interface with an explicitly bounded first native
-// qualification. No factory/package activation or unqualified actuator control.
+// The same resource owners support continuous app operation and bounded
+// qualification. The default preserves the existing diagnostic contract.
+enum class MediaRun { Qualification, Continuous };
 class MediaBackend : public APC_Media_Backend {
 public:
     MediaBackend(Api &api,EncoderApi &enc,PacketMemory &memory):rgb(api),encoder(api,enc,memory) {}
     ~MediaBackend() override;
-    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom);
+    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom,MediaRun run=MediaRun::Qualification);
     int shutdown(); // join first, then encoder/RGB; caller must not unload SDK on error
     bool finished() const { return done.load(); }
     int result() const { return worker_result.load(); }
     const char *failed_call() const { return failure_call.load(); }
     int raw_status() const { return failure_status.load(); }
     unsigned frames() const { return frame_count.load(); }
-    size_t bytes() const { return byte_count.load(); }
+    uint64_t bytes() const { return byte_count.load(); }
     bool ready() const override { return active.load(); }
     int set_recording(bool) override { return unsupported(); }
     bool recording() const override { return false; }
@@ -70,6 +71,7 @@ private:
     EncoderOwner encoder;
     MediaHooks hooks{};
     EncoderSource source=EncoderSource::Zoom;
+    MediaRun run=MediaRun::Qualification;
     EncodedFrame copied{};
     pthread_t thread{};
     bool used=false,thread_started=false,unsafe_sdk_failure=false;
@@ -78,6 +80,6 @@ private:
     std::atomic<int> worker_result{0},failure_status{0};
     std::atomic<const char*> failure_call{nullptr};
     std::atomic<unsigned> frame_count{0};
-    std::atomic<size_t> byte_count{0};
+    std::atomic<uint64_t> byte_count{0};
 };
 } // namespace ca_zt30

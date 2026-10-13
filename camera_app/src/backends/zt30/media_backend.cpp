@@ -18,14 +18,15 @@ int MediaBackend::init_failed(int code) {
     worker_result.store(code);done.store(true);active.store(false);
     (void)shutdown();errno=EIO;return -1;
 }
-int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity,EncoderSource selected) {
+int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity,EncoderSource selected,MediaRun policy) {
     if(used) { errno=EALREADY;return -1; }
     used=true;
-    if((selected!=EncoderSource::Zoom && selected!=EncoderSource::Wide) ||
+    if((policy!=MediaRun::Qualification && policy!=MediaRun::Continuous) ||
+       (selected!=EncoderSource::Zoom && selected!=EncoderSource::Wide) ||
        !buffer || capacity<4U*1024*1024 || !h.gate || !h.open_sink || !h.vui || !h.frame || !h.drain) {
         errno=EINVAL;return -1;
     }
-    source=selected;hooks=h;copied.data=buffer;copied.capacity=capacity;
+    source=selected;run=policy;hooks=h;copied.data=buffer;copied.capacity=capacity;
     const bool wide=source==EncoderSource::Wide;
     if(rgb.open(wide)) { unsafe_sdk_failure=true;return init_failed(5); }
     if(stopping() || !hooks.gate(hooks.opaque,false))return init_failed(6);
@@ -51,20 +52,27 @@ int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity
     thread_started=true;return 0;
 }
 void MediaBackend::consume() {
-    int code=0;unsigned count=0;size_t total=0;
+    int code=0;unsigned count=0;uint64_t total=0;
+    const bool bounded=run==MediaRun::Qualification;
     const uint64_t deadline=now()+6000000000ULL;
-    while(!stopping() && count<90 && now()<deadline) {
+    uint64_t last_frame=now();
+    while(!stopping() && (!bounded || (count<90 && now()<deadline))) {
         const uint64_t before=now();const int got=encoder.copy_frame(copied);const uint64_t after=now();
         if(got<0) { code=22;break; }
-        if(!got) { timespec delay{0,5000000};nanosleep(&delay,nullptr);continue; }
+        if(!got) {
+            // A dead encoder must clear readiness and let the app supervisor
+            // restart it. A healthy unattended stream has no frame-count cap.
+            if(!bounded && after-last_frame>2000000000ULL) { code=24;break; }
+            timespec delay{0,5000000};nanosleep(&delay,nullptr);continue;
+        }
         if(!count) {
             H264Vui first{};
             if(encoder.read_h264_vui(first) || !hooks.vui(hooks.opaque,"first-frame",first)) { code=22;break; }
         }
-        if(copied.bytes>32U*1024*1024-total || !hooks.frame(hooks.opaque,copied,before,after)) { code=27;break; }
-        total+=copied.bytes;count++;frame_count.store(count);byte_count.store(total);
+        if((bounded && copied.bytes>32U*1024*1024-total) || !hooks.frame(hooks.opaque,copied,before,after)) { code=27;break; }
+        last_frame=after;total+=copied.bytes;count++;frame_count.store(count);byte_count.store(total);
     }
-    if(!code && (stopping() || count!=90))code=24;
+    if(!code && bounded && (stopping() || count!=90))code=24;
     if(!code && !hooks.drain(hooks.opaque))code=28;
     if(code) { failure_call.store(encoder.failed_call?encoder.failed_call:"media sink/deadline");failure_status.store(encoder.failed_call?encoder.raw_status:-1); }
     worker_result.store(code);active.store(false);done.store(true);

@@ -154,6 +154,31 @@ static void full_frame() {
     assert(frames.infos[0].has_pts && frames.infos[0].pts==123 && frames.infos[0].has_scr && a.pts_changes()==0);
 }
 int main() {
+    uint8_t descriptors[34]{};
+    descriptors[0]=18;descriptors[1]=1;descriptors[8]=0xda;descriptors[9]=0x0b;descriptors[10]=0x30;descriptors[11]=0x58;
+    descriptors[18]=9;descriptors[19]=4;descriptors[20]=1;descriptors[21]=7;
+    descriptors[27]=7;descriptors[28]=5;descriptors[29]=0x81;descriptors[30]=1;descriptors[32]=0x14;descriptors[33]=1;
+    assert(thermal_usb_descriptors(descriptors,sizeof(descriptors)));
+    for(size_t n=0;n<sizeof(descriptors);++n)assert(!thermal_usb_descriptors(descriptors,n));
+    assert(!thermal_usb_descriptors(nullptr,sizeof(descriptors)));
+    std::vector<uint8_t> multiple(descriptors,descriptors+18);
+    multiple.insert(multiple.end(),descriptors+18,descriptors+34);
+    multiple[21]=6; // same endpoint on another alternate is not sufficient
+    assert(!thermal_usb_descriptors(multiple.data(),multiple.size()));
+    multiple.insert(multiple.end(),descriptors+18,descriptors+34);
+    assert(thermal_usb_descriptors(multiple.data(),multiple.size()));
+    multiple[20]=0; // unrelated interface before the matching interface
+    assert(thermal_usb_descriptors(multiple.data(),multiple.size()));
+    multiple.push_back(2);multiple.push_back(0x24);
+    assert(thermal_usb_descriptors(multiple.data(),multiple.size()));
+    multiple.push_back(1); // reject a truncated tail even after a valid endpoint
+    assert(!thermal_usb_descriptors(multiple.data(),multiple.size()));
+
+    for(unsigned i:{0U,1U,8U,9U,10U,11U,18U,19U,20U,21U,27U,28U,29U,30U,31U,32U,33U}) {
+        uint8_t saved=descriptors[i];descriptors[i]^=0xff;
+        assert(!thermal_usb_descriptors(descriptors,sizeof(descriptors)));descriptors[i]=saved;
+    }
+
     assembly();full_frame();unsigned cases=2;
     { Fake f;UsbIso t(41,f.api());assert(t.start());assert(t.negotiated()[8]==99);Seen s;
       for(unsigned i=0;i<25;++i)assert(t.step(Seen::sink,&s)==1);
