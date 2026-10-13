@@ -3,6 +3,7 @@
 #endif
 #include "camera_app/system_stats.h"
 #include "apcam/target.h"
+#include "apcam/soc_temperature.h"
 #include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
@@ -86,13 +87,13 @@ static float cpu_temperature(void)
     munmap(map, 4096);
     return value;
 #elif !defined(CAMERA_APP_SITL) && !defined(CAMERA_APP_HOST) && defined(SOC_TEMPERATURE_PATH)
-    /* Kernel thermal zone, millidegrees Celsius (Z1-Mini, Raspberry Pi). */
-    FILE *file = fopen(SOC_TEMPERATURE_PATH, "r");
-    if (!file) return NAN;
-    long value;
-    bool ok = fscanf(file, "%ld", &value) == 1 && value >= -40000 && value <= 150000;
-    fclose(file);
-    return ok ? value / 1000.0f : NAN;
+    int value=0;
+#ifdef SOC_TEMPERATURE_LABELLED_CELSIUS
+    constexpr bool labelled=true;
+#else
+    constexpr bool labelled=false;
+#endif
+    return apcam_read_soc_temperature(SOC_TEMPERATURE_PATH,labelled,&value) ? value / 1000.0f : NAN;
 #else
     /* Other cameras have no supported reader. SITL must not access camera
      * registers or mislabel a host motherboard sensor as CPU temperature. */

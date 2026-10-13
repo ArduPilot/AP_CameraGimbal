@@ -33,6 +33,8 @@
 static constexpr uint8_t camera_address = 0x34;
 #if APCAM_TARGET == APCAM_TARGET_MT11
 static constexpr uint8_t product_id = 0x89;
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+static constexpr uint8_t product_id = 0x7b;
 #elif APCAM_TARGET == APCAM_TARGET_A8
 // Stock A8 cardv camera_sdk_get_ver_action returns 07 03 00 72.
 // 73 is the gimbal product, also used as the public hardware-ID prefix.
@@ -78,6 +80,12 @@ static uint64_t now_ms()
 }
 static uint16_t u16(const uint8_t *p) { return p[0] | uint16_t(p[1])<<8; }
 static void put16(uint8_t *p,unsigned v) { p[0]=v; p[1]=v>>8; }
+// Zero is outside the valid module range and represents unavailable feedback.
+// Native backends can report NaN before the first reply or after expiry.
+static unsigned observed_zoom_tenths(const ca_media *media) {
+    const float zoom=ca_media_zoom(media);
+    return isfinite(zoom) && zoom>=1 && zoom<=6553.4f ? unsigned(zoom*10+0.5f) : 0;
+}
 static void put32(uint8_t *p,uint32_t v) { for(unsigned i=0;i<4;i++) p[i]=v>>(8*i); }
 
 static void disconnect(ca_unigcs *s)
@@ -155,6 +163,9 @@ static void request_time(ca_unigcs *s)
 
 static void receive_time(ca_unigcs *s,const ca_private_frame *f)
 {
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+    (void)s;(void)f;return;
+#else
     const bool long_format=f->raw_length>=20 && f->raw[0]==0x55;
     if(s->client<0 || !s->source || !s->time_pending || f->source!=s->source ||
        long_format!=s->long_format || f->destination!=camera_address || f->link!=0x16 ||
@@ -193,17 +204,22 @@ static void receive_time(ca_unigcs *s,const ca_private_frame *f)
         s->time_error_reported=true;
         ca_log("system time setting from UniGCS failed: %s",strerror(errno));
     }
+#endif
 }
 
 static void image_slots(ca_unigcs *s,uint8_t *p)
 {
-#if !APCAM_HAVE_THERMAL
+#if !APCAM_HAVE_THERMAL_VIDEO
     (void)s;
     p[0]=p[1]=0;
 #else
+#ifdef CAMERA_APP_ZT30_DEV
+    if(!ca_media_frame_rate(s->media,true)) { p[0]=p[1]=0;return; }
+#endif
     // MT11's visible scene is Zoom across both physical RGB sensors. Reporting
     // Wide at low zoom selects a different UniGCS UI which hides tracking.
-    p[0]=ca_media_side_by_side(s->media) ? 3 : ca_media_thermal_main(s->media) ? 2 : 0;
+    p[0]=ca_media_side_by_side(s->media) ? 3 : ca_media_thermal_main(s->media) ? 2 :
+        (!APCAM_ZOOM_SELECTS_LENS && ca_media_lens(s->media)==CA_MEDIA_LENS_WIDE ? 1 : 0);
     p[1]=p[0]==2 ? 0 : 2;
 #endif
 }
@@ -238,7 +254,7 @@ static void encoder(ca_unigcs *s,uint8_t id,uint8_t *out)
     const ca_config &cfg=*ca_media_settings(s->media);
     unsigned width,height;
     ca_video_resolution_size(id==0 ? cfg.recording_resolution : id==1 ? cfg.main_resolution : cfg.sub_resolution,&width,&height);
-    bool thermal=APCAM_HAVE_THERMAL && (id==1 ? ca_media_thermal_main(s->media) : id==2 && !ca_media_thermal_main(s->media));
+    bool thermal=APCAM_HAVE_THERMAL_VIDEO && (id==1 ? ca_media_thermal_main(s->media) : id==2 && !ca_media_thermal_main(s->media));
     if(id!=0 && thermal) { width=APCAM_THERMAL_STREAM_WIDTH; height=APCAM_THERMAL_STREAM_HEIGHT; }
     out[0]=id;
     out[1]=id==0 ? 1 : ((id==1 ? cfg.main_codec : cfg.sub_codec)==CA_VIDEO_H265 ? 2 : 1);
@@ -250,6 +266,9 @@ static void encoder(ca_unigcs *s,uint8_t id,uint8_t *out)
 #endif
     put16(out+2,width); put16(out+4,height);
     put16(out+6,width>=3840 || height>=2160 ? 12000 : width>=1920 || height>=1080 ? 4096 : 2048);
+#ifdef CAMERA_APP_ZT30_DEV
+    put16(out+6,thermal?1000:1570);
+#endif
     out[8]=ca_media_frame_rate(s->media,thermal);
 }
 
@@ -356,7 +375,7 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         if(APCAM_ZOOM_NATIVE_RATE && ca_backend_set_zoom_rate(s->backend,int8_t(p[0]))<0) break;
         if(!s->zoom_direction) s->zoom_tick=now_ms();
         s->zoom_direction=int8_t(p[0]); s->zoom_reply=s->reply_enabled;
-        put16(out,unsigned(ca_media_zoom(s->media)*10+0.5f));
+        put16(out,observed_zoom_tenths(s->media));
         reply(s,0x98,out,2); return;
     case 0xc6:
         if(n && !(n==1 && p[0]==1)) break;
@@ -374,7 +393,10 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         reply(s,0x9f,p,1); return;
     case 0xb4:
         if(n) break;
-        out[0]=APCAM_HAVE_THERMAL ? (cfg.photo_scope==CA_PHOTO_SCOPE_ALL ? 0x0b : 0x08) : 1;
+#ifdef CAMERA_APP_ZT30_DEV
+        if(!ca_media_photo_available(s->media)) { out[0]=0;reply(s,0xb4,out,1);return; }
+#endif
+        out[0]=APCAM_HAVE_THERMAL_VIDEO ? (cfg.photo_scope==CA_PHOTO_SCOPE_ALL ? 0x0b : 0x08) : 1;
         reply(s,0xb4,out,1); return;
     case 0x99:
         if(n!=1 || (int8_t(p[0]) < -1 || int8_t(p[0])>1)) break;
@@ -390,7 +412,7 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         reply(s,0xd0,out,9); return;
     case 0xd1:
         if(n!=1 || p[0]!=10) break;
-        out[0]=10; put16(out+1,unsigned(ca_media_zoom(s->media)*10+0.5f));
+        out[0]=10; put16(out+1,observed_zoom_tenths(s->media));
         reply(s,0xd1,out,3); return;
     case 0xd2:
         if(n!=3 || p[0]!=10 || u16(p+1)<10 || u16(p+1)>unsigned(APCAM_ZOOM_CONTROL_MAX*10)) break;
@@ -732,7 +754,7 @@ void ca_unigcs_update(ca_unigcs *s,ca_backend *backend,bool manual,ca_mavlink_se
             if(APCAM_ZOOM_NATIVE_RATE) (void)ca_backend_set_zoom_rate(s->backend,0);
             s->zoom_direction=0;
         }
-        uint8_t zoom[2]; put16(zoom,unsigned(ca_media_zoom(s->media)*10+0.5f));
+        uint8_t zoom[2]; put16(zoom,observed_zoom_tenths(s->media));
         if(s->zoom_reply) reply(s,0x98,zoom,2);
     }
     if(s->client>=0 && s->source && now_ms()-s->heartbeat>=1000) {

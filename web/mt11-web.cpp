@@ -9,6 +9,7 @@
 #include "build/icons.h"
 #include "../include/apcam/config_status.h"
 #include "../include/apcam/network.h"
+#include "../include/apcam/soc_temperature.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -50,12 +51,23 @@
 #include <libproc.h>
 #endif
 
+#ifdef ZT30_WEB_DEV
+#include "zt30-dev-paths.h"
+#elif defined(ZT30_WEB_NATIVE)
+#include "zt30-paths.h"
+#include "zt30-process.h"
+#include "../include/apcam/zt30_services.h"
+#endif
+
 /* Shared web UI with target-specific paths, capabilities and update formats.
  * Z1-Mini uses the kernel SoC thermal sensor and MAVLink for web controls. */
 #define APCAM_WEB_BUILD 1
 #include "../include/apcam/target.h"
 #include "../include/apcam/APC_Camera.h"
 #include "../include/apcam/APC_Config.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "../include/apcam/APC_ZT30_Config.h"
+#endif
 #include "../include/apcam/gimbal_transform.h"
 #include "../include/apcam/manual_control.h"
 #include "../include/apcam/survey_runtime.h"
@@ -106,7 +118,9 @@
 #include "z1mini_mavlink.h"
 #else
 #define DEFAULT_PORT APCAM_WEB_PORT
+#ifndef CAMERA_API_PORT
 #define CAMERA_API_PORT 37260U
+#endif
 #endif
 #define LIVE_VIDEO_PORT 8555U
 #define ARDUPILOT_LOGO_URL \
@@ -662,7 +676,7 @@ static const struct parameter replacement_parameters[] = {
     {"thermal_palette", "thermal", "palette", S_P_THERMAL_PALETTE, S_H_THERMAL_PALETTE,
      PARAM_ENUM, 0, 0, 0, palette_options,
      sizeof(palette_options) / sizeof(palette_options[0])},
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     {"raw_stream_fps", "thermal", "stream_fps", S_P_RAW_STREAM_FPS, S_H_RAW_STREAM_FPS,
      PARAM_INTEGER, 1, 25, 1, NULL, 0},
     {"raw_record_fps", "thermal", "record_fps", S_P_RAW_RECORD_FPS, S_H_RAW_RECORD_FPS,
@@ -728,7 +742,7 @@ static const struct parameter replacement_parameters[] = {
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"proxy_video2_name", "support_proxy", "video2_name", S_P_PROXY_VIDEO2_NAME, S_H_PROXY_VIDEO2_NAME,
      PARAM_TEXT, 0, 63, 1, NULL, 0},
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     {"proxy_video3_port", "support_proxy", "video3_port", S_P_PROXY_VIDEO3_PORT, S_H_PROXY_VIDEO3_PORT,
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"proxy_video3_name", "support_proxy", "video3_name", S_P_PROXY_VIDEO3_NAME, S_H_PROXY_VIDEO3_NAME,
@@ -802,7 +816,7 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     "5", "5",
 #endif
     "false",
@@ -812,7 +826,7 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS, "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
     "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2",
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     "0", "Raw Thermal (16-bit)",
 #endif
     "", "false", "false", "false", "eth0", "", "", "", "false",
@@ -830,6 +844,14 @@ static void log_message(const char *fmt, ...)
     struct tm tm_now;
     va_list ap;
 
+#ifdef ZT30_WEB_DEV
+    /* Development services can run for hours in tmpfs; bound the regular log. */
+    struct stat log_stat {};
+    if (fstat(STDERR_FILENO, &log_stat) == 0 && S_ISREG(log_stat.st_mode) &&
+        log_stat.st_size >= 1024 * 1024 && ftruncate(STDERR_FILENO, 0) == 0) {
+        (void)lseek(STDERR_FILENO, 0, SEEK_SET);
+    }
+#endif
     localtime_r(&now, &tm_now);
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_now);
     fprintf(stderr, "[%s] ", timestamp);
@@ -908,7 +930,7 @@ static int renameat2(int olddir, const char *oldname, int newdir,
 
 #if !WEB_INSTALLS_FIRMWARE
 /* Publishing an uploaded file must never replace an existing file. */
-static int publish_no_replace(int directory, const char *temporary, const char *published)
+[[maybe_unused]] static int publish_no_replace(int directory, const char *temporary, const char *published)
 {
 #if defined(__CYGWIN__) || defined(__APPLE__)
     if (linkat(directory, temporary, directory, published, 0) < 0) return -1;
@@ -2109,12 +2131,17 @@ static bool append_update(struct ini_update *updates, size_t capacity, size_t *c
 /* parameters that do not exist on this camera stay out of the form */
 static bool parameter_shown(const struct parameter *parameter)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    const auto *field = APC_Config::find(parameter->section, parameter->key);
+    if (!field || !APC_ZT30_Config::editable(*field)) return false;
+#endif
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
-    if (!APCAM_HAVE_THERMAL && (!strcmp(parameter->section, "thermal") ||
-        !strcmp(parameter->key, "photo_scope"))) return false;
+    if (!APCAM_HAVE_THERMAL && !strcmp(parameter->section,"thermal") &&
+        !(APCAM_HAVE_RAW_THERMAL && !strcmp(parameter->key,"stream_fps"))) return false;
+    if (!APCAM_HAVE_THERMAL_VIDEO && !strcmp(parameter->key,"photo_scope")) return false;
     return true;
 }
 
@@ -2148,7 +2175,17 @@ static bool collect_described_parameters(const APC_HTTPRequest *request,
         size_t value_length = 0;
         char *value;
 
-        if (!parameter_shown(parameter)) continue;
+        if (!parameter_shown(parameter)) {
+#ifdef CAMERA_APP_ZT30_DEV
+            value = form_value(request, parameter->form_name, &value_length);
+            if (value) {
+                free(value);
+                snprintf(error, error_size, "%s is not configurable on the native ZT30 build", parameter->form_name);
+                return false;
+            }
+#endif
+            continue;
+        }
         value = form_value(request, parameter->form_name, &value_length);
         bool valid = value != NULL && value_length < sizeof(updates[0].value);
         char normalized[160] = "";
@@ -2797,7 +2834,7 @@ done:
 }
 #endif
 
-#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))
+#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST)) || defined(ZT30_WEB_NATIVE)
 static bool line_has_timestamp(const char *line, size_t length)
 {
     return length >= 6U && line[0] == '[' &&
@@ -2926,9 +2963,31 @@ static bool save_config(const char *config_path, const char *backup_path,
     bool ok = false;
 
     if (!validate_ini(config, length, error, error_size)) return false;
-    if (stat(config_path, &st) < 0) {
-        snprintf(error, error_size, T(S_E_CANNOT_STAT), config_path, strerror(errno));
-        return false;
+#ifdef CAMERA_APP_ZT30_DEV
+    ca_config before, candidate;
+    ca_config_defaults(&before);
+    ca_config_defaults(&candidate);
+    if (ca_config_load(&before, config_path, error, error_size) < 0) {
+        if (errno != EINVAL && errno != ENOENT) return false;
+        // Permit repair of invalid/missing INI, but only supported/default
+        // values for unavailable controls. Never guess the corrupt old values.
+        ca_config_defaults(&before);
+        APC_ZT30_Config::effective(before);
+    }
+    if (ca_config_parse(&candidate, config, length, error, error_size) < 0 ||
+        !APC_ZT30_Config::validate_change(before, candidate, error, error_size)) return false;
+#endif
+    bool existing = stat(config_path, &st) == 0;
+    if (!existing) {
+#ifdef CAMERA_APP_ZT30_DEV
+        if (errno == ENOENT) {
+            st = {}; st.st_mode = 0644; st.st_uid = geteuid(); st.st_gid = getegid();
+        } else
+#endif
+        {
+            snprintf(error, error_size, T(S_E_CANNOT_STAT), config_path, strerror(errno));
+            return false;
+        }
     }
     if (snprintf(config_temp, sizeof(config_temp), "%s.web.new.%ld",
                  config_path, (long)getpid()) >= (int)sizeof(config_temp) ||
@@ -2940,8 +2999,8 @@ static bool save_config(const char *config_path, const char *backup_path,
     unlink(config_temp);
     unlink(backup_temp);
 
-    if (!copy_to_temp(config_path, backup_temp, st.st_mode & 0777, st.st_uid, st.st_gid) ||
-        rename(backup_temp, backup_path) < 0) {
+    if (existing && (!copy_to_temp(config_path, backup_temp, st.st_mode & 0777, st.st_uid, st.st_gid) ||
+        rename(backup_temp, backup_path) < 0)) {
         snprintf(error, error_size, T(S_E_CONFIG_BACKUP), strerror(errno));
         goto done;
     }
@@ -3053,6 +3112,13 @@ static enum camera_kind pid_camera_kind(pid_t pid)
         strcmp(executable, resolved) == 0) return CAMERA_REPLACEMENT;
 #endif
     if (strcmp(executable, REPLACEMENT_CAMERA_PATH) == 0) return CAMERA_REPLACEMENT;
+#ifdef ZT30_WEB_NATIVE
+    // An atomically installed inode may retain its original staging dentry.
+    // Match only our updater path and the canonical launch argument.
+    if (zt30_slot_app_pid(pid, executable, APP_DIR)) return CAMERA_REPLACEMENT;
+    if (zt30_staged_app_pid(pid, executable, REPLACEMENT_CAMERA_PATH,
+                            "/customer/.apcg-update.")) return CAMERA_REPLACEMENT;
+#endif
     return CAMERA_NONE;
 }
 
@@ -3733,7 +3799,11 @@ static int lock_restart(char *error, size_t error_size)
     }
     int lock = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 
-    if (lock < 0 || flock(lock, LOCK_EX) < 0) {
+    if (lock < 0 || flock(lock, LOCK_EX
+#ifdef ZT30_WEB_NATIVE
+        | LOCK_NB
+#endif
+        ) < 0) {
         snprintf(error, error_size, T(S_E_SWITCH_LOCK), strerror(errno));
         if (lock >= 0) close(lock);
         return -1;
@@ -4353,6 +4423,10 @@ static void append_head(APC_StringBuffer *page, const char *title,
     webroot.render(*page, "head.html", {
         languages[current_language].html_lang, extra_head ? extra_head : "",
         escaped.data(), style});
+#ifdef ZT30_WEB_DEV
+    page->append("<p role=status>ZT30 development load: temporary web and SSH services. "
+                 "Vendor video remains separate; camera changes are unavailable in this load.</p>");
+#endif
 }
 
 static void append_language_select(APC_StringBuffer *page, const char *id)
@@ -4619,16 +4693,12 @@ static bool read_soc_temperature(int *millidegrees)
 {
 /* Kernel thermal zone where available; otherwise the SS928 sensor registers. */
 #ifdef SOC_TEMPERATURE_PATH
-    FILE *file = fopen(SOC_TEMPERATURE_PATH, "r");
-    if (!file) return false;
-    char text[64], extra;
-    long value;
-    bool ok = fgets(text, sizeof(text), file) != NULL &&
-              sscanf(text, "%ld %c", &value, &extra) == 1 &&
-              value >= -40000 && value <= 150000;
-    fclose(file);
-    if (ok) *millidegrees = (int)value;
-    return ok;
+#ifdef SOC_TEMPERATURE_LABELLED_CELSIUS
+    constexpr bool labelled=true;
+#else
+    constexpr bool labelled=false;
+#endif
+    return apcam_read_soc_temperature(SOC_TEMPERATURE_PATH,labelled,millidegrees);
 #else
     int fd = -1;
     void *mapping = MAP_FAILED;
@@ -4698,6 +4768,10 @@ static bool read_cpu_busy(unsigned *percent, unsigned *cpus)
 }
 #endif
 
+#ifdef ZT30_WEB_NATIVE
+#include "zt30-bundle-status.h"
+#endif
+
 static char *render_page(const char *message, bool message_is_error, size_t *page_len)
 {
     APC_StringBuffer page;
@@ -4760,6 +4834,9 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.append(" (<span id=firmware-git-hash>");
     page.append_html(CA_FIRMWARE_GIT_HASH);
     page.append("</span>)</td></tr>");
+#ifdef ZT30_WEB_NATIVE
+    append_zt30_bundle_status(page, pid_count ? pids[0] : 0);
+#endif
     page.appendf("<tr><th>%s</th><td>%s", T(S_STATUS_CAMERA_APP),
                pid_count ? camera_label(active_kind) : T(S_APP_STOPPED));
     if (pid_count) page.appendf(T(S_STATUS_PID_RSS), (long)pids[0], camera_rss);
@@ -4787,9 +4864,13 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.appendf("<tr><th>%s</th><td>", T(S_STATUS_SOC_TEMPERATURE));
     if (have_soc_temperature) {
         int absolute = soc_temperature < 0 ? -soc_temperature : soc_temperature;
+#ifdef SOC_TEMPERATURE_LABELLED_CELSIUS
+        page.appendf(T(S_STATUS_SOC_AVERAGE),soc_temperature < 0 ? "-" : "",absolute / 1000);
+#else
         page.appendf(T(S_STATUS_SOC_AVERAGE),
                    soc_temperature < 0 ? "-" : "", absolute / 1000,
                    (absolute % 1000) / 100);
+#endif
     } else {
         page.append(T(S_UNAVAILABLE));
     }
@@ -4818,6 +4899,11 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     webroot.render(page, "status-actions.html", {T(S_STATUS_REFRESH), T(S_STATUS_ACTIONS), csrf_token});
     page.append(T(S_STATUS_RESTART));
     page.append("</button></form>");
+#ifdef ZT30_WEB_NATIVE
+    std::string previous_bundle, previous_error;
+    if (apcam_zt30::link_slot(APP_DIR, "previous", previous_bundle, previous_error))
+        page.appendf("<form id=application-rollback method=post action=/upgrade/rollback><input type=hidden name=csrf value=\"%s\"><button>%s</button></form>", csrf_token, T(S_APP_ROLLBACK));
+#endif
 #if WEB_HAVE_FIRMWARE_UPLOAD
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
                       "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
@@ -4827,7 +4913,9 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
                       "<script src=/upgrade.js data-csrf=\"%s\" defer></script>"
                       "<p class=muted>", T(S_STATUS_UPGRADE_BUTTON), csrf_token);
     page.appendf(T(S_STATUS_UPGRADE_HELP), FIRMWARE_NAME_PATTERNS);
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+    page.append(T(S_APP_UPDATE_PENDING));
+#elif WEB_INSTALLS_FIRMWARE
     page.append(T(S_STATUS_UPGRADE_INSTALL_Z1));
 #elif APCAM_TARGET == APCAM_TARGET_MT11
     page.append(T(S_STATUS_UPGRADE_SYNC_MT11));
@@ -4926,7 +5014,7 @@ static char *render_sensors_page(const char *message, bool message_is_error,
     webroot.render(page, "sensors-values.html", {T(S_SENSORS_LIVE), T(S_SENSORS_LIDAR), T(S_LOADING), T(S_ENABLE), T(S_SENSORS_MIN), T(S_LOADING), T(S_SENSORS_MAX), T(S_LOADING), T(S_SENSORS_CPU), T(S_LOADING), T(S_SENSORS_UPDATING), T(S_SENSORS_LASER_NOTICE)});
 #endif
     webroot.render(page, "sensors-capture.html", {T(S_SENSORS_SHUTTER), T(S_SENSORS_SHUTTER_TEXT), csrf_token, T(S_SENSORS_CAPTURE)});
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL_VIDEO
     page.appendf("<p class=muted>%s</p>", T(S_SENSORS_SCOPE_NOTE));
 #endif
     page.appendf("</section></div><section class=card><h2>%s</h2>", T(S_SENSORS_RECENT));
@@ -5121,6 +5209,14 @@ static char *render_parameter_page(const char *message, bool message_is_error,
         if (message == NULL && live_config_notice(config, config_len, applied, sizeof(applied), &message_is_error))
             message = applied;
         append_notice(&page, message, message_is_error);
+#ifdef CAMERA_APP_ZT30_DEV
+        unsigned native_width, native_height;
+        ca_video_resolution_size(CA_VIDEO_720P, &native_width, &native_height);
+        page.appendf("<p class=notice>%s</p><p class=help>", T(S_ZT30_NATIVE_PARAMETERS));
+        page.appendf(T(S_ZT30_FIXED_VIDEO), native_width, native_height,
+                     APCAM_THERMAL_STREAM_WIDTH, APCAM_THERMAL_STREAM_HEIGHT);
+        page.append("</p>");
+#endif
         webroot.render(page, "parameters-form.html", {T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES)});
         for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
             page.appendf("<button type=button role=tab id=tab-%s aria-controls=parameters-%s "
@@ -5782,7 +5878,11 @@ static void send_sensors_json(int fd)
     struct camera_sensor_values sensors;
     APC_StringBuffer json;
     int cpu_millidegrees = 0;
+#if WEB_HAVE_SOC_TEMPERATURE
     bool have_cpu = read_soc_temperature(&cpu_millidegrees);
+#else
+    bool have_cpu = false;
+#endif
 
     read_camera_sensors(&sensors);
     json.reset();
@@ -6004,7 +6104,11 @@ static const char *language_script = "language.js";
 
 static const char *upgrade_script = "upgrade.js";
 
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+#define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_APP
+#define UPGRADE_UPLOADED_STRING S_APP_UPDATE_PENDING
+#define UPGRADE_WRITE_ROOT RUNTIME_DIR
+#elif WEB_INSTALLS_FIRMWARE
 #define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_Z1
 #define UPGRADE_UPLOADED_STRING S_JS_FW_INSTALLED
 #define UPGRADE_WRITE_ROOT RUNTIME_DIR
@@ -6023,6 +6127,10 @@ static void send_upgrade_script(int fd)
 {
     char bad_name[256];
     const struct js_string items[] = {
+#ifdef ZT30_WEB_NATIVE
+        {"applicationUpdate", "true"}, {"maxSize", "33554432"}, {"appFailed", T(S_APP_UPDATE_FAILED)},
+        {"confirmRollback", T(S_APP_ROLLBACK)},
+#endif
         {"mediaRoot", UPGRADE_WRITE_ROOT}, {"reboots", WEB_UPGRADE_REBOOTS_JS},
         {"prefix", FIRMWARE_PREFIX}, {"suffix", FIRMWARE_SUFFIX},
         {"installName", FIRMWARE_INSTALL_NAME_JS},
@@ -6075,7 +6183,7 @@ static bool valid_firmware_name(const char *name)
     return true;
 }
 
-static void sync_firmware_storage(void)
+[[maybe_unused]] static void sync_firmware_storage(void)
 {
 #ifndef MT11_WEB_TEST
     sync();
@@ -6088,10 +6196,14 @@ static void sync_firmware_storage(void)
 
 /* Stream the request body to output; errno describes a failure. */
 static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int output,
-                                size_t *received)
+                                size_t *received, unsigned duration_ms = 0)
 {
     char expect[64];
-
+#ifdef ZT30_WEB_NATIVE
+    const int64_t deadline = duration_ms ? apcam::probe_milliseconds()+duration_ms : 0;
+#else
+    (void)duration_ms;
+#endif
     *received = 0;
     if (find_header(request, "Expect", expect, sizeof(expect)) != NULL &&
         strcasecmp(expect, "100-continue") == 0) {
@@ -6106,6 +6218,13 @@ static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int outp
         char buffer[64 * 1024];
         size_t wanted = request->content_length - *received;
         if (wanted > sizeof(buffer)) wanted = sizeof(buffer);
+#ifdef ZT30_WEB_NATIVE
+        if (deadline) {
+            const int64_t left = deadline-apcam::probe_milliseconds();
+            pollfd wait{fd, POLLIN, 0};
+            if (left <= 0 || poll(&wait, 1, int(left)) <= 0) {errno = ETIMEDOUT; return false;}
+        }
+#endif
         ssize_t got = recv(fd, buffer, wanted, 0);
         if (got < 0) {
             if (errno == EINTR) continue;
@@ -6706,10 +6825,16 @@ done:
 
 #endif
 
+#ifdef ZT30_WEB_NATIVE
+#include "zt30-upgrade.h"
+#endif
+
 static void handle_firmware_upload(int fd, const APC_HTTPRequest *request,
                                    const char *peer)
 {
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+    handle_zt30_upgrade(fd, request, peer);
+#elif WEB_INSTALLS_FIRMWARE
     handle_firmware_install(fd, request, peer);
 #else
     char filename[256];
@@ -7255,6 +7380,18 @@ static void handle_request(int fd, const char *peer)
         }
         goto done;
     }
+#ifdef ZT30_WEB_DEV
+    /* This initial load has no replacement camera process. Only authentication
+     * changes are writable, and their files live entirely under the RAM root.
+     * SSH keys are installed by the host controller, never via the web login. */
+    if (strcmp(request.method, "POST") == 0 && !login_route &&
+        strcmp(request.path, "/logout") != 0 && strcmp(request.path, "/language") != 0 &&
+        strcmp(request.path, "/users/password") != 0) {
+        send_text_error(fd, 503, "Service Unavailable",
+                        "Camera changes are unavailable in the initial ZT30 development load.", NULL);
+        goto done;
+    }
+#endif
     if (login_route) {
         if (strcmp(request.method, "POST") == 0) handle_login(fd, &request, peer);
         else send_redirect(fd, "/");
@@ -7314,6 +7451,10 @@ static void handle_request(int fd, const char *peer)
 #endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade.js") == 0) {
         send_upgrade_script(fd);
+#ifdef ZT30_WEB_NATIVE
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade-result") == 0) {
+        send_zt30_upgrade_result(fd);
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade-status") == 0) {
         send_response(fd, 200, "OK", "text/plain; charset=utf-8",
                       csrf_token, strlen(csrf_token), NULL);
@@ -7547,6 +7688,10 @@ static void handle_request(int fd, const char *peer)
             }
             free(confirmation);
             free(path);
+#ifdef ZT30_WEB_NATIVE
+        } else if (strcmp(request.path, "/upgrade/rollback") == 0) {
+            handle_zt30_upgrade(fd, &request, peer, true);
+#endif
         } else if (strcmp(request.path, "/restart") == 0) {
             if (restart_camera(error, sizeof(error))) {
                 log_message("camera application restarted by %s", peer);
@@ -7699,6 +7844,11 @@ int main(int argc, char **argv)
 #define WEBROOT_PATH ""
 #endif
     const char *assets = WEBROOT_PATH;
+#ifdef ZT30_WEB_NATIVE
+    // The listener keeps its own release's assets while another is staged.
+    const char *slot_assets = getenv("CAMERA_APP_WEBROOT");
+    if (slot_assets && *slot_assets) assets = slot_assets;
+#endif
 #ifdef WEB_PORTABLE_SITL
     assets = getenv("CAMERA_GIMBAL_SITL_WEBROOT");
 #endif
@@ -7715,7 +7865,7 @@ int main(int argc, char **argv)
     }
     unsigned port = DEFAULT_PORT;
 
-#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))
+#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST)) || defined(ZT30_WEB_NATIVE)
     if (argc == 2 && strcmp(argv[1], "--capture-app-log") == 0) {
         return capture_app_log(REPLACEMENT_LOG_PATH, REPLACEMENT_LOG_OLD_PATH, true);
     }

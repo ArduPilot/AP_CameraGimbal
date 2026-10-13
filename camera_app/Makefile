@@ -3,7 +3,7 @@ include ../tools/build.mk
 
 CAMERA_BACKEND ?= mt11
 include ../include/apcam/targets.mk
-SUPPORTED_BACKENDS := mt11 a8 zr10 z1mini rpi_libcam_caddx
+SUPPORTED_BACKENDS := mt11 a8 zr10 zt30 z1mini rpi_libcam_caddx
 ifeq ($(filter $(CAMERA_BACKEND),$(SUPPORTED_BACKENDS)),)
 $(error Unsupported CAMERA_BACKEND '$(CAMERA_BACKEND)'; supported backends: $(SUPPORTED_BACKENDS))
 endif
@@ -19,7 +19,7 @@ LIBCAMERA_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcamera)
 LIBCAMERA_LIBS ?= $(shell $(PKG_CONFIG) --libs libcamera)
 # Stills are encoded with libjpeg(-turbo): Raspberry Pi OS libjpeg-dev.
 LIBJPEG_LIBS ?= -ljpeg
-else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini),)
+else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 zt30 z1mini),)
 # ARMv7 targets: A8/Z1-Mini glibc and ZR10 uClibc.
 # Per-backend object directories keep incompatible SDKs and libcs separate.
 CROSS_COMPILE ?= arm-linux-
@@ -29,6 +29,20 @@ else
 TARGET := camera-app
 CROSS_COMPILE ?= aarch64-linux-gnu-
 LDFLAGS ?= -static
+endif
+ifeq ($(CAMERA_BACKEND),zt30)
+ifeq ($(ZT30_RAM_BUILD)$(ZT30_DEV_BUILD),11)
+$(error ZT30_RAM_BUILD and ZT30_DEV_BUILD are mutually exclusive)
+endif
+ifeq ($(ZT30_RAM_BUILD),1)
+TARGET := build/zt30-ram/camera-app
+else ifeq ($(ZT30_DEV_BUILD),1)
+TARGET := build/zt30-dev/camera-app
+else
+ifneq ($(filter all $(TARGET),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
+$(error ZT30 native backend is not qualified yet; use make zt30_sitl at the repository root)
+endif
+endif
 endif
 CC := $(CROSS_COMPILE)gcc
 HOST_CXX ?= c++
@@ -146,7 +160,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/protocol/targeting.cpp src/protocol/survey.cpp src/protocol/terrain.cpp \
 	src/protocol/siyi.cpp \
 	src/protocol/siyi_server.cpp \
-	$(if $(filter mt11 a8 zr10,$(CAMERA_BACKEND)),src/protocol/unigcs.cpp) \
+	$(if $(filter mt11 a8 zr10 zt30,$(CAMERA_BACKEND)),src/protocol/unigcs.cpp) \
 	src/protocol/private_uart.cpp \
 	src/recording/recorder_state.cpp \
 	src/recording/raw_thermal.cpp src/streaming/thermal_stream.cpp \
@@ -253,14 +267,18 @@ build/binlog_version.h: FORCE ../tools/write_build_version.py
 # file: an older source mtime must not conceal a changed firmware identity.
 src/recording/binlog.o $(SITL_OBJDIR)/c/src/recording/binlog.o \
  build/$(CAMERA_BACKEND)/c/src/recording/binlog.o \
- build/z1mini-host/c/src/recording/binlog.o: build/binlog_version.h
+ build/z1mini-host/c/src/recording/binlog.o \
+ build/zt30-sitl/c/src/backends/zt30/control.o \
+ build/windows-zt30/c/src/backends/zt30/control.o: build/binlog_version.h
 
 .PHONY: generated
 generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
  build/xop_rtp_connection.cpp build/binlog_version.h
 
 
-ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
+ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
+include ../tools/zt30_app.mk
+else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
 A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,\
 	$(XOP_HOST_SOURCES)) build/$(CAMERA_BACKEND)/xop/xop/RtspConnection.o \
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
@@ -792,7 +810,7 @@ clean:
 -include $(OBJECTS:.o=.d) $(SITL_APP_OBJECTS:.o=.d) $(SITL_RTSP_OBJECTS:.o=.d)
 
 # Backend wrapper includes the common SIYI control implementation.
-src/backends/a8/control.o src/backends/zr10/control.o: src/backends/siyi/control.cpp
+src/backends/a8/control.o src/backends/zr10/control.o src/backends/zt30/control.o: src/backends/siyi/control.cpp
 
 ZR10_HOST_TARGET := tests/camera-app-zr10-host
 $(ZR10_HOST_TARGET): CAMERA_BACKEND=zr10
@@ -1010,8 +1028,10 @@ build/host/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image
 build/$(CAMERA_BACKEND)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
 	mkdir -p $(@D)
 	$(CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
+ifneq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 OBJECTS += build/$(CAMERA_BACKEND)/tracking_dlib.o
 $(TARGET): build/$(CAMERA_BACKEND)/tracking_dlib.o
+endif
 $(SITL_OBJDIR)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
 	mkdir -p $(@D)
 	$(HOST_CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@

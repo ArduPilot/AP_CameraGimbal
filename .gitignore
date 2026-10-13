@@ -41,3 +41,8 @@ __pycache__/
 /camera_app/tests/test_metadata_history
 
 /camera_app/tests/test_terrain
+/web/zt30-dev-web
+
+/web/zt30-web
+
+/web/tests/test_zt30_process

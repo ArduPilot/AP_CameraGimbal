@@ -19,6 +19,21 @@ case "$backend" in
         video2="$build/thermal.h264"
         build_hint="make sitl"
         ;;
+    zt30)
+        build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/zt30-sitl}
+        web_binary=zt30-web
+        label=ZT30
+        camera_backend_args="--backend zt30"
+        config_template="$repo/packaging/zt30/camera.ini"
+        gimbal_port=${ZT30_SITL_GIMBAL_PORT:-0}
+        camera_port=${ZT30_SITL_CAMERA_PORT:-37260}
+        rtsp_port=${ZT30_SITL_RTSP_PORT:-8554}
+        web_port=${ZT30_SITL_WEB_PORT:-8081}
+        orientation=${ZT30_SITL_ORIENTATION:-upright}
+        video1="$build/rgb.h264"
+        video2="$build/thermal.h264"
+        build_hint="make zt30_sitl"
+        ;;
     a8)
         build=${CAMERA_GIMBAL_SITL_BUILD:-$repo/build/a8-sitl}
         web_binary=a8-web

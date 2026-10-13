@@ -69,6 +69,8 @@ int ca_media_manual_focus(struct ca_media *media, int direction);
 int ca_media_set_focus_percent(struct ca_media *media, float percent);
 bool ca_media_thermal_range(struct ca_media *media,
                             struct ca_thermal_range *range);
+bool ca_media_photo_available(const struct ca_media *);
+void ca_media_set_photo_prepare(struct ca_media *,int (*fn)(void*),void *opaque);
 int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope);
 /* Cached values for diagnostic sampling; never performs sensor I/O. */
 bool ca_media_cached_thermal_controls(struct ca_media *media, uint8_t *gain, uint8_t *palette);

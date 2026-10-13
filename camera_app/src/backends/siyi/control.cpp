@@ -37,9 +37,20 @@
 #include <time.h>
 #include <unistd.h>
 
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+#include "binlog_version.h"
+#include <stdio.h>
+#endif
+
+#ifdef CAMERA_APP_ZT30_DEV
+#include "../zt30/zoom_feedback.h"
+#endif
+
 #define PI_F 3.14159265358979323846f
 #if APCAM_TARGET == APCAM_TARGET_ZR10
 #define SIYI_BACKEND_NAME "zr10"
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+#define SIYI_BACKEND_NAME "zt30"
 #else
 #define SIYI_BACKEND_NAME "a8"
 #endif
@@ -70,7 +81,10 @@ struct ca_backend {
     int uart_fd;
     bool datagram_transport;
     bool reply_to_mcu;
-#if APCAM_TARGET == APCAM_TARGET_ZR10
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    uint8_t mcu_versions[8];
+#endif
+#if APCAM_TARGET == APCAM_TARGET_ZR10 || defined(CAMERA_APP_ZT30_DEV)
     uint64_t zoom_query_ms;
 #endif
     uint16_t link_sequence;
@@ -108,6 +122,14 @@ struct ca_backend {
     bool mounting_direction_known;
     bool mounting_direction_inferred;
     uint64_t mounting_query_ms;
+#ifdef CAMERA_APP_ZT30_DEV
+    uint64_t attitude_request_ms;
+    uint64_t rate_stop_ms;
+    uint64_t rate_retry_ms;
+    uint64_t rate_error_ms;
+    uint8_t tx_pending[A8_LINK_MAX_FRAME];
+    size_t tx_offset,tx_length;
+#endif
     bool photo_capture_error_logged;
     bool unsupported_logged[256];
     uint8_t feedback_last;
@@ -124,11 +146,16 @@ static uint64_t monotonic_ms(void)
     return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
 }
 
-static int write_all(int fd, const uint8_t *data, size_t length)
+static int write_all(int fd, const uint8_t *data, size_t length, size_t *completed=nullptr)
 {
+    if (completed) *completed=0;
+#ifdef CAMERA_APP_ZT30_DEV
+    const uint64_t deadline = monotonic_ms() + 30U;
+#endif
     while (length != 0U) {
         ssize_t written = write(fd, data, length);
         if (written > 0) {
+            if (completed) *completed+=(size_t)written;
             data += (size_t)written;
             length -= (size_t)written;
             continue;
@@ -136,7 +163,14 @@ static int write_all(int fd, const uint8_t *data, size_t length)
         if (written < 0 && errno == EINTR) continue;
         if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             struct pollfd item = {.fd = fd, .events = POLLOUT};
+#ifdef CAMERA_APP_ZT30_DEV
+            const uint64_t now = monotonic_ms();
+            if (now >= deadline) { errno=ETIMEDOUT;return -1; }
+            if (poll(&item, 1, (int)(deadline-now)) > 0) continue;
+            errno=ETIMEDOUT;
+#else
             if (poll(&item, 1, 1000) > 0) continue;
+#endif
         }
         return -1;
     }
@@ -173,6 +207,23 @@ static int configure_uart(int fd)
     return tcflush(fd, TCIOFLUSH);
 }
 
+#ifdef CAMERA_APP_ZT30_DEV
+static int flush_pending(ca_backend *backend)
+{
+    if (!backend->tx_length) return 0;
+    size_t sent=0;
+    const int result=write_all(backend->uart_fd,backend->tx_pending+backend->tx_offset,
+        backend->tx_length-backend->tx_offset,&sent);
+    backend->tx_offset+=sent;
+    if (!result) {
+        ca_binlog_packet(true,CA_PACKET_SIYI_MCU,CA_PACKET_MCU_UART,0,0,
+            backend->tx_pending,backend->tx_length,0);
+        backend->tx_offset=backend->tx_length=0;
+    }
+    return result;
+}
+#endif
+
 static int send_link(struct ca_backend *backend, uint8_t flags, uint8_t sub,
                      const uint8_t *payload, size_t payload_length)
 {
@@ -187,6 +238,9 @@ static int send_link(struct ca_backend *backend, uint8_t flags, uint8_t sub,
         errno = ENOTCONN;
         return -1;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!backend->datagram_transport && flush_pending(backend)<0) return -1;
+#endif
     frame[0] = A8_LINK_START;
     frame[1] = flags;
     frame[2] = A8_LINK_VERSION;
@@ -204,9 +258,19 @@ static int send_link(struct ca_backend *backend, uint8_t flags, uint8_t sub,
     frame[A8_LINK_HEADER + payload_length] = (uint8_t)crc;
     frame[A8_LINK_HEADER + payload_length + 1U] = (uint8_t)(crc >> 8U);
     size_t length = A8_LINK_OVERHEAD + payload_length;
+#ifdef CAMERA_APP_ZT30_DEV
+    size_t sent=0;
+    const int result=backend->datagram_transport?write_datagram(backend->uart_fd,frame,length):
+        write_all(backend->uart_fd,frame,length,&sent);
+    if (result<0 && sent) {
+        memcpy(backend->tx_pending,frame,length);
+        backend->tx_offset=sent;backend->tx_length=length;
+    }
+#else
     const int result = backend->datagram_transport
                ? write_datagram(backend->uart_fd, frame, length)
                : write_all(backend->uart_fd, frame, length);
+#endif
     ca_binlog_packet(true, CA_PACKET_SIYI_MCU, backend->datagram_transport ? CA_PACKET_MCU_UDP : CA_PACKET_MCU_UART,
                      0, 0, frame, length, result < 0 ? -errno : 0);
     return result;
@@ -228,6 +292,13 @@ static int send_public_command(struct ca_backend *backend, uint8_t opcode,
         errno = EINVAL;
         return -1;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    // Stock ZT30 worker at 0x4dbb2 sends rate bytes via native 6b/06.
+    // Its MCU accepts tunneled angle/getter commands, but ignores SDK 07 rates.
+    // This also routes startup, watchdog and shutdown zero rates correctly.
+    if (opcode == 0x07U && payload_length == 2U)
+        return send_link(backend, A8_LINK_FLAG_PLAIN, 0x06U, payload, payload_length);
+#endif
     length = ca_siyi_build(packet, sizeof(packet), 1,
                            backend->public_sequence++, opcode, payload,
                            payload_length);
@@ -245,10 +316,24 @@ static int send_public_command(struct ca_backend *backend, uint8_t opcode,
 
 static int send_startup(struct ca_backend *backend)
 {
-#if APCAM_TARGET == APCAM_TARGET_ZR10
+#ifdef CAMERA_APP_ZT30_DEV
+    ca_zt30::zoom_feedback().reset();
+#endif
+
+#ifdef CAMERA_APP_ZT30_DEV
+    const uint8_t stopped[2]={0,0};
+    if (send_public_command(backend,0x07U,stopped,sizeof(stopped))<0) return -1;
+    if (send_public_command(backend, 0x01U, NULL, 0U) < 0 ||
+        send_link(backend, A8_LINK_FLAG_REQUEST, A8_SUB_MOTION_MODE, NULL, 0) < 0 ||
+        send_link(backend, A8_LINK_FLAG_REQUEST, A8_SUB_MOUNTING, NULL, 0) < 0) return -1;
+    return ca_backend_request_gimbal_attitude(backend);
+#elif APCAM_TARGET == APCAM_TARGET_ZR10
     return send_public_command(backend, 0x01U, NULL, 0U);
 #else
     static const uint8_t stream_rate = 0x0aU;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    if (send_public_command(backend, 0x01U, NULL, 0U) < 0) return -1;
+#endif
 
     /* the vendor app queries these and sends 0x0d/10 once at start */
     if (send_link(backend, A8_LINK_FLAG_REQUEST, A8_SUB_UNKNOWN_14, NULL, 0) < 0 ||
@@ -337,10 +422,19 @@ static bool apply_mounting_direction(struct ca_backend *backend,
     bool inverted;
 
     if (direction < 1U || direction > 2U) return false;
+#ifdef CAMERA_APP_ZT30_DEV
+    inverted = direction==2U;
+#else
     inverted = backend->orientation == CA_MOUNT_AUTO
                    ? direction == 2U
                    : backend->orientation == CA_MOUNT_INVERTED;
+#endif
     if (backend->inverted_set(backend->inverted_opaque, inverted) < 0) {
+#ifdef CAMERA_APP_ZT30_DEV
+        backend->mounting_direction_known=false;
+        backend->mounting_direction=inverted?2U:1U;
+        if (backend->rate_stop_ms) backend->rate_stop_ms=monotonic_ms();
+#endif
         ca_log("gimbal-reported mounting direction could not be applied: %s",
                strerror(errno));
         return false;
@@ -424,6 +518,20 @@ static void handle_tunnel_reply(struct ca_backend *backend,
             (void)backend->zoom_set(backend->zoom_opaque, zoom);
     }
 #endif
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+#ifdef CAMERA_APP_ZT30_DEV
+    if ((packet.control & 2U) && packet.opcode == 0x18U && packet.payload_length == 2U) {
+        const uint64_t now=monotonic_ms();
+        const bool previously_known=isfinite(ca_zt30::zoom_feedback().get(now));
+        if (ca_zt30::zoom_feedback().observe(packet.payload[0],packet.payload[1],now) && !previously_known)
+            ca_log("ZT30 optical zoom feedback active %.1fx",ca_zt30::zoom_feedback().get(now));
+    }
+#endif
+    if ((packet.control & 2U) && packet.opcode == 0x01U && packet.payload_length == 12U &&
+        packet.payload[7] == 0x7a && packet.payload[11] == 0x79) {
+        memcpy(backend->mcu_versions, packet.payload + 4, sizeof(backend->mcu_versions));
+    }
+#endif
     if (packet.opcode == 0x0dU && packet.payload_length >= 12U) {
         update_attitude(backend, packet.payload, 6U, true);
         /* The vendor protocol retains its own mounting and sign conventions. */
@@ -460,6 +568,9 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
 #endif
     switch (sub) {
     case 0x3f:
+#ifdef CAMERA_APP_ZT30_DEV
+        break; // external UART relay remains unqualified
+#endif
         if (frame[8] == A8_LINK_CAMERA &&
             (frame[1] == A8_LINK_FLAG_PLAIN || frame[1] == A8_LINK_FLAG_REQUEST) &&
             backend->uart_emit) {
@@ -477,6 +588,9 @@ static void handle_frame(struct ca_backend *backend, const uint8_t *frame,
         break;
     }
     case A8_SUB_ATTITUDE:
+#ifdef CAMERA_APP_ZT30_DEV
+        break; // only explicit SDK0d feedback is physically qualified
+#endif
         if (payload_length >= 6U) update_attitude(backend, payload, 3U, false);
         break;
     case A8_SUB_TUNNEL:
@@ -554,6 +668,12 @@ int ca_backend_open(struct ca_backend **result,
     device = config->uart_device != NULL ? config->uart_device : A8_DEFAULT_UART;
     backend = (struct ca_backend*)(calloc(1, sizeof(*backend)));
     if (backend == NULL) return -1;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    // Known product tags are independent from firmware discovery. A zero
+    // version is unknown until a validated MCU reply fills the cached tuples.
+    backend->mcu_versions[3] = 0x7a;
+    backend->mcu_versions[7] = 0x79;
+#endif
     backend->manual_control=config->manual_control;
     backend->private_emit=config->private_emit;
     backend->private_opaque=config->private_opaque;
@@ -604,6 +724,10 @@ int ca_backend_open(struct ca_backend **result,
                                       ? 2U : 1U;
     backend->mounting_direction_known =
         config->orientation != CA_MOUNT_AUTO;
+#ifdef CAMERA_APP_ZT30_DEV
+    backend->orientation=CA_MOUNT_AUTO;
+    backend->mounting_direction_known=false;
+#endif
     backend->feedback_last = 6U;
     if (send_startup(backend) < 0) {
         int saved_errno = errno;
@@ -619,8 +743,43 @@ int ca_backend_open(struct ca_backend **result,
     return 0;
 }
 
+#ifdef CAMERA_APP_ZT30_DEV
+bool ca_backend_has_gimbal(const ca_backend *backend)
+{
+    const uint64_t now=monotonic_ms();
+    return backend && backend->mounting_direction_known && backend->mounting_direction==1U &&
+        backend->have_attitude && now>=backend->attitude.timestamp_ms &&
+        now-backend->attitude.timestamp_ms<1000U &&
+        fabsf(backend->attitude.pitch_rad)<=PI_F/2;
+}
+
+static int dev_rates(ca_backend *backend,int yaw,int pitch)
+{
+    // A stop must remain available after feedback loss or a mounting change.
+    if ((yaw || pitch) && !ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
+    // Signed raw45 produces about60deg/s on both axes. Keep SDK/private
+    // requests within that qualified range and stop after refresh is lost.
+    yaw=yaw>45?45:yaw<-45?-45:yaw;pitch=pitch>45?45:pitch<-45?-45:pitch;
+    const uint8_t payload[2]={(uint8_t)(int8_t)yaw,(uint8_t)(int8_t)pitch};
+    if ((yaw || pitch) && backend->gimbal_mode!=1U) {
+        // FPV rejects yaw motion. Ordinary manual PTZ uses follow mode.
+        const uint8_t follow=1;
+        if (send_link(backend,A8_LINK_FLAG_PLAIN,A8_SUB_MOTION_MODE,&follow,1)<0) return -1;
+        backend->gimbal_mode=follow;
+    }
+    backend->angle_target.valid=false;
+    if (yaw || pitch) { backend->rate_stop_ms=monotonic_ms()+150U;backend->rate_retry_ms=0; }
+    const int result=send_public_command(backend,0x07,payload,sizeof(payload));
+    if (!result && !yaw && !pitch) backend->rate_stop_ms=0;
+    return result;
+}
+#endif
+
 int ca_backend_write_external_uart(struct ca_backend *backend, const uint8_t *data, size_t length)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    (void)backend;(void)data;(void)length;errno=ENOTSUP;return -1;
+#endif
     /* 6b/35 ACKs write raw bytes to the external UART, including MAVLink.
      * A8's stock 6b/3f return path drops camera replies; 35 was verified with
      * MAVLink 1/2 and multi-frame FTP while the MCU emits its own telemetry. */
@@ -640,6 +799,25 @@ int ca_backend_handle_private(ca_backend *backend, const ca_private_frame *reque
         errno = EINVAL;
         return -1;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    {
+    // Use the same bounded SDK motion path as web/MAVLink, not an unchecked
+    // private network-to-MCU pass-through. Presets await physical qualification.
+    if (request->command!=0x9a || request->payload_length!=2U ||
+        (request->control!=A8_LINK_FLAG_PLAIN && request->control!=A8_LINK_FLAG_REQUEST) ||
+        (backend->manual_control && *backend->manual_control &&
+         (!backend->manual_command || !*backend->manual_command))) { errno=ENOTSUP;return -1; }
+    const int result=dev_rates(backend,(int8_t)request->payload[0],(int8_t)request->payload[1]);
+    if (!result && (request->control&1) && backend->private_emit) {
+        uint8_t status=1;
+        ca_private_frame reply=*request;reply.control=A8_LINK_FLAG_REPLY;
+        reply.source=A8_LINK_GIMBAL;reply.destination=request->source;
+        reply.payload=&status;reply.payload_length=1;reply.raw=nullptr;reply.raw_length=0;
+        backend->private_emit(backend->private_opaque,&reply);
+    }
+    return result;
+    }
+#endif
 #if APCAM_TARGET == APCAM_TARGET_A8
     if (request->command == 0x9a || request->command == 0x9b) {
         /* A8 cardv translates network motion into camera-originated 6b/06
@@ -747,6 +925,49 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     if (ca_backend_manual_blocked(backend->manual_control,backend->manual_command,
                                   packet.opcode,packet.payload,packet.payload_length)) return 0;
     ca_binlog_vendor(packet.opcode, packet.payload, packet.payload_length);
+#ifdef CAMERA_APP_ZT30_DEV
+    // Camera-local and unknown opcodes must not reach the MCU accidentally.
+    // These readonly getters were captured directly in Stage3.
+    if (backend->reply_to_mcu) { errno=ENOTSUP;return -1; }
+    switch(packet.opcode) {
+    case 0x01:
+        if (packet.payload_length) { errno=EINVAL;return -1; }
+        break; // local AP software version plus actual cached MCU versions
+    case 0x0a:
+        if (packet.payload_length || !ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
+        break; // shared configuration getter, no camera action
+    case 0x02: case 0x0d: case 0x18: case 0x19: case 0x31:
+        if (packet.payload_length) { errno=EINVAL;return -1; }
+        if (backend->reply_to_mcu) { errno=ENOTSUP;return -1; }
+        return send_tunnel(backend,packet_data,length);
+    case 0x07:
+        if (packet.payload_length!=2U) { errno=EINVAL;return -1; }
+        return dev_rates(backend,(int8_t)packet.payload[0],(int8_t)packet.payload[1]);
+    case 0x0e:
+        if (packet.payload_length!=4U) { errno=EINVAL;return -1; }
+        {
+        float angles[3]={0,
+            (int16_t)(packet.payload[2]|(uint16_t(packet.payload[3])<<8))/10.0f,
+            (int16_t)(packet.payload[0]|(uint16_t(packet.payload[1])<<8))/10.0f};
+        // Public SDK uses wire coordinates; canonical callers use right-positive yaw.
+        apcam_inverse_transform(&apcam_angle_command[backend->mounting_direction==2U],angles,angles,false);
+        return ca_backend_set_gimbal_angles(backend,angles[1]*PI_F/180,angles[2]*PI_F/180);
+        }
+    case 0x0c:
+        if(packet.payload_length==1U && packet.payload[0]==0) {
+            emit_feedback(backend,capture_photo(backend)?0U:1U);return 0;
+        }
+        if (packet.payload_length==1U && packet.payload[0]>=3 && packet.payload[0]<=5 &&
+            ca_backend_has_gimbal(backend)) {
+            const uint8_t mode=packet.payload[0]-3U;
+            const int result=send_link(backend,A8_LINK_FLAG_PLAIN,A8_SUB_MOTION_MODE,&mode,1);
+            if (!result) { backend->gimbal_mode=mode;backend->angle_target.valid=false; }
+            return result;
+        }
+        errno=ENOTSUP;return -1;
+    default:errno=ENOTSUP;return -1;
+    }
+#endif
     ca_angle_target_invalidate_siyi(&backend->angle_target, packet.opcode,
                                      packet.payload, packet.payload_length);
 #if APCAM_TARGET == APCAM_TARGET_ZR10
@@ -818,6 +1039,21 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
                              &mode, 1U);
         }
         break;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    case 0x01: {
+        if (packet.payload_length) break;
+        uint8_t version[12] = {};
+        unsigned major=0,minor=0,patch=0;
+        int fields=sscanf(CA_FIRMWARE_VERSION,"v%u.%u.%u",&major,&minor,&patch);
+        if (fields>=2 && major<=255 && minor<=255 && patch<=255) {
+            version[0]=(uint8_t)patch; version[1]=(uint8_t)minor; version[2]=(uint8_t)major;
+        }
+        version[3]=0x7b;
+        memcpy(version+4,backend->mcu_versions,sizeof(backend->mcu_versions));
+        emit_local(backend,packet.opcode,version,sizeof(version));
+        return 0;
+    }
+#endif
     case 0x0b:
         if (packet.payload_length != 0U) break;
         emit_feedback(backend, backend->feedback_last);
@@ -863,7 +1099,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         break;
     }
     case 0x16: {
-        static const uint8_t maximum[] = {6U, 0U};
+        static const uint8_t maximum[] = {(uint8_t)APCAM_ZOOM_CONTROL_MAX, 0U};
         if (packet.payload_length != 0U) break;
         emit_local(backend, packet.opcode, maximum, sizeof(maximum));
         return 0;
@@ -897,7 +1133,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
             return -1;
         }
         if (zoom < 1.0f) zoom = 1.0f;
-        if (zoom > 6.0f) zoom = 6.0f;
+        if (zoom > APCAM_ZOOM_CONTROL_MAX) zoom = APCAM_ZOOM_CONTROL_MAX;
         if (backend->zoom_set(backend->zoom_opaque, zoom) < 0) return -1;
         tenths = (unsigned)(zoom * 10.0f + 0.5f);
         response[0] = (uint8_t)tenths;
@@ -975,6 +1211,24 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
 void ca_backend_periodic(struct ca_backend *backend)
 {
     uint64_t now;
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!backend) return;
+    now=monotonic_ms();
+    if (backend->rate_stop_ms && now>=backend->rate_stop_ms && now>=backend->rate_retry_ms) {
+        if (dev_rates(backend,0,0)<0) {
+            backend->rate_retry_ms=monotonic_ms()+50U;
+            if (!backend->rate_error_ms || now-backend->rate_error_ms>=1000U) {
+                backend->rate_error_ms=now;
+                ca_log("ZT30 gimbal stop write failed; retrying: %s",strerror(errno));
+            }
+        }
+    }
+    (void)ca_backend_request_gimbal_attitude(backend);
+    if (!backend->zoom_query_ms || now-backend->zoom_query_ms>=1000U) {
+        backend->zoom_query_ms=now;
+        (void)send_public_command(backend,0x18U,NULL,0U);
+    }
+#endif
 
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     uint8_t focus[27];
@@ -997,6 +1251,12 @@ void ca_backend_periodic(struct ca_backend *backend)
 
 int ca_backend_request_gimbal_attitude(struct ca_backend *backend)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!backend) { errno=EINVAL;return -1; }
+    const uint64_t now=monotonic_ms();
+    if (backend->attitude_request_ms && now-backend->attitude_request_ms<100U) return 0;
+    backend->attitude_request_ms=now;
+#endif
     return send_public_command(backend, 0x0dU, NULL, 0U);
 }
 
@@ -1006,6 +1266,9 @@ bool ca_backend_gimbal_attitude(const struct ca_backend *backend,
     if (backend == NULL || attitude == NULL || !backend->have_attitude) {
         return false;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!ca_backend_has_gimbal(backend)) return false;
+#endif
     *attitude = backend->attitude;
     return true;
 }
@@ -1021,6 +1284,15 @@ static int16_t angle_tenths(float radians, float minimum, float maximum)
 int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
                                  float yaw_rad)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!isfinite(pitch_rad) || !isfinite(yaw_rad)) { errno=EINVAL;return -1; }
+    if (!ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
+    // Keep initial bench angle tests near the current measured pose.
+    const float delta=5.1f*PI_F/180;
+    if (fabsf(pitch_rad-backend->attitude.pitch_rad)>delta ||
+        fabsf(remainderf(yaw_rad-backend->attitude.yaw_rad,2*PI_F))>delta) { errno=ERANGE;return -1; }
+    if (backend->rate_stop_ms && dev_rates(backend,0,0)<0) return -1;
+#endif
     float angles[3] = {0, pitch_rad * (180.0f / PI_F), yaw_rad * (180.0f / PI_F)};
     angles[1] = fminf(APCAM_GIMBAL_PITCH_MAX, fmaxf(APCAM_GIMBAL_PITCH_MIN, angles[1]));
     angles[2] = fminf(APCAM_GIMBAL_YAW_MAX, fmaxf(APCAM_GIMBAL_YAW_MIN, angles[2]));
@@ -1029,9 +1301,17 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
     int16_t yaw = angle_tenths(angles[2] * (PI_F / 180.0f), -180.0f, 180.0f);
     int16_t pitch = angle_tenths(angles[1] * (PI_F / 180.0f), -180.0f, 180.0f);
     uint64_t now = monotonic_ms();
+    const ca_gimbal_attitude *retry_attitude=backend->have_attitude ? &backend->attitude : NULL;
+#ifdef CAMERA_APP_ZT30_DEV
+    // Raw rate feedback is unqualified and reports a stationary pitch bias.
+    // Use actual position, not those rates, to decide whether a lost target
+    // needs retrying. Keep the transmitted telemetry unchanged.
+    ca_gimbal_attitude retry_pose=backend->attitude;
+    retry_pose.yaw_rate_rad_s=retry_pose.pitch_rate_rad_s=0;
+    retry_attitude=&retry_pose;
+#endif
     if (ca_angle_target_suppress(&backend->angle_target, yaw, pitch,
-                                 target_yaw, target_pitch,
-                                 backend->have_attitude ? &backend->attitude : NULL, now)) return 0;
+                                 target_yaw, target_pitch,retry_attitude,now)) return 0;
     uint8_t payload[4] = {
         (uint8_t)yaw, (uint8_t)((uint16_t)yaw >> 8U),
         (uint8_t)pitch, (uint8_t)((uint16_t)pitch >> 8U),
@@ -1057,6 +1337,9 @@ int ca_backend_set_gimbal_rates(struct ca_backend *backend,
                                 float pitch_rate_rad_s,
                                 float yaw_rate_rad_s)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    if (!backend || !isfinite(pitch_rate_rad_s) || !isfinite(yaw_rate_rad_s)) { errno=EINVAL;return -1; }
+#endif
     float rates[3] = {0, pitch_rate_rad_s, yaw_rate_rad_s};
     apcam_transform(&apcam_rate_command[backend->mounting_direction == 2U], rates, rates, true);
     uint8_t payload[2] = {
@@ -1073,7 +1356,11 @@ int ca_backend_set_gimbal_rates(struct ca_backend *backend,
     payload[1] = (uint8_t)ca_gimbal_rate_command(rates[1] * (180.0f / PI_F),
         pitch_curve, sizeof(pitch_curve) / sizeof(pitch_curve[0]));
 #endif
+#ifdef CAMERA_APP_ZT30_DEV
+    int result = dev_rates(backend,(int8_t)payload[0],(int8_t)payload[1]);
+#else
     int result = send_public_command(backend, 0x07U, payload, sizeof(payload));
+#endif
     CA_BINLOG(CA_LOG_GCMD, ca_log_gcmd, .mode=2,
         .pitch=pitch_rate_rad_s*57.295779513f, .yaw=yaw_rate_rad_s*57.295779513f,
         .wirep=(float)(int8_t)payload[1], .wirey=(float)(int8_t)payload[0], .result=result);
@@ -1082,6 +1369,9 @@ int ca_backend_set_gimbal_rates(struct ca_backend *backend,
 
 int ca_backend_set_gimbal_neutral(struct ca_backend *backend)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    (void)backend;errno=ENOTSUP;return -1; // full-travel presets not qualified yet
+#endif
     const uint8_t neutral = 1U;
     return send_public_command(backend, 0x08U, &neutral, sizeof(neutral));
 }
@@ -1100,6 +1390,13 @@ const char *ca_backend_name(const struct ca_backend *backend)
 void ca_backend_close(struct ca_backend *backend)
 {
     if (backend == NULL) return;
+#ifdef CAMERA_APP_ZT30_DEV
+    if (backend->uart_fd>=0) {
+        bool stopped=false;
+        for (unsigned i=0;i<3 && !stopped;i++) stopped=dev_rates(backend,0,0)==0;
+        if (!stopped) ca_log("ZT30 gimbal stop failed on shutdown: %s",strerror(errno));
+    }
+#endif
     if (backend->uart_fd >= 0) close(backend->uart_fd);
     free(backend);
 }

@@ -10,7 +10,7 @@ public:
     const char * recording_path() const override { return ""; }
     int set_zoom(float ) override { return 0; }
     float zoom() const override { return 0; }
-    float hfov(bool ) const override { return 0; }
+    float hfov(bool ) const override { return 50; }
     unsigned frame_rate(bool ) const override { return 0; }
     int set_lens(enum ca_media_lens ) override { return 0; }
     enum ca_media_lens lens() const override { return CA_MEDIA_LENS_WIDE; }

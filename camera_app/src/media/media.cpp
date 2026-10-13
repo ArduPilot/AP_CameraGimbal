@@ -196,6 +196,9 @@ void APC_Media::_start_controls_monitor()
     }, this);
     if (error) ca_log("cannot start exposure monitor: %s",strerror(error));
     else _exposure_running=true;
+#ifdef CAMERA_APP_ZT30_DEV
+    return; // Lens metadata includes thermal; native module controls are unqualified.
+#endif
     if (!_camera.has_thermal()) return;
     error = pthread_create(&_controls_thread, nullptr, [](void *opaque) -> void * {
         static_cast<APC_Media *>(opaque)->_monitor_controls();
@@ -281,6 +284,9 @@ int APC_Media::_restore_controls(const LiveControls *state)
 
 int APC_Media::configure(const struct ca_config *settings)
 {
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+    (void)settings;errno=ENOTSUP;return -1; // before any reset/recreate or settings write
+#else
     if (!settings) { errno = EINVAL; return -1; }
     const struct ca_config *old = &_config.settings;
     bool pipeline = !_backend || old->main_resolution != settings->main_resolution ||
@@ -357,6 +363,7 @@ int APC_Media::configure(const struct ca_config *settings)
     }
     _config.settings = *settings;
     return 0;
+#endif
 }
 
 APC_Media::~APC_Media()
@@ -396,7 +403,7 @@ const char * APC_Media::recording_path() const
 int APC_Media::set_zoom(float zoom)
 {
     REQUIRE_IMPL;
-    if (isfinite(zoom) && zoom >= 1 && zoom <= APCAM_ZOOM_MAX) {
+    if (APCAM_ZOOM_SELECTS_LENS && isfinite(zoom) && zoom >= 1 && zoom <= APCAM_ZOOM_MAX) {
         // System zoom can switch RGB sensors or leave thermal view. Stop the
         // compositor before the backend rebinds VENC, and discard the old track.
         if (_backend->side_by_side() && _backend->set_side_by_side(false)<0) return -1;
@@ -483,9 +490,11 @@ int APC_Media::set_focus_percent(float percent)
 bool APC_Media::thermal_range(struct ca_thermal_range *range)
 { return _backend && _backend->thermal_range(range) &&
          ca_thermal_range_fresh(range, ca_binlog_time_us()); }
+bool APC_Media::photo_available() const { return APCAM_HAVE_PHOTO && _backend && _backend->photo_available(); }
 int APC_Media::capture_photo(enum ca_photo_scope scope)
 {
     REQUIRE_IMPL;
+    if(_photo_prepare && _photo_prepare(_photo_opaque)<0)return -1;
     struct ca_metadata snapshot;
     ca_metadata_snapshot(&snapshot);
     struct ca_log_cam r={};
@@ -553,9 +562,10 @@ int APC_Media::set_inverted(bool inverted)
 
 // Legacy protocol entry points; new services can use APC_Media directly.
 bool ca_media_tracking_available(ca_media *media)
-{ return media && media->tracking().available(); }
+{ return media && media->tracking().available() &&
+    std::isfinite(media->hfov(media->thermal_main())) && media->hfov(media->thermal_main()) > 0; }
 int ca_media_tracking_start(ca_media *media, ca_tracking_rect rect, ca_tracking_owner owner)
-{ if(!media) { errno=ENODEV; return -1; } if(media->side_by_side()) { errno=ENOTSUP; return -1; }
+{ if(!media) { errno=ENODEV; return -1; } if(media->side_by_side() || !ca_media_tracking_available(media)) { errno=ENOTSUP; return -1; }
   return media->tracking().start(rect,owner); }
 int ca_media_set_side_by_side(ca_media *media,bool enabled)
 { if(!media) { errno=ENODEV; return -1; } return media->set_side_by_side(enabled); }
@@ -655,6 +665,10 @@ int ca_media_set_focus_percent(struct ca_media *media, float percent)
 bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
 {
     return media ? media->thermal_range(range) : (false);
+}
+bool ca_media_photo_available(const ca_media *media) { return media && media->photo_available(); }
+void ca_media_set_photo_prepare(ca_media *media,int (*fn)(void*),void *opaque) {
+    if(media)media->set_photo_prepare(fn,opaque);
 }
 int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
 {

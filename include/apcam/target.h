@@ -6,6 +6,8 @@
 #endif
 #if APCAM_TARGET == APCAM_TARGET_MT11
 #include "target_mt11.h"
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+#include "target_zt30.h"
 #elif APCAM_TARGET == APCAM_TARGET_A8
 #include "target_a8.h"
 #elif APCAM_TARGET == APCAM_TARGET_ZR10
@@ -51,9 +53,39 @@
 #ifndef APCAM_SIM_OPTICAL_ZOOM_STEP
 #define APCAM_SIM_OPTICAL_ZOOM_STEP 0.0f
 #endif
+/* Some modules retain zoom independently from the selected RGB source. */
+#ifndef APCAM_ZOOM_SELECTS_LENS
+#define APCAM_ZOOM_SELECTS_LENS 1
+#endif
+#ifndef APCAM_DEFAULT_RGB_LENS
+#define APCAM_DEFAULT_RGB_LENS 0
+#endif
+#ifndef APCAM_LENS1_DIGITAL_ZOOM_MAX
+#define APCAM_LENS1_DIGITAL_ZOOM_MAX (!APCAM_HAVE_ZOOM || (APCAM_HAVE_OPTICAL_ZOOM && APCAM_NUM_LENSES == 1) ? 1.0f : APCAM_ZOOM_MAX)
+#endif
+#ifndef APCAM_LENS2_DIGITAL_ZOOM_MAX
+#define APCAM_LENS2_DIGITAL_ZOOM_MAX 1.0f
+#endif
+#ifndef APCAM_LENS2_FOV_MODEL
+#define APCAM_LENS2_FOV_MODEL APCAM_FOV_FOCAL_LENGTH
+#endif
+#ifndef APCAM_LENS2_FOV_H_TELE
+#define APCAM_LENS2_FOV_H_TELE 0.0f
+#endif
+#ifndef APCAM_LENS3_DIGITAL_ZOOM_MAX
+#define APCAM_LENS3_DIGITAL_ZOOM_MAX 1.0f
+#endif
 /* String forms for configuration defaults; numeric IDs remain stable. */
 #define APCAM_RESOLUTION_NAME(value) ((value) == APCAM_RES_720P ? "1280x720" : \
     (value) == APCAM_RES_1080P ? "1920x1080" : (value) == APCAM_RES_1440P ? "2560x1440" : "3840x2160")
 #define APCAM_STRING_VALUE_(value) #value
 #define APCAM_STRING_VALUE(value) APCAM_STRING_VALUE_(value)
+/* A fixed thermal video stream need not expose module controls or calibrated
+ * temperature data (for example the initial native ZT30 backend). */
+#ifndef APCAM_HAVE_RAW_THERMAL
+#define APCAM_HAVE_RAW_THERMAL APCAM_HAVE_THERMAL
+#endif
+#ifndef APCAM_HAVE_THERMAL_VIDEO
+#define APCAM_HAVE_THERMAL_VIDEO APCAM_HAVE_THERMAL
+#endif
 #endif

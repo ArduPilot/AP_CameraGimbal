@@ -7,6 +7,9 @@
 #include "apcam/lens.h"
 #include "apcam/APC_Timezone.h"
 #include "apcam/config_status.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "apcam/APC_ZT30_Config.h"
+#endif
 
 #include "camera_app/backend.h"
 #include "camera_app/camera_definition.h"
@@ -26,6 +29,10 @@
 #include "camera_app/video_fov.h"
 
 #include <arpa/inet.h>
+#ifdef CAMERA_APP_ZT30_RAM
+#include "camera_app/zt30_ram_peer.h"
+#include "../backends/zt30/ram_protocol.h"
+#endif
 #include <algorithm>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -696,6 +703,9 @@ static void send_camera_information(struct ca_mavlink_server *server,
                  CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS |
                  CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
     if(ca_media_survey_available(server->media,server->settings.survey.lens)) info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
+#ifdef CAMERA_APP_ZT30_RAM
+    info.flags=CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
+#endif
     info.cam_definition_version = server->definition_version;
     if(ca_media_tracking_available(server->media))
         info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
@@ -717,12 +727,30 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
+#ifdef CAMERA_APP_ZT30_DEV
+    // Native recording and lens controls remain unavailable; photographs
+    // use the qualified local JPEG/raw paths.
+    info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM | CAMERA_CAP_FLAGS_CAPTURE_IMAGE |
+                 CAMERA_CAP_FLAGS_HAS_MODES | CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE;
+    // Optional gimbal identity above is based on actual fresh MCU feedback.
+#endif
+    if(!ca_media_photo_available(server->media))
+        info.flags &= ~(CAMERA_CAP_FLAGS_CAPTURE_IMAGE | CAMERA_CAP_FLAGS_HAS_MODES |
+                        CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE);
     snprintf(info.cam_definition_uri, sizeof(info.cam_definition_uri),
              "mftp://[;comp=%u]" CA_CAMERA_DEFINITION_PATH, server->camera_component_id);
     unsigned width, height;
     ca_video_resolution_size(server->settings.main_resolution, &width, &height);
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
+#ifdef CAMERA_APP_ZT30_DEV
+    // CAMERA_INFORMATION describes photographs; streaming dimensions belong
+    // to VIDEO_STREAM_INFORMATION. Full-scope native capture includes zoom 4K.
+    if(ca_media_photo_available(server->media)) {
+        info.resolution_h=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?640:3840;
+        info.resolution_v=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?512:2160;
+    }
+#endif
     put_text((char *)info.vendor_name, sizeof(info.vendor_name), "ArduPilot");
     put_text((char *)info.model_name, sizeof(info.model_name),
              APCAM_MODEL_NAME);
@@ -734,18 +762,25 @@ static void send_camera_information(struct ca_mavlink_server *server,
 
 static float selected_zoom_max(const struct ca_mavlink_server *server)
 {
+    if (!APCAM_ZOOM_SELECTS_LENS) {
+        if (ca_media_thermal_main(server->media)) return 1;
+        const auto *lens = APC_Camera::get_singleton().lens(ca_media_lens(server->media));
+        return lens ? lens->optical_zoom_max() * lens->digital_zoom_max() : 1;
+    }
     return APCAM_HAVE_ZOOM_LENS && ca_media_lens(server->media) == CA_MEDIA_LENS_ZOOM ?
         APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_CONTROL_MAX;
 }
 
 static float selected_zoom(const struct ca_mavlink_server *server)
 {
+    if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) return 1;
     return ca_media_lens_zoom(server->media, ca_media_lens(server->media));
 }
 
 static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
 {
 #if APCAM_HAVE_ZOOM_LENS
+    if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) { errno=ENOTSUP; return -1; }
     enum ca_media_lens lens = ca_media_lens(server->media);
     if (lens == CA_MEDIA_LENS_ZOOM) {
         /* Range/step arithmetic can land a float ULP above a calibration
@@ -763,7 +798,8 @@ static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
 static float zoom_percent(const struct ca_mavlink_server *server)
 {
     float zoom = selected_zoom(server);
-    return (zoom - 1.0f) * (100.0f / (selected_zoom_max(server) - 1.0f));
+    float maximum = selected_zoom_max(server);
+    return maximum > 1 ? (zoom - 1.0f) * (100.0f / (maximum - 1.0f)) : 0;
 }
 
 static void send_camera_settings(struct ca_mavlink_server *server,
@@ -905,15 +941,18 @@ static void stream_properties(const struct ca_mavlink_server *server,
                               unsigned *height, enum ca_video_codec *codec,
                               uint16_t *flags)
 {
-    bool thermal = APCAM_HAVE_THERMAL &&
+    bool thermal = APCAM_HAVE_THERMAL_VIDEO &&
         (ca_media_thermal_main(server->media) ? stream_id == 1U
                                              : stream_id == 2U);
+    #if APCAM_NUM_STREAMS > 1
     if (stream_id == 2U) {
         ca_video_resolution_size(server->settings.sub_resolution, width, height);
         *codec = server->settings.sub_codec;
         *flags = server->stream_enabled[1] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
                                            : 0U;
-    } else {
+    } else
+    #endif
+    {
         ca_video_resolution_size(server->settings.main_resolution, width, height);
         *codec = server->settings.main_codec;
         *flags = server->stream_enabled[0] ? (unsigned)VIDEO_STREAM_STATUS_FLAGS_RUNNING
@@ -927,6 +966,10 @@ static void stream_properties(const struct ca_mavlink_server *server,
         *flags |= VIDEO_STREAM_STATUS_FLAGS_THERMAL_RANGE_ENABLED;
 #endif
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    if(!ca_media_frame_rate(server->media,thermal))
+        *flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
+#endif
 }
 
 // CAMERA_FOV_STATUS describes the current main camera source. Unlike the
@@ -980,7 +1023,11 @@ static void send_stream_information(struct ca_mavlink_server *server,
 {
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+    info.bitrate=1570000U;
+#else
     info.bitrate = 4096000U;
+#endif
     info.count = stream_count();
     info.type = VIDEO_STREAM_TYPE_RTSP;
     unsigned width, height;
@@ -989,6 +1036,9 @@ static void send_stream_information(struct ca_mavlink_server *server,
     stream_properties(server, stream_id, &width, &height, &codec, &info.flags);
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
+#ifdef CAMERA_APP_ZT30_DEV
+    info.bitrate=thermal?1000000U:1570000U;
+#endif
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
     info.hfov = (uint16_t)lroundf(ca_media_hfov(server->media, thermal));
@@ -1056,6 +1106,9 @@ static void send_stream_status(struct ca_mavlink_server *server,
     (void)codec;
     status.framerate = ca_media_frame_rate(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U);
+#ifdef CAMERA_APP_ZT30_DEV
+    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:1570000U;
+#endif
     status.resolution_h = (uint16_t)width;
     status.resolution_v = (uint16_t)height;
     status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,
@@ -1181,6 +1234,9 @@ static void send_gimbal_information(struct ca_mavlink_server *server,
                      GIMBAL_DEVICE_CAP_FLAGS_HAS_YAW_AXIS |
                      GIMBAL_DEVICE_CAP_FLAGS_HAS_YAW_FOLLOW |
                      GIMBAL_DEVICE_CAP_FLAGS_SUPPORTS_YAW_IN_EARTH_FRAME;
+#ifdef CAMERA_APP_ZT30_DEV
+    flags &= ~GIMBAL_DEVICE_CAP_FLAGS_HAS_NEUTRAL;
+#endif
     if (server->settings.position_targeting) {
         flags |= GIMBAL_DEVICE_CAP_FLAGS_CAN_POINT_LOCATION_GLOBAL;
     }
@@ -1518,6 +1574,8 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
     if (type != 2.0f && (value < -1.0f || value > 1.0f)) return MAV_RESULT_DENIED;
     if (APCAM_ZOOM_NATIVE_RATE && type == 1.0f)
         return ca_backend_set_zoom_rate(server->backend, value) == 0 ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
+    if (!APCAM_ZOOM_SELECTS_LENS && selected_zoom_max(server) <= 1 && value != 0)
+        return MAV_RESULT_UNSUPPORTED;
     unsigned zoom_type = (unsigned)type;
     if (zoom_type == 2U) {
         if (!isfinite(value) || value < 0.0f || value > 100.0f) {
@@ -1964,6 +2022,9 @@ static void handle_system_time(struct ca_mavlink_server *server,
                                const mavlink_message_t *message)
 {
     /* Adopt the autopilot's UTC date if ours predates 1 September 2026 UTC. */
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)server;(void)message;return;
+#else
     const time_t earliest_valid_time = 1788220800;
     mavlink_system_time_t time;
     uint64_t unix_us;
@@ -1987,6 +2048,7 @@ static void handle_system_time(struct ca_mavlink_server *server,
     } else {
         ca_log("system time setting from MAVLink failed: %s", strerror(errno));
     }
+#endif
 }
 
 static void handle_global_position_int(
@@ -2185,6 +2247,9 @@ static void refresh_parameters(struct ca_mavlink_server *server)
     char error[160];
     ca_config_defaults(&parameters);
     if (ca_config_load(&parameters, server->config_path, error, sizeof(error)) == 0) {
+#ifdef CAMERA_APP_ZT30_DEV
+        APC_ZT30_Config::effective(parameters);
+#endif
         server->parameters = parameters;
     }
 }
@@ -2218,6 +2283,10 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
 /* Share runtime application between PARAM_SET, PARAM_EXT_SET and INI reload. */
 static bool live_config_parameter(size_t index)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    (void)index;
+    return false; // Native configuration is explicitly restart-only for now.
+#else
     const char *name = ca_config_param_name(index);
     if (strcmp(name, "PHOTO_SCOPE") == 0) return true;
     if (strcmp(name, "THERMAL_PALETTE") == 0) return APCAM_HAVE_THERMAL;
@@ -2225,6 +2294,7 @@ static bool live_config_parameter(size_t index)
     struct ca_camera_parameter p;
     return camera_index >= 0 && ca_camera_param_info((size_t)camera_index, &p) &&
         p.operation == CA_CAMERA_CONFIG;
+#endif
 }
 
 static int apply_runtime_config(struct ca_mavlink_server *server, const struct ca_config *next)
@@ -2351,6 +2421,9 @@ static void config_status(struct ca_mavlink_server *server, uint64_t hash,
 
 static void reload_config(struct ca_mavlink_server *server, uint64_t now)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)server;(void)now;return; // bounded RAM configuration, no hot reload
+#else
     if (now - server->config_check_ms < 500U) return;
     server->config_check_ms = now;
     struct stat before, after;
@@ -2370,6 +2443,14 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         config_status(server, hash, "error", error[0] ? error : "Could not read configuration");
         return;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    // Publish the normal PID/hash acknowledgement for web restart, but never
+    // call the unqualified live media/configuration path. This is a notice,
+    // not a claim that clamped or unsupported settings have been applied.
+    config_status(server, hash, "restart",
+        "Development build reads settings at startup; later saves require restart. Video remains fixed at 1280x720 H264; unsupported features remain disabled.");
+    return;
+#else
     for (size_t i=0;i<ca_config_param_count();i++) {
         int value=ca_config_param_get(&desired,i);
         if (value!=ca_config_param_get(&server->parameters,i))
@@ -2424,6 +2505,8 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     config_status(server, hash, restart ? "restart" : "applied", restart ?
         "Live settings applied. Restart to apply mount, identity, transport, network, stream alias or SupportProxy changes." :
         "All saved settings applied without restarting the camera app.");
+#endif
+#endif
 }
 
 static uint8_t handle_parameter(struct ca_mavlink_server *server,
@@ -2526,7 +2609,8 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
             ? &server->parameters : &server->settings, (size_t)p->config_index);
         return true;
     case CA_CAMERA_ZOOM:
-        *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
+        *value = !APCAM_ZOOM_SELECTS_LENS ? selected_zoom(server) :
+            ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
         return isfinite(*value);
     case CA_CAMERA_OPTICAL_ZOOM:
         *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM);
@@ -2630,10 +2714,18 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
     switch (p->operation) {
     case CA_CAMERA_MODE: return set_camera_mode(server,(unsigned)value)==MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_CONFIG:
+#ifdef CAMERA_APP_ZT30_DEV
+        if (ca_config_param_save(&server->parameters, server->config_path,
+                                 (size_t)p->config_index, value) < 0) return -1;
+        parameter_status(server, "Parameter saved; restart required");
+        return 0;
+#else
         return apply_camera_config(server, (size_t)p->config_index, value);
+#endif
     case CA_CAMERA_ZOOM:
         server->zoom_rate = 0;
-        return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
+        return !APCAM_ZOOM_SELECTS_LENS ? set_selected_zoom(server, value) :
+            ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
     case CA_CAMERA_OPTICAL_ZOOM:
         server->zoom_rate = 0;
         return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM, value);
@@ -2852,6 +2944,19 @@ static void process_message(struct ca_mavlink_server *server,
                             const struct route *route,
                             const mavlink_message_t *message)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    // Qualification accepts camera information and one fixed lens read. No parameter,
+    // actuator, clock, stream configuration or recording mutations.
+    if(message->msgid==MAVLINK_MSG_ID_COMMAND_LONG) {
+        const auto command=mavlink_msg_command_long_get_command(message);
+        if(command!=MAV_CMD_REQUEST_MESSAGE && command!=MAV_CMD_REQUEST_CAMERA_INFORMATION &&
+           command!=MAV_CMD_REQUEST_CAMERA_CAPTURE_STATUS && command!=MAV_CMD_REQUEST_VIDEO_STREAM_INFORMATION)return;
+    } else if(message->msgid==MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ) {
+        mavlink_param_ext_request_read_t request{};
+        mavlink_msg_param_ext_request_read_decode(message,&request);
+        if(!ca_zt30::ram_lens_read(request.param_index,request.param_id))return;
+    } else if(message->msgid!=MAVLINK_MSG_ID_HEARTBEAT)return;
+#endif
     /* Stay silent until automatic identity is known. Never select a GCS,
      * even one which incorrectly advertises a valid autopilot type. */
     if (message->msgid == MAVLINK_MSG_ID_HEARTBEAT && message->len >= 6U &&
@@ -3014,6 +3119,9 @@ static int accept_clients(struct ca_mavlink_server *server)
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&address))) { close(fd);continue; }
+        #endif
         unsigned slot;
         for (slot = 0; slot < CA_MAVLINK_CLIENTS; slot++) {
             if (server->clients[slot].fd < 0) break;
@@ -3082,6 +3190,9 @@ static int read_udp(struct ca_mavlink_server *server)
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&route.address)))continue;
+        #endif
         server->last_udp = route;
         server->have_udp_peer = true;
         feed(server, &server->udp_parser, &route, data, (size_t)received);
