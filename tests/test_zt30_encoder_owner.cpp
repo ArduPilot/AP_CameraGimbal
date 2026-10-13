@@ -8,6 +8,7 @@ using namespace ca_zt30;
 static std::vector<std::string> calls;
 static std::set<std::string> resources;
 static unsigned failure;
+static bool thermal=false;
 static EncoderPacket *storage;
 static EncoderStream returned;
 static uint32_t query_count=2;
@@ -18,7 +19,7 @@ static H264Vui current_vui{};
 static unsigned vui_reads=0;
 static const uint8_t sample[]={9,8,7,6,5,4};
 static int event(const char *name) { calls.emplace_back(name);return failure==calls.size()?-99:0; }
-static void ids(uint32_t dev,uint32_t chn) { assert(dev==0 && chn==1); }
+static void ids(uint32_t dev,uint32_t chn) { assert(dev==0 && chn==(thermal?2U:1U)); }
 static Api system_api() {
     Api s{};
     s.sys_bind=[](uint16_t chip,Port *src,Port *dst,uint32_t a,uint32_t b,uint32_t type,uint32_t p) {
@@ -42,8 +43,8 @@ static EncoderApi encoder_api() {
     };
     a.destroy_device=[](uint32_t dev) { assert(dev==0);const int rc=event("destroy_device");resources.erase("device");return rc; };
     a.create_channel=[](uint32_t dev,uint32_t chn,H26xChannel *attr) {
-        ids(dev,chn);assert(attr->codec==expected_codec && attr->rate_mode==(expected_codec==2?1U:8U) && attr->profile==(expected_codec==2?1U:0U) && attr->width==1280 && attr->height==720 && attr->fps_num==30 && attr->fps_den==1 && attr->bitrate==1570000);
-        assert(attr->max_width==(expected_codec==2?1280U:3840U) && attr->max_height==(expected_codec==2?720U:2160U));
+        ids(dev,chn);assert(attr->codec==expected_codec && attr->rate_mode==(expected_codec==2?1U:8U) && attr->profile==(expected_codec==2?1U:0U) && attr->width==(thermal?640U:1280U) && attr->height==(thermal?512U:720U) && attr->fps_num==(thermal?15U:30U) && attr->fps_den==1 && attr->bitrate==(thermal?1000000U:1570000U));
+        assert(attr->max_width==(thermal?640U:expected_codec==2?1280U:3840U) && attr->max_height==(thermal?512U:expected_codec==2?720U:2160U));
         assert(attr->reference_frames==(expected_codec==2?1U:0U));
         const int rc=event("create_channel");if(!rc)resources.insert("channel");return rc;
     };
@@ -226,5 +227,20 @@ int main() {
     reset();EncoderOwner bad_source(s,a,m);
     assert(bad_source.open(EncoderCodec::H265,H264Timing::ReadOnly,static_cast<EncoderSource>(99))==-1);
     assert(calls.empty() && resources.empty() && !bad_source.ready());
+    thermal=true;expected_codec=2;
+    for(unsigned step=0;step<=3;step++) {
+        reset();failure=step;EncoderOwner th(s,a,m);
+        assert(th.open_thermal()==(step?-99:0));
+        if(!step) {
+            assert(th.ready());uint8_t data[64]{};EncodedFrame frame{};frame.data=data;frame.capacity=64;
+            assert(th.copy_frame(frame)==1 && frame.bytes==9);
+        }
+        assert(th.close()==0 && resources.empty());
+        for(const auto &call:calls)assert(call!="create_device" && call!="destroy_device" && call!="bind" && call!="unbind" && call!="vui_set");
+    }
+    for(unsigned step=1;step<=2;step++) {
+        reset();EncoderOwner th(s,a,m);assert(th.open_thermal()==0);failure=calls.size()+step;
+        assert(th.close()==-99 && resources.empty());
+    }
     return 0;
 }

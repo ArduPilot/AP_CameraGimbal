@@ -160,7 +160,7 @@ public:
     }
     ~RamBackend() override {
         const int rc=shutdown();final_result=result();active_media=nullptr;
-        std::printf("ENCODER CLOSE raw=%d frames=%u bytes=%zu elapsed_ns=%llu\n",rc,frames(),bytes(),static_cast<unsigned long long>(monotonic_ns()-context->capture.begin));
+        std::printf("ENCODER CLOSE raw=%d frames=%u bytes=%zu elapsed_ns=%llu\n",rc,frames(),size_t(bytes()),static_cast<unsigned long long>(monotonic_ns()-context->capture.begin));
         std::printf("CLOSE raw=%d elapsed_ns=%llu\n",rc,static_cast<unsigned long long>(monotonic_ns()-context->capture.begin));
         if(wide_source)std::printf("RAM_FACTORY_TIMING phase=closed elapsed_ns=%llu\n",static_cast<unsigned long long>(monotonic_ns()-factory_begin));
         if(rc)_exit(25);

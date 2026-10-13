@@ -145,14 +145,18 @@ tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WE
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
-test: $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
+tests/test_zt30_process: tests/test_zt30_process.cpp zt30-process.h
+	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
+
+test: tests/test_zt30_process $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
+	./tests/test_zt30_process
 	./tests/test_string_buffer
 	./tests/test_webroot
 	python3 tests/test_integration.py ./$(HOST_TEST) '$(TEST_ROOT)'
 	python3 tests/test_a8_upgrade.py
 
 clean:
-	rm -f tests/test_string_buffer tests/test_webroot mt11-web a8-web zr10-web z1mini-web rpi_libcam_caddx-web $(HOST_TEST) $(A8_HOST_CHECK)
+	rm -f tests/test_zt30_process tests/test_string_buffer tests/test_webroot mt11-web a8-web zr10-web z1mini-web rpi_libcam_caddx-web zt30-web zt30-dev-web $(HOST_TEST) $(A8_HOST_CHECK)
 	rm -rf tests/runtime build
 
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
@@ -199,3 +203,7 @@ network-status-test: $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER)
 ZT30_CROSS_COMPILE ?= arm-linux-
 zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DZT30_WEB_DEV -o $@ $< -lm
+
+# AP-only persistent ZT30 layout; initial native app has one RGB stream.
+zt30-web: mt11-web.cpp zt30-paths.h zt30-process.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -o $@ $< -lm

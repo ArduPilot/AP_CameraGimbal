@@ -93,8 +93,9 @@
 #define APCAM_LENS3_OPTICAL_ZOOM_MAX 1
 #define APCAM_LENS3_WIDTH 640
 #define APCAM_LENS3_HEIGHT 512
-/* Simulation coordinates; native signs/offsets must be measured before use. */
-#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+/* Upright bench: native positive yaw rates give negative SDK yaw feedback.
+ * Keep the shared right-positive coordinates; inverted mounting is unqualified. */
+#define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
 #define APCAM_GIMBAL_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
 #define APCAM_GIMBAL_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_FEEDBACK_INVERTED_OFFSET {0, 0, 0}
@@ -102,7 +103,7 @@
 #define APCAM_GIMBAL_PRIVATE_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
 #define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_PRIVATE_FEEDBACK_INVERTED_OFFSET {0, 0, 0}
-#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
+#define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
 #define APCAM_GIMBAL_ANGLE_COMMAND_UPRIGHT_OFFSET {0, 0, 0}
 #define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_ANGLE_COMMAND_INVERTED_OFFSET {0, 0, 0}
@@ -111,10 +112,18 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+/* Native builds hide unsupported controls. DEV adds the qualified fixed
+ * thermal stream; the bounded RGB-only RAM probe retains one stream. */
 #ifdef CAMERA_APP_ZT30_RAM
-/* Advertise only the qualified stream/features of this bounded experiment. */
 #undef APCAM_NUM_STREAMS
 #define APCAM_NUM_STREAMS 1
+#endif
+#undef APCAM_HAVE_THERMAL
+#define APCAM_HAVE_THERMAL 0
+#ifdef CAMERA_APP_ZT30_DEV
+#define APCAM_HAVE_THERMAL_VIDEO 1
+#endif
 #undef APCAM_STREAM1_LENS_MASK
 #define APCAM_STREAM1_LENS_MASK 2
 #undef APCAM_HAVE_PHOTO
@@ -123,8 +132,10 @@
 #define APCAM_HAVE_ZOOM 0
 #undef APCAM_HAVE_FOCUS
 #define APCAM_HAVE_FOCUS 0
-#undef APCAM_HAVE_THERMAL
-#define APCAM_HAVE_THERMAL 0
+#undef APCAM_HAVE_OPTICAL_ZOOM
+#define APCAM_HAVE_OPTICAL_ZOOM 0
+#undef APCAM_HAVE_IMAGE_CONTROLS
+#define APCAM_HAVE_IMAGE_CONTROLS 0
 #undef APCAM_HAVE_LIDAR
 #define APCAM_HAVE_LIDAR 0
 #define APCAM_GIMBAL_OPTIONAL 1

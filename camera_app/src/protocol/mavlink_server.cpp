@@ -724,6 +724,11 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
+#ifdef CAMERA_APP_ZT30_DEV
+    // This initial continuous development backend exposes one RGB stream.
+    info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
+    // Optional gimbal identity above is based on actual fresh MCU feedback.
+#endif
     snprintf(info.cam_definition_uri, sizeof(info.cam_definition_uri),
              "mftp://[;comp=%u]" CA_CAMERA_DEFINITION_PATH, server->camera_component_id);
     unsigned width, height;
@@ -926,7 +931,7 @@ static void stream_properties(const struct ca_mavlink_server *server,
                               unsigned *height, enum ca_video_codec *codec,
                               uint16_t *flags)
 {
-    bool thermal = APCAM_HAVE_THERMAL &&
+    bool thermal = APCAM_HAVE_THERMAL_VIDEO &&
         (ca_media_thermal_main(server->media) ? stream_id == 1U
                                              : stream_id == 2U);
     #if APCAM_NUM_STREAMS > 1
@@ -951,6 +956,10 @@ static void stream_properties(const struct ca_mavlink_server *server,
         *flags |= VIDEO_STREAM_STATUS_FLAGS_THERMAL_RANGE_ENABLED;
 #endif
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    if(!ca_media_frame_rate(server->media,thermal))
+        *flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
+#endif
 }
 
 // CAMERA_FOV_STATUS describes the current main camera source. Unlike the
@@ -1017,7 +1026,7 @@ static void send_stream_information(struct ca_mavlink_server *server,
 {
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
-#ifdef CAMERA_APP_ZT30_RAM
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
     info.bitrate=1570000U;
 #else
     info.bitrate = main_bitrate_bps(server);
@@ -1030,6 +1039,9 @@ static void send_stream_information(struct ca_mavlink_server *server,
     stream_properties(server, stream_id, &width, &height, &codec, &info.flags);
     bool thermal = (info.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U;
     info.framerate = ca_media_frame_rate(server->media, thermal);
+#ifdef CAMERA_APP_ZT30_DEV
+    info.bitrate=thermal?1000000U:1570000U;
+#endif
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
     info.hfov = (uint16_t)lroundf(ca_media_hfov(server->media, thermal));
@@ -1097,6 +1109,9 @@ static void send_stream_status(struct ca_mavlink_server *server,
     (void)codec;
     status.framerate = ca_media_frame_rate(server->media,
         (status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL) != 0U);
+#ifdef CAMERA_APP_ZT30_DEV
+    status.bitrate=(status.flags & VIDEO_STREAM_STATUS_FLAGS_THERMAL)?1000000U:1570000U;
+#endif
     status.resolution_h = (uint16_t)width;
     status.resolution_v = (uint16_t)height;
     status.hfov = (uint16_t)lroundf(ca_media_hfov(server->media,
@@ -1222,6 +1237,9 @@ static void send_gimbal_information(struct ca_mavlink_server *server,
                      GIMBAL_DEVICE_CAP_FLAGS_HAS_YAW_AXIS |
                      GIMBAL_DEVICE_CAP_FLAGS_HAS_YAW_FOLLOW |
                      GIMBAL_DEVICE_CAP_FLAGS_SUPPORTS_YAW_IN_EARTH_FRAME;
+#ifdef CAMERA_APP_ZT30_DEV
+    flags &= ~GIMBAL_DEVICE_CAP_FLAGS_HAS_NEUTRAL;
+#endif
     if (server->settings.position_targeting) {
         flags |= GIMBAL_DEVICE_CAP_FLAGS_CAN_POINT_LOCATION_GLOBAL;
     }
@@ -2007,7 +2025,7 @@ static void handle_system_time(struct ca_mavlink_server *server,
                                const mavlink_message_t *message)
 {
     /* Adopt the autopilot's UTC date if ours predates 1 September 2026 UTC. */
-#ifdef CAMERA_APP_ZT30_RAM
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
     (void)server;(void)message;return;
 #else
     const time_t earliest_valid_time = 1788220800;
@@ -2399,7 +2417,7 @@ static void config_status(struct ca_mavlink_server *server, uint64_t hash,
 static void reload_config(struct ca_mavlink_server *server, uint64_t now)
 {
 #ifdef CAMERA_APP_ZT30_RAM
-    (void)server;(void)now;return; // fixed RAM configuration, no hot reload
+    (void)server;(void)now;return; // bounded RAM configuration, no hot reload
 #else
     if (now - server->config_check_ms < 500U) return;
     server->config_check_ms = now;
@@ -2420,6 +2438,14 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         config_status(server, hash, "error", error[0] ? error : "Could not read configuration");
         return;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    // Publish the normal PID/hash acknowledgement for web restart, but never
+    // call the unqualified live media/configuration path. This is a notice,
+    // not a claim that clamped or unsupported settings have been applied.
+    config_status(server, hash, "restart",
+        "Development build reads settings at startup; later saves require restart. Video remains fixed at 1280x720 H264; unsupported features remain disabled.");
+    return;
+#else
     for (size_t i=0;i<ca_config_param_count();i++) {
         int value=ca_config_param_get(&desired,i);
         if (value!=ca_config_param_get(&server->parameters,i))
@@ -2474,6 +2500,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     config_status(server, hash, restart ? "restart" : "applied", restart ?
         "Live settings applied. Restart to apply mount, identity, transport, network, stream alias or SupportProxy changes." :
         "All saved settings applied without restarting the camera app.");
+#endif
 #endif
 }
 

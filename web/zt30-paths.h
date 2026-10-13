@@ -1,0 +1,21 @@
+#pragma once
+/* Persistent AP-only layout; runtime files stay on tmpfs. */
+#define APP_DIR "/customer/camera-app"
+#define MEDIA_ROOT "/mnt"
+#define REPLACEMENT_CONFIG_PATH APP_DIR "/camera.ini"
+#define REPLACEMENT_CONFIG_BACKUP_PATH APP_DIR "/camera.ini.web.bak"
+#define PASSWORD_PATH APP_DIR "/web.pass"
+#define AUTHORIZED_KEYS_PATH APP_DIR "/auth/authorized_keys"
+#define RUNTIME_AUTHORIZED_KEYS_PATH AUTHORIZED_KEYS_PATH
+#define RUNTIME_AUTHORIZED_KEYS_DIR APP_DIR "/auth"
+#define USER_LOCK_PATH "/tmp/apcg-zt30/apcg-users.lock"
+#define UPGRADE_LOCK_PATH "/tmp/apcg-zt30/apcg-upgrade.lock"
+#define RUNTIME_DIR "/tmp/apcg-zt30"
+#define APP_REQUEST_PATH "/tmp/apcg-zt30/apcg-app-request"
+#define APP_REQUEST_LOCK_PATH "/tmp/apcg-zt30/apcg-app-request.lock"
+#define APP_STARTED_PATH "/tmp/apcg-zt30/apcg-app-started"
+#define CAMERA_READY_PATH "/tmp/apcg-zt30/camera-app.ready"
+#define REPLACEMENT_CAMERA_PATH APP_DIR "/camera-app"
+#define WEB_PATH APP_DIR "/zt30-web"
+#define REPLACEMENT_LOG_PATH "/tmp/apcg-zt30/camera-app.log"
+#define REPLACEMENT_LOG_OLD_PATH "/tmp/apcg-zt30/camera-app.log.1"

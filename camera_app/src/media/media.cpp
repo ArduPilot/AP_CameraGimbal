@@ -196,6 +196,9 @@ void APC_Media::_start_controls_monitor()
     }, this);
     if (error) ca_log("cannot start exposure monitor: %s",strerror(error));
     else _exposure_running=true;
+#ifdef CAMERA_APP_ZT30_DEV
+    return; // Lens metadata includes thermal; native module controls are unqualified.
+#endif
     if (!_camera.has_thermal()) return;
     error = pthread_create(&_controls_thread, nullptr, [](void *opaque) -> void * {
         static_cast<APC_Media *>(opaque)->_monitor_controls();
@@ -281,7 +284,7 @@ int APC_Media::_restore_controls(const LiveControls *state)
 
 int APC_Media::configure(const struct ca_config *settings)
 {
-#ifdef CAMERA_APP_ZT30_RAM
+#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
     (void)settings;errno=ENOTSUP;return -1; // before any reset/recreate or settings write
 #else
     if (!settings) { errno = EINVAL; return -1; }

@@ -35,6 +35,12 @@ int ca_backend_set_zoom(ca_backend*,float) { return unsupported(); }
 int ca_backend_set_zoom_rate(ca_backend*,float) { return unsupported(); }
 int ca_backend_set_gimbal_neutral(ca_backend*) { return unsupported(); }
 bool ca_backend_recording(const ca_backend*) { return false; }
-const char *ca_backend_name(const ca_backend*) { return "zt30-ram"; }
+const char *ca_backend_name(const ca_backend*) {
+#ifdef CAMERA_APP_ZT30_DEV
+    return "zt30";
+#else
+    return "zt30-ram";
+#endif
+}
 void ca_backend_close(ca_backend *b) { delete b; }
 bool ca_backend_has_gimbal(const ca_backend*) { return false; }

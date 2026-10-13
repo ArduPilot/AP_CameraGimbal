@@ -363,6 +363,16 @@ int APC_CameraApp::run(int argc, char **argv)
     #ifdef CAMERA_APP_ZT30_RAM
     ca_zt30::ram_app_configure(app_config);
     #endif
+    #ifdef CAMERA_APP_ZT30_DEV
+    // Preserve the saved configuration for future builds, but this development
+    // backend has one qualified output mode. Unsupported saved modes cannot
+    // prevent the continuous image from starting.
+    app_config.main_resolution=app_config.sub_resolution=app_config.recording_resolution=CA_VIDEO_720P;
+    app_config.main_codec=app_config.sub_codec=CA_VIDEO_H264;
+    app_config.position_targeting=false;app_config.osd_recording=false;
+    app_config.orientation=CA_MOUNT_AUTO; // native DEV requires an MCU mounting report
+    app_config.autorecord=CA_AUTORECORD_DISABLED;
+    #endif
     if (APC_Timezone::apply(app_config.timezone) < 0) {
         ca_log("cannot apply timezone %s: %s", app_config.timezone,
                strerror(errno));
@@ -441,7 +451,7 @@ int APC_CameraApp::run(int argc, char **argv)
         .settings = app_config,
     };
     char network_error[256] = "";
-#if defined(CAMERA_APP_SITL) || defined(CAMERA_APP_ZT30_RAM)
+#if defined(CAMERA_APP_SITL) || defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
     if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
         ca_log("network configuration skipped in SITL (uses host networking)");
 #elif !APCAM_HAVE_NETWORK_CONFIG
@@ -584,6 +594,12 @@ int APC_CameraApp::run(int argc, char **argv)
     while (!stop_requested) {
 #ifdef CAMERA_APP_ZT30_RAM
         if(ca_zt30::ram_media_finished())return ca_zt30::ram_media_result();
+#endif
+#ifdef CAMERA_APP_ZT30_DEV
+        if (!ca_media_ready(_media)) {
+            ca_log("ZT30 media stopped; exiting for AP supervisor restart");
+            return result;
+        }
 #endif
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI && !defined(CAMERA_APP_SITL)
         const char *native_helper = getenv("CAMERA_APP_Z1_NATIVE_HELPER");

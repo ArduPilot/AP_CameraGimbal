@@ -64,10 +64,26 @@ int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source
 #undef CALL
     return 0;
 }
+int EncoderOwner::open_thermal() {
+    if(used)return -1;
+    used=true;software=true;h264=true;channel_id=2;
+    if(!a.create_channel || !a.destroy_channel || !a.set_input_source || !a.start ||
+       !a.stop || !a.query || !a.get_stream || !a.release_stream ||
+       !m.pointer_slot || !m.copy) { check(-1,"thermal API unavailable");return -1; }
+    auto attr=h264_channel(640,512,1000000);
+    attr.fps_num=15;attr.gop=30;
+    if(!check(a.create_channel(0,channel_id,&attr),"thermal CreateChn"))return raw_status;
+    channel=true;
+    const uint32_t source=0;
+    if(!check(a.set_input_source(0,channel_id,&source),"thermal SetInputSource"))return raw_status;
+    started=true; // Stop also covers a partially successful start.
+    if(!check(a.start(0,channel_id),"thermal StartRecvPic"))return raw_status;
+    return 0;
+}
 int EncoderOwner::read_h264_vui(H264Vui &output) {
     output={};
     if(!h264 || !ready())return -1;
-    if(!check(a.get_h264_vui(0,1,&output),"a.get_h264_vui active")) { output={};return raw_status; }
+    if(!check(a.get_h264_vui(0,channel_id,&output),"a.get_h264_vui active")) { output={};return raw_status; }
     return 0;
 }
 int EncoderOwner::copy_frame(EncodedFrame &output) {
@@ -75,7 +91,7 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
     std::memset(output.pts,0,sizeof(output.pts));
     if(!ready() || !output.data || !output.capacity)return -1;
     EncoderStatus status{};
-    if(!check(a.query(0,1,&status),"a.query"))return -1;
+    if(!check(a.query(0,channel_id,&status),"a.query"))return -1;
     if(!status.current_packs)return 0;
     if(status.current_packs>32) { check(-1,"packet capacity exceeded");return -1; }
     EncoderStream stream{};
@@ -86,7 +102,7 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
     stream.count=status.current_packs;
     std::memset(packets,0,sizeof(packets));
     // Query showed output available; never block beyond this finite SDK bound.
-    if(!check(a.get_stream(0,1,&stream,100),"a.get_stream"))return -1;
+    if(!check(a.get_stream(0,channel_id,&stream,100),"a.get_stream"))return -1;
     // ReleaseStream iterates the caller's array. A corrupt returned pointer or
     // capacity cannot safely be passed back. Poison and let process teardown
     // reclaim mappings instead of dereferencing untrusted output.
@@ -120,7 +136,7 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
     }
     // Preserve every SDK output field, including the mapped virtual handle;
     // count now names only packets actually acquired by GetStream.
-    const int released=a.release_stream(0,1,&stream);
+    const int released=a.release_stream(0,channel_id,&stream);
     if(!check(released,"a.release_stream"))return -1;
     if(!valid) { check(-1,"invalid/unreadable packet payload");return -1; }
     output.bytes=bytes;output.packets=filled;output.sequence=sequence;
@@ -132,8 +148,8 @@ int EncoderOwner::close() {
     Port source{Scl,0,source_channel,1},destination{Venc,0,1,0};
 #define CLEAN(flag,expr) do { if(flag) { cleanup((expr),#expr,first);flag=false; } } while(0)
     CLEAN(bound,s.sys_unbind(0,&source,&destination));
-    CLEAN(started,a.stop(0,1));
-    CLEAN(channel,a.destroy_channel(0,1));
+    CLEAN(started,a.stop(0,channel_id));
+    CLEAN(channel,a.destroy_channel(0,channel_id));
     CLEAN(device,a.destroy_device(0));
 #undef CLEAN
     return first;
