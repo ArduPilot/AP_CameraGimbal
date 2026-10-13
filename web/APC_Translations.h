@@ -622,6 +622,14 @@ enum string_id {
     S_E_MALFORMED,
     S_E_LIVE_UNAVAILABLE,
     S_E_LIVE_H264,
+    S_JS_FW_CONFIRM_APP,
+    S_APP_UPDATE_PENDING,
+    S_APP_UPDATE_FAILED,
+    S_APP_ROLLBACK,
+    S_BUNDLE_SELECTED,
+    S_BUNDLE_CAMERA,
+    S_BUNDLE_WEB,
+    S_BUNDLE_STATE,
     S_COUNT
 };
 
@@ -1244,6 +1252,14 @@ static constexpr Translations translations = [] {
     result[S_E_LIVE_H264] = {"This stream must be configured for H.264", "此视频流必须配置为 H.264", "このストリームは H.264 に設定する必要があります"};
     result[S_ZT30_NATIVE_PARAMETERS] = {"Native ZT30 settings require an application restart. Recording, tracking and image controls are not yet available. Network addresses are managed by the host OS.", "原生 ZT30 设置需要重启应用程序。录像、跟踪和图像控制尚不可用。网络地址由主机操作系统管理。", "ネイティブ ZT30 の設定にはアプリの再起動が必要です。録画、追跡、画像調整はまだ利用できません。ネットワークアドレスはホスト OS が管理します。"};
     result[S_ZT30_FIXED_VIDEO] = {"Fixed video: visible %u × %u H264; thermal %u × %u H264.", "固定视频格式：可见光 %u × %u H264；热成像 %u × %u H264。", "固定映像形式: 可視光 %u × %u H264、熱画像 %u × %u H264。"};
+    result[S_JS_FW_CONFIRM_APP] = {"Install %s? The camera application and web interface will restart.", "安装 %s？相机应用程序和网页界面将重启。", "%s をインストールしますか？カメラアプリとウェブ画面が再起動します。"};
+    result[S_APP_UPDATE_PENDING] = {"Checking the new application and web interface…", "正在检查新的应用程序和网页界面…", "新しいアプリとウェブ画面を確認しています…"};
+    result[S_APP_UPDATE_FAILED] = {"The application update was rolled back. Check camera status.", "应用程序更新已回滚。请检查相机状态。", "アプリの更新を元に戻しました。カメラの状態を確認してください。"};
+    result[S_APP_ROLLBACK] = {"Restore previous application", "恢复上一个应用程序", "以前のアプリに戻す"};
+    result[S_BUNDLE_SELECTED] = {"Selected application", "选定的应用程序", "選択されたアプリ"};
+    result[S_BUNDLE_CAMERA] = {"Running camera bundle", "运行中的相机程序包", "実行中のカメラパッケージ"};
+    result[S_BUNDLE_WEB] = {"Running web bundle", "运行中的网页程序包", "実行中のウェブパッケージ"};
+    result[S_BUNDLE_STATE] = {"Application update", "应用程序更新", "アプリの更新"};
     return result;
 }();
 /* ---- end of user-visible strings ---- */

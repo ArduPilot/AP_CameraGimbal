@@ -9,25 +9,26 @@ flock -n 9 || exit 0
 trap 'exit 0' HUP INT TERM
 payload_failed=0
 web_retry_after=0
-web_listener_running()
-{
-    for pid in $(pidof zt30-web 2>/dev/null || true); do
-        args=$(tr '\000' '\n' 2>/dev/null < "/proc/$pid/cmdline") || continue
-        launch=$(printf '%s\n' "$args" | sed -n '1p')
-        case "$launch" in "$app_dir/zt30-web"|"$app_dir"/slots/*/zt30-web) ;; *) continue;; esac
-        [ "$(printf '%s\n' "$args" | sed -n '2p')" = -p ] || continue
-        [ "$(printf '%s\n' "$args" | sed -n '3p')" = 80 ] && return 0
-    done
-    return 1
-}
+web_port=${APCG_ZT30_WEB_PORT:-80}
 while :; do
-    if web_listener_running; then
+    if "$app_dir/zt30-slot" --root "$app_dir" --run-dir "$run_dir" maintain "$web_port"; then
+        :
+    else
+        result=$?
+        if [ "$result" = 3 ]; then sleep 1; continue; fi
+        echo 'Application trial maintenance failed; recovery SSH remains available' >&2
+    fi
+    if "$app_dir/zt30-slot" --root "$app_dir" web-listener "$web_port" >/dev/null; then
         sleep 3
         continue
     fi
     read -r uptime rest < /proc/uptime
     now=${uptime%%.*}
     if [ "$now" -lt "$web_retry_after" ]; then
+        sleep 1
+        continue
+    fi
+    if ! "$app_dir/zt30-slot" --root "$app_dir" --run-dir "$run_dir" note-web-launch "$web_port"; then
         sleep 1
         continue
     fi
@@ -43,6 +44,6 @@ while :; do
     slot=$selection
     export CAMERA_APP_WEBROOT="$slot/webroot"
     web_retry_after=$((now + 10))
-    "$slot/zt30-web" -p 80 9>&- >>"$run_dir/zt30-web.log" 2>&1 &
+    "$slot/zt30-web" -p "$web_port" 9>&- >>"$run_dir/zt30-web.log" 2>&1 &
     sleep 1
 done

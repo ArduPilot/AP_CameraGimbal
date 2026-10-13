@@ -209,5 +209,5 @@ zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(I
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DZT30_WEB_DEV -o $@ $< -lm
 
 # AP-only persistent ZT30 layout; initial native app has one RGB stream.
-zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h zt30-upgrade.h zt30-bundle-status.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -I../include -o $@ $(filter %.cpp,$^) -lm
