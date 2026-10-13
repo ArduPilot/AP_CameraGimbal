@@ -28,6 +28,9 @@ if [ ! -e "$app_dir/web.pass" ]; then
 fi
 # A separate supervisor keeps the web listener recoverable while the camera
 # supervisor is waiting on its foreground app/logger pipeline.
+# Restore an interrupted, unconfirmed trial before starting media owners.
+"$app_dir/zt30-slot" --root "$app_dir" --run-dir "$run_dir" maintain ||
+    echo 'Trial boot recovery failed; SSH/web recovery remains available' >&2
 if [ -x "$app_dir/web-supervisor.sh" ]; then
     "$app_dir/web-supervisor.sh" >"$run_dir/web-supervisor.log" 2>&1 &
 else

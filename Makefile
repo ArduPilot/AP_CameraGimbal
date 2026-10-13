@@ -953,7 +953,19 @@ zt30_jpeg_owner-test:
 zt30_slots-test:
 	python3 tests/test_zt30_slots.py
 
-build/zt30/zt30-slot: tools/zt30_slots.cpp include/apcam/zt30_slots.h tools/check_zt30_elf.py
+build/zt30/zt30-slot: tools/zt30_slots.cpp include/apcam/zt30_slots.h include/apcam/zt30_bundle.h include/apcam/zt30_bundle_elf.h include/apcam/sha256.h include/apcam/json_reader.h include/apcam/zt30_update.h include/apcam/zt30_trial.h include/apcam/zt30_services.h include/apcam/zt30_process.h include/apcam/live_video_probe.h tools/check_zt30_elf.py
 	mkdir -p $(@D)
 	$(ZT30_CROSS_COMPILE)g++ -std=gnu++17 -O2 -Wall -Wextra -Werror -fno-exceptions -fno-rtti -static-libstdc++ -static-libgcc -Iinclude $< -o $@
 	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+
+.PHONY: zt30_bundle-test
+zt30_bundle-test:
+	python3 tests/test_zt30_bundle.py
+
+.PHONY: zt30_update-test
+zt30_update-test:
+	python3 tests/test_zt30_update.py
+	python3 tests/test_zt30_services.py
+	python3 tests/test_live_video_probe.py
+	python3 web/tests/test_zt30_upgrade.py
+	python3 web/tests/test_zt30_upgrade_browser.py
