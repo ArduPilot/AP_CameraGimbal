@@ -157,6 +157,9 @@ static void request_time(ca_unigcs *s)
 
 static void receive_time(ca_unigcs *s,const ca_private_frame *f)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)s;(void)f;return;
+#else
     const bool long_format=f->raw_length>=20 && f->raw[0]==0x55;
     if(s->client<0 || !s->source || !s->time_pending || f->source!=s->source ||
        long_format!=s->long_format || f->destination!=camera_address || f->link!=0x16 ||
@@ -195,6 +198,7 @@ static void receive_time(ca_unigcs *s,const ca_private_frame *f)
         s->time_error_reported=true;
         ca_log("system time setting from UniGCS failed: %s",strerror(errno));
     }
+#endif
 }
 
 static void image_slots(ca_unigcs *s,uint8_t *p)

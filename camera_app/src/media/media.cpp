@@ -281,6 +281,9 @@ int APC_Media::_restore_controls(const LiveControls *state)
 
 int APC_Media::configure(const struct ca_config *settings)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)settings;errno=ENOTSUP;return -1; // before any reset/recreate or settings write
+#else
     if (!settings) { errno = EINVAL; return -1; }
     const struct ca_config *old = &_config.settings;
     bool pipeline = !_backend || old->main_resolution != settings->main_resolution ||
@@ -357,6 +360,7 @@ int APC_Media::configure(const struct ca_config *settings)
     }
     _config.settings = *settings;
     return 0;
+#endif
 }
 
 APC_Media::~APC_Media()

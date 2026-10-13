@@ -11,6 +11,9 @@
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI && !defined(CAMERA_APP_SITL)
 #include "backends/z1mini/native.h"
 #endif
+#ifdef CAMERA_APP_ZT30_RAM
+#include "backends/zt30/ram_app.h"
+#endif
 #include "camera_app/backend.h"
 #include "camera_app/manual_control.h"
 #include "camera_app/config.h"
@@ -306,6 +309,9 @@ static void usage(const char *program)
 
 int APC_CameraApp::run(int argc, char **argv)
 {
+    #ifdef CAMERA_APP_ZT30_RAM
+    if(!ca_zt30::ram_app_prepare(argc,&stop_requested,install_signal_handlers)) { ca_log("ZT30 RAM activation refused");return 2; }
+    #endif
     const char *backend_name = environment_string("CAMERA_APP_BACKEND", APCAM_NAME);
     /* NULL lets each backend pick its own gimbal UART */
     const char *uart_device = environment_string("CAMERA_APP_UART", NULL);
@@ -354,6 +360,9 @@ int APC_CameraApp::run(int argc, char **argv)
                config_error[0] != '\0' ? config_error : strerror(errno));
         return 2;
     }
+    #ifdef CAMERA_APP_ZT30_RAM
+    ca_zt30::ram_app_configure(app_config);
+    #endif
     if (APC_Timezone::apply(app_config.timezone) < 0) {
         ca_log("cannot apply timezone %s: %s", app_config.timezone,
                strerror(errno));
@@ -432,7 +441,7 @@ int APC_CameraApp::run(int argc, char **argv)
         .settings = app_config,
     };
     char network_error[256] = "";
-#ifdef CAMERA_APP_SITL
+#if defined(CAMERA_APP_SITL) || defined(CAMERA_APP_ZT30_RAM)
     if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
         ca_log("network configuration skipped in SITL (uses host networking)");
 #elif !APCAM_HAVE_NETWORK_CONFIG
@@ -573,6 +582,9 @@ int APC_CameraApp::run(int argc, char **argv)
 
     unsigned loops = 0;
     while (!stop_requested) {
+#ifdef CAMERA_APP_ZT30_RAM
+        if(ca_zt30::ram_media_finished())return ca_zt30::ram_media_result();
+#endif
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI && !defined(CAMERA_APP_SITL)
         const char *native_helper = getenv("CAMERA_APP_Z1_NATIVE_HELPER");
         if (native_helper && *native_helper && !ca_media_ready(_media)) {
@@ -651,7 +663,11 @@ int APC_CameraApp::run(int argc, char **argv)
         ca_media_tracking_update(_media, _backend, _manual.active);
         _network_capture.configure(ca_media_settings(_media)->network_capture);
     }
+#ifdef CAMERA_APP_ZT30_RAM
+    result = 24; // interruption is not a completed capture
+#else
     result = 0;
+#endif
 
     return result;
 }
@@ -679,6 +695,19 @@ APC_CameraApp::~APC_CameraApp()
 
 int main(int argc, char **argv)
 {
+#ifdef CAMERA_APP_ZT30_RAM
+    setvbuf(stdout,nullptr,_IONBF,0);
+    int result;
+    { APC_CameraApp app;result=app.run(argc,argv); }
+    if(!result && ca_zt30::ram_media_closed() && !ca_zt30::ram_media_result()) {
+        puts("ENCODER PASS copied H264 payloads; independent host decode required");
+        puts("FULL_APP PASS factory; frontend; joined teardown; RAM only; no UART/USB");
+        printf("RESULT PASS owned %s RGB IQ H264 RTSP web capture and unwind; no UART/USB\n",ca_zt30::ram_media_wide()?"wide":"zoom");
+        return 0;
+    }
+    return result?result:30;
+#else
     APC_CameraApp app;
     return app.run(argc, argv);
+#endif
 }

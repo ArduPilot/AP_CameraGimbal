@@ -9,6 +9,9 @@
 #include "camera_app/siyi.h"
 
 #include <arpa/inet.h>
+#ifdef CAMERA_APP_ZT30_RAM
+#include "camera_app/zt30_ram_peer.h"
+#endif
 #include <errno.h>
 #include <netinet/tcp.h>
 #include <stdbool.h>
@@ -590,6 +593,9 @@ static int handle_udp(struct ca_siyi_server *server,
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&route.address)))continue;
+        #endif
         size_t offset = 0U;
         while (offset < (size_t)received) {
             struct ca_siyi_packet parsed;
@@ -621,6 +627,9 @@ static int accept_clients(struct ca_siyi_server *server)
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;
         }
+        #ifdef CAMERA_APP_ZT30_RAM
+        if(!ca_zt30_ram_peer(reinterpret_cast<const sockaddr*>(&peer))) { close(fd);continue; }
+        #endif
         unsigned slot;
         for (slot = 0; slot < CA_SIYI_TCP_CLIENTS; slot++) {
             if (server->clients[slot].fd < 0) break;

@@ -12,9 +12,13 @@ void EncoderOwner::cleanup(int result,const char *call,int &first) {
     if(result && !first)first=result;
     (void)check(result,call);
 }
-int EncoderOwner::open(EncoderCodec codec,H264Timing timing) {
+int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source) {
     if(used)return -1;
     used=true;
+    if(source!=EncoderSource::Zoom && source!=EncoderSource::Wide) {
+        check(-1,"unsupported encoder source");return -1;
+    }
+    source_channel=uint32_t(source);
     if(codec!=EncoderCodec::H264 && codec!=EncoderCodec::H265) {
         check(-1,"unsupported encoder codec");return -1;
     }
@@ -55,8 +59,8 @@ int EncoderOwner::open(EncoderCodec codec,H264Timing timing) {
     } // Fixed30 only; ReadOnly preserves automatic timing.
     started=true; // Stop even a partially successful activation.
     CALL(a.start(0,1));
-    Port source{Scl,0,0,1},destination{Venc,0,1,0};
-    CALL(s.sys_bind(0,&source,&destination,30,30,FrameBind,0));bound=true;
+    Port input{Scl,0,source_channel,1},destination{Venc,0,1,0};
+    CALL(s.sys_bind(0,&input,&destination,30,30,FrameBind,0));bound=true;
 #undef CALL
     return 0;
 }
@@ -125,7 +129,7 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
 }
 int EncoderOwner::close() {
     int first=0;
-    Port source{Scl,0,0,1},destination{Venc,0,1,0};
+    Port source{Scl,0,source_channel,1},destination{Venc,0,1,0};
 #define CLEAN(flag,expr) do { if(flag) { cleanup((expr),#expr,first);flag=false; } } while(0)
     CLEAN(bound,s.sys_unbind(0,&source,&destination));
     CLEAN(started,a.stop(0,1));

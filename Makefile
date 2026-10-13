@@ -745,3 +745,16 @@ zt30_media_backend-test:
 	@mkdir -p build/tests
 	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror -Icamera_app/include -Iinclude tests/test_zt30_media_backend.cpp camera_app/src/backends/zt30/media_backend.cpp camera_app/src/backends/zt30/rgb_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp -lpthread -Wl,--wrap=pthread_create -o build/tests/zt30-media-backend-test
 	build/tests/zt30-media-backend-test
+
+# CI can compile/link without the private libraries loaded only at runtime.
+.PHONY: zt30_ram_camera zt30_ram_camera_build
+zt30_ram_camera: build/zt30/encoder-sdk.so zt30_ram_camera_build
+zt30_ram_camera_build:
+	$(MAKE) -C camera_app CAMERA_BACKEND=zt30 ZT30_RAM_BUILD=1 CROSS_COMPILE=$(ZT30_CROSS_COMPILE) all
+
+.PHONY: zt30_ram_frontend-test
+zt30_ram_frontend-test:
+	$(MAKE) -C camera_app build/host/tracking_dlib.o
+	mkdir -p build/tests
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -Wno-missing-field-initializers -DCAMERA_APP_ZT30_RAM -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Icamera_app/include -Iinclude -ffunction-sections -fdata-sections -Wl,--gc-sections tests/test_zt30_ram_frontend.cpp camera_app/src/media/media.cpp camera_app/src/media/tracking.cpp camera_app/build/host/tracking_dlib.o -lpthread -lm -o build/tests/zt30-ram-frontend-test
+	build/tests/zt30-ram-frontend-test
