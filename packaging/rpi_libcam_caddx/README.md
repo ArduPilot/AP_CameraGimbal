@@ -6,8 +6,8 @@ XFRobot C20-T. It runs alongside [Rpanion-server](https://github.com/stephendade
 keeps ownership of networking and the flight-controller link.
 
 Video is captured with libcamera and encoded by the Pi 4 / CM4 hardware H.264
-encoder. A single 1080p30 stream is served at `rtsp://<pi>:8554/video1` (and
-`/video2`) and used for recording. The `IMG_*` camera parameters (brightness,
+encoder. A single 1080p30 stream is served at `rtsp://<pi>:8554/video1` and used for
+recording. The `IMG_*` camera parameters (brightness,
 contrast, saturation, exposure compensation, ISO, shutter, metering and white
 balance) can be changed from the GCS while streaming.
 

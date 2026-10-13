@@ -384,14 +384,17 @@ public:
     }
     static bool support_valid(const struct ca_support_config *support)
     {
+        /* A target with one stream has no video2: its stored port and name are
+         * ignored, as the web page does not offer them. */
+        const bool video2 = APCAM_NUM_STREAMS >= 2;
         return !support->enabled ||
             (support->host[0] && (!support->signing || support->signing_passphrase[0]) &&
              (!support->video1_port || support->video1_name[0]) &&
-             (!support->video2_port || support->video2_name[0]) &&
-             (!support->video1_port || support->video1_port != support->video2_port) &&
+             (!video2 || !support->video2_port || support->video2_name[0]) &&
+             (!video2 || !support->video1_port || support->video1_port != support->video2_port) &&
              (!support->video3_port || (support->video3_name[0] &&
                support->video3_port != support->video1_port &&
-               support->video3_port != support->video2_port)));
+               (!video2 || support->video3_port != support->video2_port))));
     }
 
 private:

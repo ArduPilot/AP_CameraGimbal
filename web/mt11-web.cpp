@@ -2109,6 +2109,9 @@ static bool append_update(struct ini_update *updates, size_t capacity, size_t *c
 /* parameters that do not exist on this camera stay out of the form */
 static bool parameter_shown(const struct parameter *parameter)
 {
+    if (APCAM_NUM_STREAMS < 2 && (!strcmp(parameter->section, "stream.sub") ||
+        !strcmp(parameter->form_name, "proxy_video2_port") ||
+        !strcmp(parameter->form_name, "proxy_video2_name"))) return false;
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
@@ -4983,7 +4986,11 @@ static char *render_live_page(size_t *page_len)
     page.appendf("<header id=top><h1>%s</h1><div class=muted>%s</div></header>",
                T(S_LIVE_HEADING), T(S_LIVE_SUBTITLE));
     append_nav(&page, "/live", NULL);
-    webroot.render(page, "live-video.html", {T(S_LIVE_STREAM), T(S_LIVE_MAIN), T(S_LIVE_SECONDARY), T(S_LIVE_STARTING), T(S_LIVE_HELP), T(S_LIVE_PTZ), T(S_LIVE_ENABLE_MANUAL), T(S_LIVE_MANUAL_NOTICE)});
+    /* The second stream is only offered when the target has one. */
+    char secondary[160] = "";
+    if (APCAM_NUM_STREAMS >= 2)
+        snprintf(secondary, sizeof(secondary), "<option value=1>%s</option>", T(S_LIVE_SECONDARY));
+    webroot.render(page, "live-video.html", {T(S_LIVE_STREAM), T(S_LIVE_MAIN), secondary, T(S_LIVE_STARTING), T(S_LIVE_HELP), T(S_LIVE_PTZ), T(S_LIVE_ENABLE_MANUAL), T(S_LIVE_MANUAL_NOTICE)});
     webroot.render(page, "live-controls.html", {T(S_LIVE_CENTRE), T(S_LIVE_RATE), T(S_LIVE_ZOOM), APC_TemplateValue("%g", (double)APC_Camera::get_singleton().zoom_control_max()), T(S_LIVE_NO_COMMANDS), T(S_LIVE_ATTITUDE), T(S_LIVE_ATTITUDE_UNAVAILABLE), T(S_LIVE_YAW), T(S_LIVE_ROLL), T(S_LIVE_PITCH), T(S_LIVE_YAW), T(S_LIVE_ROLL_RATE), T(S_LIVE_PITCH_RATE), T(S_LIVE_YAW_RATE), T(S_LIVE_WAITING_GIMBAL), csrf_token});
 #if !APCAM_HAVE_ZOOM
     page.append("<style>.zoom-row:has(#live-zoom){display:none}</style>");
@@ -7294,7 +7301,8 @@ static void handle_request(int fd, const char *peer)
         send_live_attitude_json(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/live/video1.mp4") == 0) {
         relay_live_video(fd, 0U);
-    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/live/video2.mp4") == 0) {
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/live/video2.mp4") == 0 &&
+               APCAM_NUM_STREAMS >= 2) {
         relay_live_video(fd, 1U);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/sensors") == 0) {
         send_sensors_page(fd, NULL, false);

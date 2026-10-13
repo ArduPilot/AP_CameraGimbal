@@ -93,8 +93,10 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("REC_RESOLUTION", "Recording resolution"),
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
+#if APCAM_NUM_STREAMS >= 2
     CONFIG("VIDEO_SUB_RES", "Secondary RGB stream resolution"),
     CONFIG("VIDEO_SUB_CODEC", "Secondary RGB stream codec"),
+#endif
 #if APCAM_HAVE_IMAGE_CONTROLS
     CONFIG("IMG_BRIGHTNESS", "Brightness"),
     CONFIG("IMG_SATURATION", "Saturation"),

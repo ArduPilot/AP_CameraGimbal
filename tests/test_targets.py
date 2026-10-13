@@ -40,8 +40,10 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
         for template in templates:
             config = configparser.ConfigParser()
             assert config.read(template), template
-            for role, section in (('main', 'stream.main'), ('sub', 'stream.sub'),
-                                  ('recording', 'recording')):
+            roles = [('main', 'stream.main'), ('sub', 'stream.sub'), ('recording', 'recording')]
+            if int(target['num_streams']) < 2:
+                roles.remove(('sub', 'stream.sub'))
+            for role, section in roles:
                 compiled = resolutions[target['default_' + role + '_resolution']]
                 assert config[section]['resolution'] == compiled, (template, section)
             assert config['recording']['resolution'] == recording_defaults[name], template

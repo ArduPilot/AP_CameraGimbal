@@ -15,6 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Definitions(unittest.TestCase):
+    def test_single_stream_target_has_no_sub_stream_settings(self):
+        """A target with one stream does not list settings for a second one."""
+        for target in ('mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'):
+            with self.subTest(target=target):
+                root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
+                params = {p.get('name') for p in root.findall('parameters/parameter')}
+                self.assertIn('VIDEO_MAIN_RES', params)
+                self.assertEqual('VIDEO_SUB_RES' in params, target != 'rpi_libcam_caddx')
+                self.assertEqual('VIDEO_SUB_CODEC' in params, target != 'rpi_libcam_caddx')
+
     def test_target_capabilities(self):
         for target in ('mt11', 'a8', 'zr10', 'z1mini'):
             with self.subTest(target=target):
