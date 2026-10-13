@@ -653,6 +653,60 @@ build/zt30/ioctl-trace.so: tools/zt30_ioctl_trace.c tools/check_zt30_elf.py
 zt30_ioctl_trace-test:
 	python3 tests/test_zt30_ioctl_trace.py
 
+# RAM-only USB observer; does not enable the camera's thermal backend.
+.PHONY: zt30_usb_trace zt30_usb_trace-test
+zt30_usb_trace: build/zt30/usb-trace.so
+build/zt30/usb-trace.so: tools/zt30_usb_trace.c tools/zt30_ioctl_trace.c tools/zt30_trace_output.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -fPIC -shared $< -ldl -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf --shared-library
+zt30_usb_trace-test:
+	python3 tests/test_zt30_usb_trace.py
+
+# Two one-shot USB startup header observations; never reads image buffers.
+.PHONY: zt30_usb_header_trace zt30_usb_header_trace-test
+zt30_usb_header_trace: build/zt30/usb_header-trace.so
+build/zt30/usb_header-trace.so: tools/zt30_usb_header_trace.c tools/zt30_usb_header_trace.h tools/zt30_usb_memory_guard.h tools/zt30_usb_urb_snapshot.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/zt30_ioctl_trace.c tools/zt30_trace_output.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -fPIC -c $< -o $@.o
+	$(ZT30_CROSS_COMPILE)gcc -shared $@.o -ldl -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf --shared-library
+zt30_usb_header_trace-test:
+	python3 tests/test_zt30_usb_header_trace.py
+
+# Claimed-handle startup UVC negotiation observer; no thermal image reads.
+.PHONY: zt30_usb_setup_trace zt30_usb_setup_trace-test
+zt30_usb_setup_trace: build/zt30/usb_setup-trace.so
+build/zt30/usb_setup-trace.so: tools/zt30_usb_setup_trace.c tools/zt30_usb_setup_trace.h tools/zt30_usb_control_snapshot.h tools/zt30_usb_memory_guard.h tools/zt30_usb_urb_snapshot.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/zt30_ioctl_trace.c tools/zt30_trace_output.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -fPIC -c $< -o $@.o
+	$(ZT30_CROSS_COMPILE)gcc -shared $@.o -ldl -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf --shared-library
+zt30_usb_setup_trace-test:
+	python3 tests/test_zt30_usb_setup_trace.py
+
+# Private UVC OUT metadata qualification; no vendor preload or thermal backend.
+.PHONY: zt30_usb_control_probe zt30_usb_control-test
+zt30_usb_control_probe: build/zt30/usb-control-probe
+build/zt30/usb-control-probe: tests/zt30_usb_control_fixture.c tools/zt30_usb_control_snapshot.h tools/zt30_usb_memory_guard.h tools/zt30_usb_urb_snapshot.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -Itools -c $< -o $@.o
+	$(ZT30_CROSS_COMPILE)gcc $@.o -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_usb_control-test:
+	python3 tests/test_zt30_usb_control_snapshot.py
+
+# Private no-peripheral qualification; not a vendor preload or thermal backend.
+.PHONY: zt30_usb_memory_probe zt30_usb_memory-test
+zt30_usb_memory_probe: build/zt30/usb-memory-probe
+build/zt30/usb-memory-probe: tests/zt30_usb_memory_fixture.c tools/zt30_usb_memory_guard.h tools/zt30_usb_urb_snapshot.h tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -Itools -c $< -o $@.o
+	$(ZT30_CROSS_COMPILE)gcc $@.o -lpthread -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_usb_memory-test:
+	python3 tests/test_zt30_usb_memory.py
+
 .PHONY: zt30_self_read_probe zt30_self_read_probe-test
 zt30_self_read_probe: build/zt30/self-read-probe
 build/zt30/self-read-probe: tools/zt30_self_read_probe.c tools/zt30_self_read.h tools/zt30_stack_guard.h tools/check_zt30_elf.py
@@ -758,3 +812,97 @@ zt30_ram_frontend-test:
 	mkdir -p build/tests
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -Wno-missing-field-initializers -DCAMERA_APP_ZT30_RAM -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Icamera_app/include -Iinclude -ffunction-sections -fdata-sections -Wl,--gc-sections tests/test_zt30_ram_frontend.cpp camera_app/src/media/media.cpp camera_app/src/media/tracking.cpp camera_app/build/host/tracking_dlib.o -lpthread -lm -o build/tests/zt30-ram-frontend-test
 	build/tests/zt30-ram-frontend-test
+
+# Owned ISO primitives use injected USB operations in host/private ARM tests.
+.PHONY: zt30_usb_iso-test zt30_usb_iso_private_probe
+ZT30_USB_ISO_SOURCES := camera_app/src/backends/zt30/usb_iso.cpp camera_app/src/backends/zt30/uvc_frame.cpp
+zt30_usb_iso-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_usb_iso.cpp $(ZT30_USB_ISO_SOURCES) -o build/tests/zt30-usb-iso-test
+	build/tests/zt30-usb-iso-test
+zt30_usb_iso_private_probe: build/zt30/usb-iso-private-probe
+build/zt30/usb-iso-private-probe: tests/test_zt30_usb_iso.cpp $(ZT30_USB_ISO_SOURCES) camera_app/src/backends/zt30/usb_iso.h camera_app/src/backends/zt30/uvc_frame.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tests/test_zt30_usb_iso.cpp -o $@.test.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/usb_iso.cpp -o $@.usb.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/uvc_frame.cpp -o $@.frame.o
+	$(ZT30_CROSS_COMPILE)g++ $@.test.o $@.usb.o $@.frame.o -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+
+.PHONY: zt30_usb_iso_probe zt30_usb_iso_probe-test
+zt30_usb_iso_probe: build/zt30/usb-iso-probe
+build/zt30/usb-iso-probe: tools/zt30_usb_iso_probe.cpp $(ZT30_USB_ISO_SOURCES) camera_app/src/backends/zt30/usb_iso.h camera_app/src/backends/zt30/uvc_frame.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tools/zt30_usb_iso_probe.cpp -o $@.probe.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/usb_iso.cpp -o $@.usb.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/uvc_frame.cpp -o $@.frame.o
+	$(ZT30_CROSS_COMPILE)g++ $@.probe.o $@.usb.o $@.frame.o -o $@
+	python3 tools/check_zt30_elf.py $@ --readelf $(ZT30_CROSS_COMPILE)readelf
+zt30_usb_iso_probe-test:
+	python3 tests/test_zt30_usb_iso_probe.py
+
+.PHONY: zt30_thermal_pixels-test zt30_thermal_pixels_private_probe
+zt30_thermal_pixels-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_thermal_pixels.cpp camera_app/src/backends/zt30/thermal_pixels.cpp -o build/tests/zt30-thermal-pixels-test
+	./build/tests/zt30-thermal-pixels-test
+zt30_thermal_pixels_private_probe: build/zt30/thermal-pixels-private-probe
+build/zt30/thermal-pixels-private-probe: tests/test_zt30_thermal_pixels.cpp camera_app/src/backends/zt30/thermal_pixels.cpp camera_app/src/backends/zt30/thermal_pixels.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tests/test_zt30_thermal_pixels.cpp -o $@.test.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/thermal_pixels.cpp -o $@.pixels.o
+	$(ZT30_CROSS_COMPILE)g++ $@.test.o $@.pixels.o -o $@
+	python3 tools/check_zt30_elf.py $@
+
+.PHONY: zt30_buffer_abi-test zt30_buffer_abi_private_probe
+zt30_buffer_abi-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_buffer_abi.cpp -o build/tests/zt30-buffer-abi-test
+	./build/tests/zt30-buffer-abi-test
+zt30_buffer_abi_private_probe: build/zt30/buffer-abi-private-probe
+build/zt30/buffer-abi-private-probe: tests/test_zt30_buffer_abi.cpp camera_app/src/backends/zt30/mi/buffer_abi.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tests/test_zt30_buffer_abi.cpp -o $@.test.o
+	$(ZT30_CROSS_COMPILE)g++ $@.test.o -o $@
+	python3 tools/check_zt30_elf.py $@
+
+.PHONY: zt30_input_buffer-test zt30_input_buffer_private_probe
+zt30_input_buffer-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_input_buffer.cpp camera_app/src/backends/zt30/input_buffer.cpp -o build/tests/zt30-input-buffer-test
+	./build/tests/zt30-input-buffer-test
+zt30_input_buffer_private_probe: build/zt30/input-buffer-private-probe
+build/zt30/input-buffer-private-probe: tests/test_zt30_input_buffer.cpp camera_app/src/backends/zt30/input_buffer.cpp camera_app/src/backends/zt30/input_buffer.h camera_app/src/backends/zt30/mi/buffer_abi.h tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tests/test_zt30_input_buffer.cpp -o $@.test.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c camera_app/src/backends/zt30/input_buffer.cpp -o $@.owner.o
+	$(ZT30_CROSS_COMPILE)g++ $@.test.o $@.owner.o -o $@
+	python3 tools/check_zt30_elf.py $@
+
+.PHONY: zt30_input_metadata-test zt30_input_metadata_private_probe zt30_input_metadata_probe
+ZT30_INPUT_METADATA_SOURCE = camera_app/src/backends/zt30/input_metadata.cpp
+ZT30_INPUT_METADATA_HEADERS = camera_app/src/backends/zt30/input_metadata.h camera_app/src/backends/zt30/mi/buffer_abi.h camera_app/src/backends/zt30/mi/encoder_abi.h camera_app/src/backends/zt30/mi/abi.h camera_app/src/backends/zt30/media_graph.h
+zt30_input_metadata-test:
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_input_metadata.cpp $(ZT30_INPUT_METADATA_SOURCE) -o build/tests/zt30-input-metadata-test
+	./build/tests/zt30-input-metadata-test
+	python3 tests/test_zt30_input_metadata_probe.py
+zt30_input_metadata_private_probe: build/zt30/input-metadata-private-probe
+build/zt30/input-metadata-private-probe: tests/test_zt30_input_metadata.cpp $(ZT30_INPUT_METADATA_SOURCE) $(ZT30_INPUT_METADATA_HEADERS) tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tests/test_zt30_input_metadata.cpp -o $@.test.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c $(ZT30_INPUT_METADATA_SOURCE) -o $@.owner.o
+	$(ZT30_CROSS_COMPILE)g++ $@.test.o $@.owner.o -o $@
+	python3 tools/check_zt30_elf.py $@
+zt30_input_metadata_probe: build/zt30/input-metadata-probe build/zt30/input-sdk.so
+build/zt30/input-metadata-probe: tools/zt30_input_metadata_probe.cpp $(ZT30_INPUT_METADATA_SOURCE) $(ZT30_INPUT_METADATA_HEADERS) tools/check_zt30_elf.py
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c tools/zt30_input_metadata_probe.cpp -o $@.probe.o
+	$(ZT30_CROSS_COMPILE)g++ -std=c++11 -O2 -Wall -Wextra -Werror -Wframe-larger-than=8192 -fstack-usage -c $(ZT30_INPUT_METADATA_SOURCE) -o $@.owner.o
+	$(ZT30_CROSS_COMPILE)g++ $@.probe.o $@.owner.o -ldl -o $@
+	python3 tools/check_zt30_elf.py $@
+build/zt30/input-sdk.so: tools/zt30_input_sdk.c tools/check_zt30_elf.py
+	@test -n '$(ZT30_SDK_LIBDIR)' || { echo 'ZT30_SDK_LIBDIR must point to captured ZT30 /config/lib' >&2; exit 1; }
+	@mkdir -p $(@D)
+	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_venc -lm -lpthread -Wl,--as-needed -o $@
+	python3 tools/check_zt30_elf.py $@ --shared-library
