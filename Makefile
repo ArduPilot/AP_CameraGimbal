@@ -806,6 +806,12 @@ zt30_ram_camera: build/zt30/encoder-sdk.so zt30_ram_camera_build
 zt30_ram_camera_build:
 	$(MAKE) -C camera_app CAMERA_BACKEND=zt30 ZT30_RAM_BUILD=1 CROSS_COMPILE=$(ZT30_CROSS_COMPILE) all
 
+# Development application: continuous RGB, normal frontends, no flash installer.
+.PHONY: zt30_dev_camera zt30_dev_camera_build
+zt30_dev_camera: build/zt30/encoder-sdk.so zt30_dev_camera_build
+zt30_dev_camera_build:
+	$(MAKE) -C camera_app CAMERA_BACKEND=zt30 ZT30_DEV_BUILD=1 CROSS_COMPILE=$(ZT30_CROSS_COMPILE) all
+
 .PHONY: zt30_ram_frontend-test
 zt30_ram_frontend-test:
 	$(MAKE) -C camera_app build/host/tracking_dlib.o
@@ -906,3 +912,33 @@ build/zt30/input-sdk.so: tools/zt30_input_sdk.c tools/check_zt30_elf.py
 	@mkdir -p $(@D)
 	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_venc -lm -lpthread -Wl,--as-needed -o $@
 	python3 tools/check_zt30_elf.py $@ --shared-library
+
+# Offline, device-specific prototype. Native release packaging stays guarded.
+ZT30_CUSTOMER_ROOT ?=
+ZT30_DEV_PACKAGE_OUT ?= build/zt30-dev/SIYI_ZT30_UpgradeSD.bin.candidate
+ZT30_DEV_TOOLS ?= build/deps/zt30-dev-tools/bin
+.PHONY: zt30_dev_package-test zt30_dev_package
+zt30_dev_package-test:
+	python3 tests/test_zt30_dev_package.py
+zt30_dev_package: zt30_dev_camera
+	@test -n '$(ZT30_CUSTOMER_ROOT)' || { echo 'Set ZT30_CUSTOMER_ROOT to this device captured customer filesystem' >&2; exit 1; }
+	$(MAKE) -C web zt30-web ZT30_CROSS_COMPILE=$(ZT30_CROSS_COMPILE)
+	python3 tools/build_zt30_dev_package.py build --customer-root '$(ZT30_CUSTOMER_ROOT)' --camera-app camera_app/build/zt30-dev/camera-app --web-app web/zt30-web --sdk build/zt30/encoder-sdk.so --dropbear '$(ZT30_DEV_TOOLS)/dropbear' --dropbearkey '$(ZT30_DEV_TOOLS)/dropbearkey' --output '$(ZT30_DEV_PACKAGE_OUT)'
+
+.PHONY: zt30_native_control-test
+zt30_native_control-test:
+	mkdir -p build/tests
+	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build tests/test_zt30_native_control.cpp camera_app/src/protocol/siyi.cpp camera_app/src/protocol/private_uart.cpp -lutil -Wl,--wrap=write -o build/tests/zt30-native-control-test
+	build/tests/zt30-native-control-test
+
+.PHONY: zt30_input_mapping-test
+zt30_input_mapping-test:
+	mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_input_mapping.cpp camera_app/src/backends/zt30/input_mapping.cpp -o build/tests/zt30-input-mapping-test
+	build/tests/zt30-input-mapping-test
+
+.PHONY: zt30_thermal_start_budget-test
+zt30_thermal_start_budget-test:
+	mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_thermal_start_budget.cpp -o build/tests/zt30-thermal-start-budget-test
+	build/tests/zt30-thermal-start-budget-test

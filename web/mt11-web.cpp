@@ -52,6 +52,9 @@
 
 #ifdef ZT30_WEB_DEV
 #include "zt30-dev-paths.h"
+#elif defined(ZT30_WEB_NATIVE)
+#include "zt30-paths.h"
+#include "zt30-process.h"
 #endif
 
 /* Shared web UI with target-specific paths, capabilities and update formats.
@@ -2844,7 +2847,7 @@ done:
 }
 #endif
 
-#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))
+#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST)) || defined(ZT30_WEB_NATIVE)
 static bool line_has_timestamp(const char *line, size_t length)
 {
     return length >= 6U && line[0] == '[' &&
@@ -3100,6 +3103,12 @@ static enum camera_kind pid_camera_kind(pid_t pid)
         strcmp(executable, resolved) == 0) return CAMERA_REPLACEMENT;
 #endif
     if (strcmp(executable, REPLACEMENT_CAMERA_PATH) == 0) return CAMERA_REPLACEMENT;
+#ifdef ZT30_WEB_NATIVE
+    // An atomically installed inode may retain its original staging dentry.
+    // Match only our updater path and the canonical launch argument.
+    if (zt30_staged_app_pid(pid, executable, REPLACEMENT_CAMERA_PATH,
+                            "/customer/.apcg-update.")) return CAMERA_REPLACEMENT;
+#endif
     return CAMERA_NONE;
 }
 
@@ -7787,7 +7796,7 @@ int main(int argc, char **argv)
     }
     unsigned port = DEFAULT_PORT;
 
-#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST))
+#if (APCAM_TARGET == APCAM_TARGET_MT11) || (defined(MT11_WEB_SITL) && !defined(WEB_SUPERVISED_TEST)) || defined(ZT30_WEB_NATIVE)
     if (argc == 2 && strcmp(argv[1], "--capture-app-log") == 0) {
         return capture_app_log(REPLACEMENT_LOG_PATH, REPLACEMENT_LOG_OLD_PATH, true);
     }

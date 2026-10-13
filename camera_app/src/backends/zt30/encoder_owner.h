@@ -32,11 +32,13 @@ public:
     EncoderOwner &operator=(const EncoderOwner&)=delete;
     int open(EncoderCodec codec=EncoderCodec::H265,H264Timing timing=H264Timing::ReadOnly,
              EncoderSource source=EncoderSource::Zoom); // SCL0/channel0 or1/port1, 1280x720
+    // Additional software-input channel; caller owns SYS and VENC device 0.
+    int open_thermal(); // H264 640x512/15fps, channel 2, no binds/device ownership
     // 1: copied frame, 0: no frame ready, -1: failure (raw_status retained).
     int copy_frame(EncodedFrame &output);
     int read_h264_vui(H264Vui &output); // only on a ready H264 channel; failure poisons owner
     int close();
-    bool ready() const { return started && bound && !unhealthy; }
+    bool ready() const { return started && (bound || software) && !unhealthy; }
     const char *failed_call=nullptr;
     int raw_status=0;
     bool have_default_vui() const { return got_default_vui; }
@@ -50,7 +52,8 @@ private:
     PacketMemory &m;
     H264Vui initial_vui{},verified_vui{};
     bool got_default_vui=false,h264=false;
-    uint32_t source_channel=0;
+    uint32_t source_channel=0,channel_id=1;
+    bool software=false;
     bool used=false,unhealthy=false,device=false,channel=false,started=false,bound=false;
     EncoderPacket packets[32]{};
 };

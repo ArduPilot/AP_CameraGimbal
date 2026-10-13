@@ -1,6 +1,7 @@
 #pragma once
 #include "api.h"
 #include "encoder_abi.h"
+#include "buffer_abi.h"
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
@@ -12,6 +13,7 @@ class NativeSdk {
 public:
     Api api{};
     EncoderApi encoder{};
+    InputBufferApi input{};
     int (*current_pts)(uint16_t,uint64_t*)=nullptr;
     NativeSdk()=default;
     NativeSdk(const NativeSdk&)=delete;
@@ -97,12 +99,16 @@ public:
         // Publish only a complete pair; no partially resolved API on failure.
         encoder.get_h264_vui=get;encoder.set_h264_vui=set;return true;
     }
+    bool resolve_input() {
+        return handle && symbol(input.get,"libmi_sys.so","MI_SYS_ChnInputPortGetBuf") &&
+            symbol(input.put,"libmi_sys.so","MI_SYS_ChnInputPortPutBuf");
+    }
     bool resolve_clock() {
         return handle && symbol(current_pts,"libmi_sys.so","MI_SYS_GetCurPts");
     }
     void close() {
         if(handle)dlclose(handle);
-        handle=nullptr;api={};encoder={};current_pts=nullptr;
+        handle=nullptr;api={};encoder={};input={};current_pts=nullptr;
     }
 private:
     void *handle=nullptr;

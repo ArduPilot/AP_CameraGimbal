@@ -4,6 +4,7 @@
 #include <memory>
 struct usbdevfs_urb;
 namespace ca_zt30 {
+bool thermal_usb_descriptors(const uint8_t*,size_t);
 constexpr unsigned ThermalPackets=32,ThermalPacketBytes=3072,ThermalUrbs=8;
 constexpr unsigned ThermalUrbBytes=ThermalPackets*ThermalPacketBytes;
 constexpr unsigned ThermalFrameBytes=1310720;

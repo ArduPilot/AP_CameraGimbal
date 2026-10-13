@@ -31,8 +31,13 @@ CROSS_COMPILE ?= aarch64-linux-gnu-
 LDFLAGS ?= -static
 endif
 ifeq ($(CAMERA_BACKEND),zt30)
+ifeq ($(ZT30_RAM_BUILD)$(ZT30_DEV_BUILD),11)
+$(error ZT30_RAM_BUILD and ZT30_DEV_BUILD are mutually exclusive)
+endif
 ifeq ($(ZT30_RAM_BUILD),1)
 TARGET := build/zt30-ram/camera-app
+else ifeq ($(ZT30_DEV_BUILD),1)
+TARGET := build/zt30-dev/camera-app
 else
 ifneq ($(filter all $(TARGET),$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
 $(error ZT30 native backend is not qualified yet; use make zt30_sitl at the repository root)
@@ -271,7 +276,7 @@ generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
  build/xop_rtp_connection.cpp build/binlog_version.h
 
 
-ifeq ($(CAMERA_BACKEND):$(ZT30_RAM_BUILD),zt30:1)
+ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 include ../tools/zt30_app.mk
 else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
 A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,\
@@ -1025,7 +1030,7 @@ build/host/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image
 build/$(CAMERA_BACKEND)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/image_tracker.h $(DLIB_HEADER)
 	mkdir -p $(@D)
 	$(CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
-ifneq ($(CAMERA_BACKEND):$(ZT30_RAM_BUILD),zt30:1)
+ifneq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 OBJECTS += build/$(CAMERA_BACKEND)/tracking_dlib.o
 $(TARGET): build/$(CAMERA_BACKEND)/tracking_dlib.o
 endif
