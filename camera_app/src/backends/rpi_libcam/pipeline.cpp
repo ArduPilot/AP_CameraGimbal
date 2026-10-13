@@ -553,7 +553,7 @@ static int start_video(struct ca_rpi_pipeline *p)
 {
     ControlList initial(controls::controls);
     const int64_t frame_us = 1000000 / (int64_t)p->config.frame_rate;
-    initial.set(controls::FrameDurationLimits, Span<const int64_t, 2>({frame_us, frame_us}));
+    initial.set(controls::FrameDurationLimits, {frame_us, frame_us});
     pthread_mutex_lock(&p->lock);
     const struct ca_config image = p->config.image;
     p->pending.clear();
@@ -729,7 +729,7 @@ static void still_control_list(struct ca_rpi_pipeline *p, ControlList &list)
     }
     if (red > 0.0f && blue > 0.0f) {
         list.set(controls::AwbEnable, false);
-        list.set(controls::ColourGains, Span<const float, 2>({red, blue}));
+        list.set(controls::ColourGains, {red, blue});
     }
 }
 

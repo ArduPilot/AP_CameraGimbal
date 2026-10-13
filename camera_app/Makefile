@@ -277,6 +277,8 @@ $(TARGET): Makefile $(OBJECTS)
 		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS))
 
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
+# Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
+build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS += -std=gnu++20
 
 build/$(CAMERA_BACKEND)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
