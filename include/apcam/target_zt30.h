@@ -111,6 +111,26 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 
+#ifdef CAMERA_APP_ZT30_RAM
+/* Advertise only the qualified stream/features of this bounded experiment. */
+#undef APCAM_NUM_STREAMS
+#define APCAM_NUM_STREAMS 1
+#undef APCAM_STREAM1_LENS_MASK
+#define APCAM_STREAM1_LENS_MASK 2
+#undef APCAM_HAVE_PHOTO
+#define APCAM_HAVE_PHOTO 0
+#undef APCAM_HAVE_ZOOM
+#define APCAM_HAVE_ZOOM 0
+#undef APCAM_HAVE_FOCUS
+#define APCAM_HAVE_FOCUS 0
+#undef APCAM_HAVE_THERMAL
+#define APCAM_HAVE_THERMAL 0
+#undef APCAM_HAVE_LIDAR
+#define APCAM_HAVE_LIDAR 0
+#define APCAM_GIMBAL_OPTIONAL 1
+#define APCAM_HAVE_NETWORK_CONFIG 0
+#endif
+
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
 #define FIRMWARE_PREFIX "ZT30_FW_"

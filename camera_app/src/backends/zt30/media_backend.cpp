@@ -18,19 +18,24 @@ int MediaBackend::init_failed(int code) {
     worker_result.store(code);done.store(true);active.store(false);
     (void)shutdown();errno=EIO;return -1;
 }
-int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity) {
+int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity,EncoderSource selected) {
     if(used) { errno=EALREADY;return -1; }
     used=true;
-    if(!buffer || capacity<4U*1024*1024 || !h.gate || !h.open_sink || !h.vui || !h.frame || !h.drain) {
+    if((selected!=EncoderSource::Zoom && selected!=EncoderSource::Wide) ||
+       !buffer || capacity<4U*1024*1024 || !h.gate || !h.open_sink || !h.vui || !h.frame || !h.drain) {
         errno=EINVAL;return -1;
     }
-    hooks=h;copied.data=buffer;copied.capacity=capacity;
-    if(rgb.open(false)) { unsafe_sdk_failure=true;return init_failed(5); }
+    source=selected;hooks=h;copied.data=buffer;copied.capacity=capacity;
+    const bool wide=source==EncoderSource::Wide;
+    if(rgb.open(wide)) { unsafe_sdk_failure=true;return init_failed(5); }
     if(stopping() || !hooks.gate(hooks.opaque,false))return init_failed(6);
-    if(rgb.load_iq()) { unsafe_sdk_failure=true;return init_failed(7); }
+    if(wide)std::printf("IQ_LOAD sensor=1 isp=1 path=%s key=1234\n",WidePath.iq_file);
+    const uint64_t iq_begin=now();const int iq=rgb.load_iq();
+    if(wide)std::printf("IQ_REPLY isp=1 raw=%d\nIQ_TIMING elapsed_ns=%llu\n",iq,static_cast<unsigned long long>(now()-iq_begin));
+    if(iq) { unsafe_sdk_failure=true;return init_failed(7); }
     if(stopping() || !hooks.gate(hooks.opaque,true))return init_failed(8);
     if(!hooks.open_sink(hooks.opaque))return init_failed(26);
-    const int opened=encoder.open(EncoderCodec::H264,H264Timing::ReadOnly);
+    const int opened=encoder.open(EncoderCodec::H264,H264Timing::ReadOnly,source);
     unsafe_sdk_failure=opened!=0; // same process-recovery fence as the qualified probe
     if(encoder.have_default_vui() && !hooks.vui(hooks.opaque,"pre-start",encoder.default_vui()))return init_failed(21);
     if(opened)return init_failed(21);

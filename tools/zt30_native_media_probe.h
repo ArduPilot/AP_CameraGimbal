@@ -7,12 +7,18 @@ struct NativeMediaContext {
     FILE *meta=nullptr;
     StreamProbe sink;
     uint64_t begin=0;
+    bool wide=false,full_app=false;
+    unsigned frames=0;
+    size_t bytes=0;
     static bool gate(void *opaque,bool after_iq) {
         auto &c=*static_cast<NativeMediaContext*>(opaque);
         if(after_iq)std::printf("IQ PASS key=1234\n");
-        else std::printf("BIND_READY pid=%ld elapsed_ns=%llu sensor=0 vif=0 isp=0 scl=0 port=1 size=1280x720\n",long(getpid()),static_cast<unsigned long long>(monotonic_ns()-c.begin));
+        else {
+            const auto &path=c.wide?ca_zt30::WidePath:ca_zt30::ZoomPath;
+            std::printf("BIND_READY pid=%ld elapsed_ns=%llu sensor=%u vif=%u isp=%u scl=%u port=1 size=1280x720\n",long(getpid()),static_cast<unsigned long long>(monotonic_ns()-c.begin),path.sensor_pad,path.vif_device,path.isp_channel,path.scl_channel);
+        }
         const char *path=after_iq?c.sampled:c.marker;
-        const uint64_t deadline=monotonic_ns()+10000000000ULL;struct stat st{};
+        const uint64_t deadline=monotonic_ns()+(c.wide?(after_iq?6000000000ULL:8000000000ULL):10000000000ULL);struct stat st{};
         while(!stopped && monotonic_ns()<deadline) {
             if(!lstat(path,&st))return S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
             if(errno!=ENOENT)return false;
@@ -22,7 +28,7 @@ struct NativeMediaContext {
     }
     static bool open_sink(void *opaque) {
         auto &c=*static_cast<NativeMediaContext*>(opaque);
-        return c.sink.open(c.marker) && c.sink.observe(*c.sdk);
+        return c.sink.open(c.marker,c.wide) && c.sink.observe(*c.sdk);
     }
     static bool vui(void*,const char *phase,const ca_zt30::H264Vui &v) {
         if(!std::strcmp(phase,"pre-start"))std::printf("H264_VUI_DEFAULT hex=");
@@ -37,11 +43,38 @@ struct NativeMediaContext {
         std::fprintf(c.meta,"{\"sequence\":%u,\"packets\":%u,\"bytes\":%zu,\"copy_begin_ns\":%llu,\"copy_end_ns\":%llu,\"pts\":[",f.sequence,f.packets,f.bytes,static_cast<unsigned long long>(before),static_cast<unsigned long long>(after));
         for(unsigned i=0;i<f.packets;i++)std::fprintf(c.meta,"%s%llu",i?",":"",static_cast<unsigned long long>(f.pts[i]));
         std::fprintf(c.meta,"],\"clock_pts\":%llu,\"clock_before_ns\":%llu,\"clock_after_ns\":%llu,\"mapped_us\":%llu}\n",static_cast<unsigned long long>(c.sink.raw_clock),static_cast<unsigned long long>(c.sink.before_ns),static_cast<unsigned long long>(c.sink.after_ns),static_cast<unsigned long long>(c.sink.mapped_us));
-        return !std::ferror(c.meta);
+        if(std::ferror(c.meta))return false;
+        c.frames++;c.bytes+=f.bytes;return true;
     }
-    static bool drain(void *opaque) { return static_cast<NativeMediaContext*>(opaque)->sink.drained(); }
+    static bool drain(void *opaque) {
+        auto &c=*static_cast<NativeMediaContext*>(opaque);
+        if(!c.sink.drained())return false;
+        if(!c.wide)return true;
+        std::printf("ENCODER_CAPTURE_READY source_scl=1 venc=1 frames=%u bytes=%zu\n",c.frames,c.bytes);
+        char consumer[160]{},checked[160]{};
+        std::snprintf(consumer,sizeof(consumer),"%s",c.marker);
+        char *tail=std::strrchr(consumer,'/');if(!tail)return false;
+        std::snprintf(tail+1,sizeof(consumer)-size_t(tail+1-consumer),"consumer.sampled");
+        std::snprintf(checked,sizeof(checked),"%s",consumer);tail=std::strrchr(checked,'/');
+        std::snprintf(tail+1,sizeof(checked)-size_t(tail+1-checked),"full-app.checked");
+        auto acknowledged=[](const char *path) {
+            struct stat st{};
+            return !lstat(path,&st) && S_ISREG(st.st_mode) && st.st_uid==0 && st.st_nlink==1 && st.st_size==0;
+        };
+        bool have_consumer=false,have_app=!c.full_app;
+        const uint64_t deadline=monotonic_ns()+6000000000ULL;
+        while(!stopped && monotonic_ns()<deadline) {
+            have_consumer=acknowledged(consumer);have_app=!c.full_app || acknowledged(checked);
+            if(have_consumer && have_app) {
+                std::puts("CONSUMER_GATE PASS wide bind snapshot acknowledged");return true;
+            }
+            pause_ms(20);
+        }
+        std::fprintf(stderr,"CONSUMER_GATE FAIL consumer=%d full_app=%d\n",int(have_consumer),int(have_app));return false;
+    }
     ca_zt30::NativeSdk *sdk=nullptr;
 };
+#ifndef ZT30_RAM_FACTORY
 static int capture_native_media(ca_zt30::NativeSdk &sdk,const char *marker,uint8_t *buffer) {
     NativeMediaContext c{};c.marker=marker;c.sdk=&sdk;c.begin=monotonic_ns();
     char video[160]{},metrics[160]{};
@@ -84,3 +117,5 @@ static int capture_native_media(ca_zt30::NativeSdk &sdk,const char *marker,uint8
     std::printf("ENCODER PASS copied H264 payloads; independent host decode required\n");
     return 0;
 }
+
+#endif // !ZT30_RAM_FACTORY

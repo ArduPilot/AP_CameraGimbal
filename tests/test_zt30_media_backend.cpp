@@ -1,4 +1,5 @@
-#include "../camera_app/src/backends/zt30/media_backend.h"
+#include "../camera_app/src/backends/zt30/owned_media.h"
+#include "../camera_app/src/backends/zt30/ram_protocol.h"
 #include <cassert>
 #include <initializer_list>
 #include <vector>
@@ -26,6 +27,19 @@ int interface_checks() {
     assert(backend.initialize(hooks,nullptr,0)==-1 && errno==EINVAL && !backend.ready());
     assert(backend.initialize(hooks,nullptr,0)==-1 && errno==EALREADY);
     assert(backend.shutdown()==0 && backend.shutdown()==0);
+    MediaBackend invalid(api,enc,mem);
+    MediaHooks valid{};
+    valid.gate=[](void*,bool){return true;};valid.open_sink=[](void*){return true;};
+    valid.vui=[](void*,const char*,const H264Vui&){return true;};
+    valid.frame=[](void*,const EncodedFrame&,uint64_t,uint64_t){return true;};valid.drain=[](void*){return true;};
+    std::vector<uint8_t> buffer(4U*1024*1024);
+    assert(invalid.initialize(valid,buffer.data(),buffer.size(),static_cast<EncoderSource>(99))==-1 && errno==EINVAL);
+    assert(invalid.shutdown()==0);
+    char id[16]="CAM_LENS";
+    assert(ram_lens_read(-1,id) && !ram_lens_read(0,id));
+    id[15]='x';assert(!ram_lens_read(-1,id));
+    std::memset(id,0,sizeof(id));assert(!ram_lens_read(-1,id));
+    std::memcpy(id,"CAM_ZOOM",8);assert(!ram_lens_read(-1,id));
     return 0;
 }
 
@@ -61,8 +75,8 @@ struct TestSink {
     }
     static bool drain(void *p) { auto &s=*static_cast<TestSink*>(p);assert(s.frames==90);s.drained=true;return s.failure!=28; }
 };
-static void lifecycle_checks(int failure) {
-    rgb_fixture::reset(false);encoder_fixture::reset();encoder_fixture::expected_codec=2;
+static void lifecycle_checks(int failure,bool wide=false) {
+    rgb_fixture::reset(wide);encoder_fixture::reset();encoder_fixture::expected_codec=2;encoder_fixture::expected_source=wide?1:0;
     Api api=rgb_api;
     api.sys_bind=[](uint16_t chip,Port *src,Port *dst,uint32_t a,uint32_t b,uint32_t type,uint32_t arg) {
         return (dst->module==Venc?encoder_fixture::system_api():rgb_api).sys_bind(chip,src,dst,a,b,type,arg);
@@ -80,7 +94,10 @@ static void lifecycle_checks(int failure) {
     TestSink sink{};sink.failure=failure;
     MediaHooks hooks{};hooks.opaque=&sink;hooks.stop=&sink.stop;hooks.gate=TestSink::gate;hooks.open_sink=TestSink::open;hooks.vui=TestSink::vui;hooks.frame=TestSink::frame;hooks.drain=TestSink::drain;
     MediaBackend backend(api,enc,memory);
-    const int rc=backend.initialize(hooks,buffer.data(),buffer.size());
+    const int rc=backend.initialize(hooks,buffer.data(),buffer.size(),wide?EncoderSource::Wide:EncoderSource::Zoom);
+    assert(backend.lens()==(wide?CA_MEDIA_LENS_WIDE:CA_MEDIA_LENS_ZOOM));
+    assert(backend.set_lens(backend.lens())==0);
+    assert(backend.set_lens(wide?CA_MEDIA_LENS_ZOOM:CA_MEDIA_LENS_WIDE)==-1 && errno==ENOTSUP);
     if(failure==6 || failure==7 || failure==8 || failure==21 || failure==26 || failure==29)assert(rc==-1 && !backend.ready());
     else {
         assert(rc==0);
@@ -96,17 +113,17 @@ static void lifecycle_checks(int failure) {
     const auto count=rgb_fixture::calls.size()+encoder_fixture::calls.size();
     assert(backend.shutdown()==0 && rgb_fixture::calls.size()+encoder_fixture::calls.size()==count);
 }
-static void poisoned_startup_check(int failure) {
+static void poisoned_startup_check(int failure,bool wide=false) {
     const pid_t child=fork();assert(child>=0);
     if(!child) {
-        rgb_fixture::reset(false);encoder_fixture::reset();encoder_fixture::expected_codec=2;
+        rgb_fixture::reset(wide);encoder_fixture::reset();encoder_fixture::expected_codec=2;encoder_fixture::expected_source=wide?1:0;
         if(failure==21)encoder_fixture::failure=2; // failed CreateChn, encoder open already unwinds
         if(failure==5)rgb_fixture::fail_index=1; // failed SYS initialization
         auto api=rgb_fixture::fake_api();auto enc=encoder_fixture::encoder_api();auto memory=encoder_fixture::memory_api();
         std::vector<uint8_t> buffer(4U*1024*1024);TestSink sink{};sink.failure=failure;
         MediaHooks hooks{};hooks.opaque=&sink;hooks.gate=TestSink::gate;hooks.open_sink=TestSink::open;hooks.vui=TestSink::vui;hooks.frame=TestSink::frame;hooks.drain=TestSink::drain;
         MediaBackend backend(api,enc,memory);
-        assert(backend.initialize(hooks,buffer.data(),buffer.size())==-1);
+        assert(backend.initialize(hooks,buffer.data(),buffer.size(),wide?EncoderSource::Wide:EncoderSource::Zoom)==-1);
         assert(backend.result()==failure && backend.shutdown()==EOWNERDEAD && !backend.ready());
         assert(encoder_fixture::resources.empty());
         if(failure!=5) {
@@ -120,8 +137,46 @@ static void poisoned_startup_check(int failure) {
     }
     int status=0;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
 }
+
+static bool context_destroyed=false;
+struct TestContext {
+    Api api=rgb_fixture::fake_api();
+    EncoderApi encoder=encoder_fixture::encoder_api();
+    PacketMemory memory=encoder_fixture::memory_api();
+    ~TestContext() {
+        // The same first-base ownership wrapper as the RAM factory must let
+        // MediaBackend join/close before the SDK context is destroyed.
+        assert(rgb_fixture::resources.empty() && encoder_fixture::resources.empty());
+        context_destroyed=true;
+    }
+};
+static void owned_context_lifetime_check(bool wide=false) {
+    fail_thread_create=false;fail_active_get=false;
+    rgb_fixture::reset(wide);encoder_fixture::reset();encoder_fixture::expected_codec=2;encoder_fixture::expected_source=wide?1:0;context_destroyed=false;
+    auto c=std::unique_ptr<TestContext>(new TestContext);
+    c->api.sys_bind=[](uint16_t chip,Port *src,Port *dst,uint32_t a,uint32_t b,uint32_t type,uint32_t arg) {
+        return (dst->module==Venc?encoder_fixture::system_api():rgb_api).sys_bind(chip,src,dst,a,b,type,arg);
+    };
+    c->api.sys_unbind=[](uint16_t chip,Port *src,Port *dst) {
+        return (dst->module==Venc?encoder_fixture::system_api():rgb_api).sys_unbind(chip,src,dst);
+    };
+    std::vector<uint8_t> buffer(4U*1024*1024);TestSink sink{};
+    MediaHooks hooks{};hooks.opaque=&sink;hooks.stop=&sink.stop;hooks.gate=TestSink::gate;hooks.open_sink=TestSink::open;hooks.vui=TestSink::vui;hooks.frame=TestSink::frame;hooks.drain=TestSink::drain;
+    {
+        OwnedMediaBackend<TestContext> backend(std::move(c));
+        assert(backend.initialize(hooks,buffer.data(),buffer.size(),wide?EncoderSource::Wide:EncoderSource::Zoom)==0);
+        // Destruction deliberately races the bounded worker; it must join
+        // before releasing resources even when capture hasn't completed.
+        assert(!context_destroyed);
+    }
+    assert(context_destroyed);
+}
+
 int main() {
     interface_checks();
-    for(int failure:{5,7,21})poisoned_startup_check(failure);
-    for(int failure:{0,6,8,21,22,24,26,27,28,29})lifecycle_checks(failure);
+    for(bool wide:{false,true}) {
+        owned_context_lifetime_check(wide);
+        for(int failure:{5,7,21})poisoned_startup_check(failure,wide);
+        for(int failure:{0,6,8,21,22,24,26,27,28,29})lifecycle_checks(failure,wide);
+    }
 }
