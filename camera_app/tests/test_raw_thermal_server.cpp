@@ -69,6 +69,21 @@ int main(void)
     assert(timestamp > 1700000000.123456 && timestamp < 1700000000.123457);
     assert(memcmp(response + CA_RAW_THERMAL_HEADER_BYTES, pixels,
                   frame_bytes) == 0);
+    ca_raw_thermal_server_source_timeout(server,1);
+    usleep(10000); // expiring input must not serve a cached sensor frame
+    fd=socket(AF_INET,SOCK_STREAM,0);assert(fd>=0);
+    assert(connect(fd,(const sockaddr*)&address,sizeof(address))==0);
+    assert(recv(fd,response,1,0)==0);close(fd);
+    // Reusing the sender snapshot must pick up a newly published frame, even
+    // after an expired request sent no data.
+    for(size_t i=0;i<WIDTH*HEIGHT;i++)pixels[i]^=0xffff;
+    ca_raw_thermal_server_source_timeout(server,0);
+    assert(ca_raw_thermal_server_publish(server,pixels,&captured_at)==0);
+    fd=socket(AF_INET,SOCK_STREAM,0);assert(fd>=0);
+    assert(connect(fd,(const sockaddr*)&address,sizeof(address))==0);
+    receive_all(fd,response,response_bytes);
+    assert(recv(fd,response,1,0)==0);close(fd);
+    assert(memcmp(response+CA_RAW_THERMAL_HEADER_BYTES,pixels,frame_bytes)==0);
     ca_raw_thermal_server_close(server);
     free(response);
     puts("raw thermal TCP server tests passed");

@@ -6,6 +6,33 @@ uint64_t ca_binlog_time_us(void) { return 123; }
 
 int main(void)
 {
+    int temperature=123;
+    assert(apcam_parse_soc_temperature("Temperature 36\n",true,&temperature) && temperature==36000);
+    assert(apcam_parse_soc_temperature("Temperature -5\n",true,&temperature) && temperature==-5000);
+    assert(apcam_parse_soc_temperature("41500\n",false,&temperature) && temperature==41500);
+    assert(!apcam_parse_soc_temperature("Temperature 36\n",false,&temperature));
+    assert(!apcam_parse_soc_temperature("36000\n",true,&temperature));
+    assert(!apcam_parse_soc_temperature("Temperature 151\n",true,&temperature));
+    assert(!apcam_parse_soc_temperature("Temperature -41\n",true,&temperature));
+    assert(!apcam_parse_soc_temperature("Temperature 36 junk\n",true,&temperature));
+    assert(!apcam_parse_soc_temperature("Temperature \n",true,&temperature));
+    assert(!apcam_parse_soc_temperature("999999999999999999999999999",false,&temperature));
+    assert(apcam_parse_soc_temperature("Temperature  +36\n",true,&temperature) && temperature==36000);
+    char path[]="/tmp/apcam-temperature-XXXXXX";
+    int sensor_fd=mkstemp(path);assert(sensor_fd>=0);close(sensor_fd);
+    auto sensor=[&](const char *text) {
+        FILE *f=fopen(path,"w");assert(f);
+        assert(fwrite(text,1,strlen(text),f)==strlen(text));assert(fclose(f)==0);
+    };
+    sensor("Temperature 42\n");
+    assert(apcam_read_soc_temperature(path,true,&temperature) && temperature==42000);
+    sensor("Temperature 43");
+    assert(apcam_read_soc_temperature(path,true,&temperature) && temperature==43000);
+    sensor("");assert(!apcam_read_soc_temperature(path,true,&temperature));
+    sensor("Temperature 42\nTemperature 43\n");assert(!apcam_read_soc_temperature(path,true,&temperature));
+    sensor("Temperature 42                                                             \n");
+    assert(!apcam_read_soc_temperature(path,true,&temperature));
+    unlink(path);assert(!apcam_read_soc_temperature(path,true,&temperature));
     uint64_t total, idle;
     assert(parse_cpu("cpu 100 20 30 400 50 6 7 8 90 10\n", &total, &idle));
     assert(total == 621 && idle == 450); /* Don't double-count guest. */

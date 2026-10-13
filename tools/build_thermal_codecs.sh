@@ -2,7 +2,7 @@
 # Minimal, pinned FFmpeg libraries for radiometric codecs (no ffmpeg process).
 set -eu
 mode=${1:-host}
-case "$mode" in host|aarch64) ;; *) echo 'usage: build_thermal_codecs.sh [host|aarch64]' >&2; exit 2;; esac
+case "$mode" in host|aarch64|armv7) ;; *) echo 'usage: build_thermal_codecs.sh [host|aarch64|armv7]' >&2; exit 2;; esac
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 root=$repo/build/deps/thermal-codecs
 version=8.0.1
@@ -24,6 +24,7 @@ fi
 prefix=$root/$mode
 build=$root/build-$mode
 cross=${THERMAL_CROSS_COMPILE:-aarch64-linux-gnu-}
+if [ "$mode" = armv7 ]; then cross=${THERMAL_CROSS_COMPILE:-arm-linux-}; fi
 recipe=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$repo/tools/build_thermal_codecs.sh")
 configuration="$version $mode $cross $recipe"
 if [ -f "$prefix/configuration" ] && [ "$(cat "$prefix/configuration")" = "$configuration" ] && [ -f "$prefix/lib/libavcodec.a" ] && [ -f "$prefix/lib/libavutil.a" ]; then
@@ -39,6 +40,8 @@ set -- --prefix="$prefix" --disable-everything --disable-autodetect \
     --extra-cflags=-O2
 if [ "$mode" = aarch64 ]; then
     set -- "$@" --enable-cross-compile --arch=aarch64 --target-os=linux --cross-prefix="$cross"
+elif [ "$mode" = armv7 ]; then
+    set -- "$@" --enable-cross-compile --arch=arm --cpu=cortex-a7 --target-os=linux --cross-prefix="$cross"
 else
     set -- "$@" --disable-x86asm
 fi

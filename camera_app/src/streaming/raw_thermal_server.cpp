@@ -31,6 +31,9 @@ struct ca_raw_thermal_server {
     bool lock_initialized;
     atomic_bool stop;
     uint8_t *latest;
+    // Only the single sender worker uses this snapshot. Keep its mapping alive
+    // while SDK input leases prove provenance using /proc/self/maps.
+    uint8_t *snapshot;
     size_t frame_bytes;
     uint32_t width;
     uint32_t height;
@@ -40,8 +43,17 @@ struct ca_raw_thermal_server {
     bool have_latest;
     unsigned port;
     unsigned served;
+    uint64_t source_timeout_us,received_us;
 };
 
+static uint64_t monotonic_us() {
+    timespec t{};clock_gettime(CLOCK_MONOTONIC,&t);
+    return uint64_t(t.tv_sec)*1000000+uint64_t(t.tv_nsec)/1000;
+}
+void ca_raw_thermal_server_source_timeout(ca_raw_thermal_server *s,unsigned milliseconds) {
+    if(!s)return;
+    pthread_mutex_lock(&s->lock);s->source_timeout_us=uint64_t(milliseconds)*1000;pthread_mutex_unlock(&s->lock);
+}
 static bool send_all(struct ca_raw_thermal_server *server, int fd,
                      const uint8_t *data, size_t length)
 {
@@ -62,17 +74,16 @@ static bool send_all(struct ca_raw_thermal_server *server, int fd,
 static bool send_frame(struct ca_raw_thermal_server *server, int fd)
 {
     uint8_t header[CA_RAW_THERMAL_HEADER_BYTES] = {};
-    uint8_t *snapshot;
+    uint8_t *snapshot = server->snapshot;
     struct timespec captured_at;
     double timestamp;
     bool sent = false;
 
-    snapshot = (uint8_t*)(malloc(server->frame_bytes));
-    if (snapshot == NULL) return false;
     pthread_mutex_lock(&server->lock);
-    if (!server->have_latest) {
+    const uint64_t now=monotonic_us();
+    if (!server->have_latest || (server->source_timeout_us &&
+        (now<server->received_us || now-server->received_us>server->source_timeout_us))) {
         pthread_mutex_unlock(&server->lock);
-        free(snapshot);
         return false;
     }
     memcpy(snapshot, server->latest, server->frame_bytes);
@@ -98,7 +109,6 @@ static bool send_frame(struct ca_raw_thermal_server *server, int fd)
     }
     sent = true;
 done:
-    free(snapshot);
     return sent;
 }
 
@@ -161,7 +171,8 @@ int ca_raw_thermal_server_open(struct ca_raw_thermal_server **result,
     server->frame_bytes = (size_t)width * height * sizeof(uint16_t);
     memcpy(server->capture_root, capture_root, strlen(capture_root) + 1U);
     server->latest = (uint8_t*)(malloc(server->frame_bytes));
-    if (server->latest == NULL) goto fail;
+    server->snapshot = (uint8_t*)(malloc(server->frame_bytes));
+    if (server->latest == NULL || server->snapshot == NULL) goto fail;
     thread_result = pthread_mutex_init(&server->lock, NULL);
     if (thread_result != 0) {
         errno = thread_result;
@@ -241,6 +252,7 @@ int ca_raw_thermal_server_publish(struct ca_raw_thermal_server *server,
     memset(server->filename, 0, sizeof(server->filename));
     memcpy(server->filename, filename, (size_t)length);
     server->captured_at = *captured_at;
+    server->received_us=monotonic_us();
     server->have_latest = true;
     pthread_mutex_unlock(&server->lock);
     return 0;
@@ -262,6 +274,7 @@ void ca_raw_thermal_server_close(struct ca_raw_thermal_server *server)
     }
     if (server->thread_started) pthread_join(server->thread, NULL);
     if (server->lock_initialized) (void)pthread_mutex_destroy(&server->lock);
+    free(server->snapshot);
     free(server->latest);
     delete server;
 }

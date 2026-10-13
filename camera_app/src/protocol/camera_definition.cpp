@@ -56,9 +56,14 @@ static const struct ca_camera_parameter parameters[] = {
     OPTIONS("CAM_SOURCE", "Main video source", CA_CAMERA_SOURCE, 0, sources),
     OPTIONS("CAM_THERM_GAIN", "Thermal gain", CA_CAMERA_GAIN, 1, gains),
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
+#endif
+#if APCAM_HAVE_RAW_THERMAL
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
+#endif
+#if APCAM_HAVE_THERMAL
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif
+#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
 #if APCAM_HAVE_VIDEO_BITRATE
@@ -72,7 +77,8 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("REC_RESOLUTION", "Recording resolution"),
 #endif
     CONFIG("REC_AUTOSTART", "Automatic recording"),
-#if APCAM_HAVE_THERMAL
+#endif
+#if APCAM_HAVE_THERMAL_VIDEO
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
 #endif
 #if APCAM_HAVE_PHOTO_RESOLUTION
@@ -88,6 +94,7 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("IMG_METERING", "Exposure metering"),
     CONFIG("IMG_WHITE_BAL", "White balance"),
 #endif
+#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("OSD_CROSS", "Targeting cross"),
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
     CONFIG("OSD_RECORD", "Overlays in recordings"),
@@ -97,6 +104,7 @@ static const struct ca_camera_parameter parameters[] = {
 #endif
     CONFIG("MAV_POS_TARGET", "Position targeting"),
     CONFIG("TRACK_METHOD", "Location tracking control method"),
+#endif
     CONFIG("LOG_DISARMED", "Log when disarmed"),
 #if APCAM_HAVE_PHOTO && APCAM_HAVE_THERMAL
     CONFIG("SURV_LENS", "Survey camera"),

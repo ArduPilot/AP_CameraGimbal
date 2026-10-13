@@ -40,8 +40,12 @@ def main():
             stem = args.output / ('%u_%u' % (previous, metadata['frame_id']))
             stem.with_suffix('.bin').write_bytes(pixels.astype('<u2', copy=False).tobytes())
             stem.with_suffix('.json').write_text(json.dumps(metadata, indent=2)+'\n')
-            print('frame %u: %.3f..%.3f C, fresh projection pose: %s' % (
-                metadata['frame_id'], metadata['minimum_c'], metadata['maximum_c'], projection_pose(metadata) is not None))
+            if metadata.get('minimum_c') is None or metadata.get('maximum_c') is None:
+                print('frame %u: %u..%u sensor counts (temperature conversion unverified), fresh projection pose: %s' % (
+                    metadata['frame_id'], metadata['minimum_raw'], metadata['maximum_raw'], projection_pose(metadata) is not None))
+            else:
+                print('frame %u: %.3f..%.3f C, fresh projection pose: %s' % (
+                    metadata['frame_id'], metadata['minimum_c'], metadata['maximum_c'], projection_pose(metadata) is not None))
             count += 1
             if count >= args.frames:
                 break

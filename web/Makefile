@@ -148,7 +148,11 @@ tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WE
 tests/test_zt30_process: tests/test_zt30_process.cpp zt30-process.h
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
-test: tests/test_zt30_process $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
+.PHONY: zt30-parameters-test
+zt30-parameters-test: generated
+	python3 tests/test_zt30_parameters.py
+
+test: zt30-parameters-test tests/test_zt30_process $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
 	./tests/test_zt30_process
 	./tests/test_string_buffer
 	./tests/test_webroot
@@ -205,5 +209,5 @@ zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(I
 	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DZT30_WEB_DEV -o $@ $< -lm
 
 # AP-only persistent ZT30 layout; initial native app has one RGB stream.
-zt30-web: mt11-web.cpp zt30-paths.h zt30-process.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
-	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -o $@ $< -lm
+zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
+	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -I../include -o $@ $(filter %.cpp,$^) -lm
