@@ -56,6 +56,7 @@
 #elif defined(ZT30_WEB_NATIVE)
 #include "zt30-paths.h"
 #include "zt30-process.h"
+#include "../include/apcam/zt30_services.h"
 #endif
 
 /* Shared web UI with target-specific paths, capabilities and update formats.
@@ -958,7 +959,7 @@ static int renameat2(int olddir, const char *oldname, int newdir,
 
 #if !WEB_INSTALLS_FIRMWARE
 /* Publishing an uploaded file must never replace an existing file. */
-static int publish_no_replace(int directory, const char *temporary, const char *published)
+[[maybe_unused]] static int publish_no_replace(int directory, const char *temporary, const char *published)
 {
 #if defined(__CYGWIN__) || defined(__APPLE__)
     if (linkat(directory, temporary, directory, published, 0) < 0) return -1;
@@ -3831,7 +3832,11 @@ static int lock_restart(char *error, size_t error_size)
     }
     int lock = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 
-    if (lock < 0 || flock(lock, LOCK_EX) < 0) {
+    if (lock < 0 || flock(lock, LOCK_EX
+#ifdef ZT30_WEB_NATIVE
+        | LOCK_NB
+#endif
+        ) < 0) {
         snprintf(error, error_size, T(S_E_SWITCH_LOCK), strerror(errno));
         if (lock >= 0) close(lock);
         return -1;
@@ -4796,6 +4801,10 @@ static bool read_cpu_busy(unsigned *percent, unsigned *cpus)
 }
 #endif
 
+#ifdef ZT30_WEB_NATIVE
+#include "zt30-bundle-status.h"
+#endif
+
 static char *render_page(const char *message, bool message_is_error, size_t *page_len)
 {
     APC_StringBuffer page;
@@ -4858,6 +4867,9 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.append(" (<span id=firmware-git-hash>");
     page.append_html(CA_FIRMWARE_GIT_HASH);
     page.append("</span>)</td></tr>");
+#ifdef ZT30_WEB_NATIVE
+    append_zt30_bundle_status(page, pid_count ? pids[0] : 0);
+#endif
     page.appendf("<tr><th>%s</th><td>%s", T(S_STATUS_CAMERA_APP),
                pid_count ? camera_label(active_kind) : T(S_APP_STOPPED));
     if (pid_count) page.appendf(T(S_STATUS_PID_RSS), (long)pids[0], camera_rss);
@@ -4920,6 +4932,11 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     webroot.render(page, "status-actions.html", {T(S_STATUS_REFRESH), T(S_STATUS_ACTIONS), csrf_token});
     page.append(T(S_STATUS_RESTART));
     page.append("</button></form>");
+#ifdef ZT30_WEB_NATIVE
+    std::string previous_bundle, previous_error;
+    if (apcam_zt30::link_slot(APP_DIR, "previous", previous_bundle, previous_error))
+        page.appendf("<form id=application-rollback method=post action=/upgrade/rollback><input type=hidden name=csrf value=\"%s\"><button>%s</button></form>", csrf_token, T(S_APP_ROLLBACK));
+#endif
 #if WEB_HAVE_FIRMWARE_UPLOAD
     page.appendf("<form id=firmware-upload method=post action=/upgrade>"
                       "<input id=firmware type=file accept=" FIRMWARE_SUFFIX " hidden>"
@@ -4929,7 +4946,9 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
                       "<script src=/upgrade.js data-csrf=\"%s\" defer></script>"
                       "<p class=muted>", T(S_STATUS_UPGRADE_BUTTON), csrf_token);
     page.appendf(T(S_STATUS_UPGRADE_HELP), FIRMWARE_NAME_PATTERNS);
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+    page.append(T(S_APP_UPDATE_PENDING));
+#elif WEB_INSTALLS_FIRMWARE
     page.append(T(S_STATUS_UPGRADE_INSTALL_Z1));
 #elif APCAM_TARGET == APCAM_TARGET_MT11
     page.append(T(S_STATUS_UPGRADE_SYNC_MT11));
@@ -6122,7 +6141,11 @@ static const char *language_script = "language.js";
 
 static const char *upgrade_script = "upgrade.js";
 
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+#define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_APP
+#define UPGRADE_UPLOADED_STRING S_APP_UPDATE_PENDING
+#define UPGRADE_WRITE_ROOT RUNTIME_DIR
+#elif WEB_INSTALLS_FIRMWARE
 #define UPGRADE_CONFIRM_STRING S_JS_FW_CONFIRM_Z1
 #define UPGRADE_UPLOADED_STRING S_JS_FW_INSTALLED
 #define UPGRADE_WRITE_ROOT RUNTIME_DIR
@@ -6141,6 +6164,10 @@ static void send_upgrade_script(int fd)
 {
     char bad_name[256];
     const struct js_string items[] = {
+#ifdef ZT30_WEB_NATIVE
+        {"applicationUpdate", "true"}, {"maxSize", "33554432"}, {"appFailed", T(S_APP_UPDATE_FAILED)},
+        {"confirmRollback", T(S_APP_ROLLBACK)},
+#endif
         {"mediaRoot", UPGRADE_WRITE_ROOT}, {"reboots", WEB_UPGRADE_REBOOTS_JS},
         {"prefix", FIRMWARE_PREFIX}, {"suffix", FIRMWARE_SUFFIX},
         {"installName", FIRMWARE_INSTALL_NAME_JS},
@@ -6193,7 +6220,7 @@ static bool valid_firmware_name(const char *name)
     return true;
 }
 
-static void sync_firmware_storage(void)
+[[maybe_unused]] static void sync_firmware_storage(void)
 {
 #ifndef MT11_WEB_TEST
     sync();
@@ -6206,10 +6233,14 @@ static void sync_firmware_storage(void)
 
 /* Stream the request body to output; errno describes a failure. */
 static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int output,
-                                size_t *received)
+                                size_t *received, unsigned duration_ms = 0)
 {
     char expect[64];
-
+#ifdef ZT30_WEB_NATIVE
+    const int64_t deadline = duration_ms ? apcam::probe_milliseconds()+duration_ms : 0;
+#else
+    (void)duration_ms;
+#endif
     *received = 0;
     if (find_header(request, "Expect", expect, sizeof(expect)) != NULL &&
         strcasecmp(expect, "100-continue") == 0) {
@@ -6224,6 +6255,13 @@ static bool receive_upload_body(int fd, const APC_HTTPRequest *request, int outp
         char buffer[64 * 1024];
         size_t wanted = request->content_length - *received;
         if (wanted > sizeof(buffer)) wanted = sizeof(buffer);
+#ifdef ZT30_WEB_NATIVE
+        if (deadline) {
+            const int64_t left = deadline-apcam::probe_milliseconds();
+            pollfd wait{fd, POLLIN, 0};
+            if (left <= 0 || poll(&wait, 1, int(left)) <= 0) {errno = ETIMEDOUT; return false;}
+        }
+#endif
         ssize_t got = recv(fd, buffer, wanted, 0);
         if (got < 0) {
             if (errno == EINTR) continue;
@@ -6824,10 +6862,16 @@ done:
 
 #endif
 
+#ifdef ZT30_WEB_NATIVE
+#include "zt30-upgrade.h"
+#endif
+
 static void handle_firmware_upload(int fd, const APC_HTTPRequest *request,
                                    const char *peer)
 {
-#if WEB_INSTALLS_FIRMWARE
+#ifdef ZT30_WEB_NATIVE
+    handle_zt30_upgrade(fd, request, peer);
+#elif WEB_INSTALLS_FIRMWARE
     handle_firmware_install(fd, request, peer);
 #else
     char filename[256];
@@ -7445,6 +7489,10 @@ static void handle_request(int fd, const char *peer)
 #endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade.js") == 0) {
         send_upgrade_script(fd);
+#ifdef ZT30_WEB_NATIVE
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade-result") == 0) {
+        send_zt30_upgrade_result(fd);
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upgrade-status") == 0) {
         send_response(fd, 200, "OK", "text/plain; charset=utf-8",
                       csrf_token, strlen(csrf_token), NULL);
@@ -7678,6 +7726,10 @@ static void handle_request(int fd, const char *peer)
             }
             free(confirmation);
             free(path);
+#ifdef ZT30_WEB_NATIVE
+        } else if (strcmp(request.path, "/upgrade/rollback") == 0) {
+            handle_zt30_upgrade(fd, &request, peer, true);
+#endif
         } else if (strcmp(request.path, "/restart") == 0) {
             if (restart_camera(error, sizeof(error))) {
                 log_message("camera application restarted by %s", peer);

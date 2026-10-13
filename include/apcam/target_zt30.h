@@ -159,14 +159,20 @@
 
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
+#ifdef ZT30_WEB_NATIVE
+#define FIRMWARE_PREFIX "ZT30_AP_"
+#define FIRMWARE_SUFFIX ".apbundle"
+#define WEB_HAVE_FIRMWARE_UPLOAD 1
+#else
 #define FIRMWARE_PREFIX "ZT30_FW_"
+#define WEB_HAVE_FIRMWARE_UPLOAD 0
+#endif
 #define APP_SELECTION_DIR APP_DIR
 #ifdef ZT30_WEB_DEV
 #define APP_STORAGE_PATH APP_DIR
 #else
 #define APP_STORAGE_PATH "/customer"
 #endif
-#define WEB_HAVE_FIRMWARE_UPLOAD 0
 #endif
 
 #endif
