@@ -90,7 +90,9 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("TRACK_METHOD", "Location tracking control method"),
     CONFIG("MAV_POS_TARGET", "Position targeting"),
     CONFIG("REC_AUTOSTART", "Automatic recording"),
+#if APCAM_HAVE_RECORDING_RESOLUTION
     CONFIG("REC_RESOLUTION", "Recording resolution"),
+#endif
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
 #if APCAM_NUM_STREAMS >= 2
