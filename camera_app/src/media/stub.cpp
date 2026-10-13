@@ -685,8 +685,8 @@ int APC_Media_SITL::init(const struct ca_media_config *config)
     /* Fault injection for the advertised-but-unavailable optical controls. */
     media->optical_available = getenv("CAMERA_APP_TEST_OPTICAL_UNAVAILABLE") == NULL;
     atomic_store(&media->visible_hfov_deg,
-                 ca_lens1_hfov(media->zoom));
-    media->lens = CA_MEDIA_LENS_WIDE;
+                 APCAM_DEFAULT_RGB_LENS == CA_MEDIA_LENS_ZOOM ? ca_zoom_lens_hfov(1,1) : ca_lens1_hfov(media->zoom));
+    media->lens = static_cast<enum ca_media_lens>(APCAM_DEFAULT_RGB_LENS);
     media->thermal_gain = 1U;
     media->thermal_palette = config->settings.thermal_palette;
     media->capture_root = strdup(config->capture_root);
@@ -821,11 +821,17 @@ int APC_Media_SITL::set_zoom(float zoom)
         errno = EINVAL;
         return -1;
     }
-    if (apcam_uses_zoom_lens(zoom) && !media->optical_available) {
+    if ((apcam_uses_zoom_lens(zoom) || !APCAM_ZOOM_SELECTS_LENS) && !media->optical_available) {
         errno = ENODEV;
         return -1;
     }
     media->zoom = zoom;
+    if (!APCAM_ZOOM_SELECTS_LENS) {
+        media->optical_ratio = optical_zoom_factor(apcam_zoom_lens_optical(zoom));
+        media->digital_ratio[CA_MEDIA_LENS_ZOOM] = fmaxf(1, zoom / APCAM_ZOOM_LENS_OPTICAL_MAX);
+        update_hfov(media);
+        return 0;
+    }
     media->lens = apcam_uses_zoom_lens(zoom) ? CA_MEDIA_LENS_ZOOM
                                                   : CA_MEDIA_LENS_WIDE;
     media->thermal_main = false;
@@ -838,18 +844,22 @@ int APC_Media_SITL::set_zoom(float zoom)
 int APC_Media_SITL::set_lens_zoom(enum ca_media_lens lens, float zoom)
 {
     auto *media = _state;
-    float maximum = lens == CA_MEDIA_LENS_ZOOM ? APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_MAX;
+    float maximum = lens == CA_MEDIA_LENS_ZOOM ?
+        APCAM_ZOOM_LENS_OPTICAL_MAX * (!APCAM_ZOOM_SELECTS_LENS ? APCAM_LENS2_DIGITAL_ZOOM_MAX : 1) :
+        (!APCAM_ZOOM_SELECTS_LENS ? APCAM_LENS1_DIGITAL_ZOOM_MAX : APCAM_ZOOM_MAX);
     if (!media || !isfinite(zoom) || zoom < 1 || zoom > maximum ||
         (lens != CA_MEDIA_LENS_WIDE && lens != CA_MEDIA_LENS_ZOOM) ||
         (lens == CA_MEDIA_LENS_ZOOM && !APCAM_HAVE_ZOOM_LENS)) {
         errno = EINVAL;
         return -1;
     }
+    if (!APCAM_ZOOM_SELECTS_LENS && lens == CA_MEDIA_LENS_ZOOM) return set_zoom(zoom);
     if (lens == CA_MEDIA_LENS_ZOOM) {
         if (!media->optical_available) { errno = ENODEV; return -1; }
         media->optical_ratio = optical_zoom_factor(zoom);
         media->digital_ratio[lens] = 1;
     } else media->digital_ratio[lens] = zoom;
+    if (!APCAM_ZOOM_SELECTS_LENS) { update_hfov(media); return 0; }
     media->zoom = media->lens == CA_MEDIA_LENS_ZOOM ?
         APCAM_ZOOM_LENS_BASE * media->optical_ratio * media->digital_ratio[media->lens] :
         media->digital_ratio[media->lens];
@@ -863,7 +873,7 @@ float APC_Media_SITL::lens_zoom(enum ca_media_lens lens) const
     if (!media) return NAN;
     if (lens == CA_MEDIA_LENS_WIDE) return media->digital_ratio[lens];
     if (lens == CA_MEDIA_LENS_ZOOM && APCAM_HAVE_ZOOM_LENS && media->optical_available)
-        return media->optical_ratio;
+        return media->optical_ratio * (!APCAM_ZOOM_SELECTS_LENS ? media->digital_ratio[lens] : 1);
     return NAN;
 }
 
@@ -871,6 +881,7 @@ float APC_Media_SITL::zoom() const
 {
     const auto *media = _state;
     if (!media) return 1;
+    if (!APCAM_ZOOM_SELECTS_LENS) return media->zoom;
     return APCAM_HAVE_ZOOM_LENS ? (media->lens == CA_MEDIA_LENS_ZOOM ?
         APCAM_ZOOM_LENS_BASE * media->optical_ratio * media->digital_ratio[media->lens] :
         media->digital_ratio[media->lens]) : media->zoom;
@@ -1143,7 +1154,7 @@ int APC_Media_SITL::set_thermal_main(bool thermal_main)
         errno = EINVAL;
         return -1;
     }
-    if (thermal_main) {
+    if (thermal_main && APCAM_ZOOM_SELECTS_LENS) {
         media->lens = CA_MEDIA_LENS_ZOOM;
         update_hfov(media);
     }

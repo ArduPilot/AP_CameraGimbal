@@ -33,6 +33,8 @@
 static constexpr uint8_t camera_address = 0x34;
 #if APCAM_TARGET == APCAM_TARGET_MT11
 static constexpr uint8_t product_id = 0x89;
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+static constexpr uint8_t product_id = 0x7b;
 #elif APCAM_TARGET == APCAM_TARGET_A8
 // Stock A8 cardv camera_sdk_get_ver_action returns 07 03 00 72.
 // 73 is the gimbal product, also used as the public hardware-ID prefix.
@@ -203,7 +205,8 @@ static void image_slots(ca_unigcs *s,uint8_t *p)
 #else
     // MT11's visible scene is Zoom across both physical RGB sensors. Reporting
     // Wide at low zoom selects a different UniGCS UI which hides tracking.
-    p[0]=ca_media_side_by_side(s->media) ? 3 : ca_media_thermal_main(s->media) ? 2 : 0;
+    p[0]=ca_media_side_by_side(s->media) ? 3 : ca_media_thermal_main(s->media) ? 2 :
+        (!APCAM_ZOOM_SELECTS_LENS && ca_media_lens(s->media)==CA_MEDIA_LENS_WIDE ? 1 : 0);
     p[1]=p[0]==2 ? 0 : 2;
 #endif
 }

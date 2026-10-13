@@ -734,18 +734,25 @@ static void send_camera_information(struct ca_mavlink_server *server,
 
 static float selected_zoom_max(const struct ca_mavlink_server *server)
 {
+    if (!APCAM_ZOOM_SELECTS_LENS) {
+        if (ca_media_thermal_main(server->media)) return 1;
+        const auto *lens = APC_Camera::get_singleton().lens(ca_media_lens(server->media));
+        return lens ? lens->optical_zoom_max() * lens->digital_zoom_max() : 1;
+    }
     return APCAM_HAVE_ZOOM_LENS && ca_media_lens(server->media) == CA_MEDIA_LENS_ZOOM ?
         APCAM_ZOOM_LENS_OPTICAL_MAX : APCAM_ZOOM_CONTROL_MAX;
 }
 
 static float selected_zoom(const struct ca_mavlink_server *server)
 {
+    if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) return 1;
     return ca_media_lens_zoom(server->media, ca_media_lens(server->media));
 }
 
 static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
 {
 #if APCAM_HAVE_ZOOM_LENS
+    if (!APCAM_ZOOM_SELECTS_LENS && ca_media_thermal_main(server->media)) { errno=ENOTSUP; return -1; }
     enum ca_media_lens lens = ca_media_lens(server->media);
     if (lens == CA_MEDIA_LENS_ZOOM) {
         /* Range/step arithmetic can land a float ULP above a calibration
@@ -763,7 +770,8 @@ static int set_selected_zoom(struct ca_mavlink_server *server, float zoom)
 static float zoom_percent(const struct ca_mavlink_server *server)
 {
     float zoom = selected_zoom(server);
-    return (zoom - 1.0f) * (100.0f / (selected_zoom_max(server) - 1.0f));
+    float maximum = selected_zoom_max(server);
+    return maximum > 1 ? (zoom - 1.0f) * (100.0f / (maximum - 1.0f)) : 0;
 }
 
 static void send_camera_settings(struct ca_mavlink_server *server,
@@ -1537,6 +1545,8 @@ static uint8_t set_zoom(struct ca_mavlink_server *server, float type,
     if (type != 2.0f && (value < -1.0f || value > 1.0f)) return MAV_RESULT_DENIED;
     if (APCAM_ZOOM_NATIVE_RATE && type == 1.0f)
         return ca_backend_set_zoom_rate(server->backend, value) == 0 ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
+    if (!APCAM_ZOOM_SELECTS_LENS && selected_zoom_max(server) <= 1 && value != 0)
+        return MAV_RESULT_UNSUPPORTED;
     unsigned zoom_type = (unsigned)type;
     if (zoom_type == 2U) {
         if (!isfinite(value) || value < 0.0f || value > 100.0f) {
@@ -2545,7 +2555,8 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
             ? &server->parameters : &server->settings, (size_t)p->config_index);
         return true;
     case CA_CAMERA_ZOOM:
-        *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
+        *value = !APCAM_ZOOM_SELECTS_LENS ? selected_zoom(server) :
+            ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
         return isfinite(*value);
     case CA_CAMERA_OPTICAL_ZOOM:
         *value = ca_media_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM);
@@ -2652,7 +2663,8 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
         return apply_camera_config(server, (size_t)p->config_index, value);
     case CA_CAMERA_ZOOM:
         server->zoom_rate = 0;
-        return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
+        return !APCAM_ZOOM_SELECTS_LENS ? set_selected_zoom(server, value) :
+            ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
     case CA_CAMERA_OPTICAL_ZOOM:
         server->zoom_rate = 0;
         return ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_ZOOM, value);

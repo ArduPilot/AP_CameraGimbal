@@ -55,6 +55,19 @@ int main(void)
     assert(ca_lens1_hfov(INFINITY) == 0);
     assert(ca_lens1_hfov(0) == 0);
     assert(ca_lens1_hfov(30) == 0);
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+    near(ca_lens1_hfov(1), 84.5f);
+    near(ca_video_vfov(ca_lens1_hfov(1), 2560,1440), 54.128524f);
+    near(ca_zoom_lens_hfov(1,1),58.1f);
+    near(ca_zoom_lens_hfov(30,1),2.14f);
+    near(ca_video_vfov(ca_zoom_lens_hfov(30,1),3840,2160),1.203846f);
+    near(ca_zoom_lens_hfov(30,6),ca_video_hfov(2.14f,6));
+    assert(ca_zoom_lens_hfov(31,1)==0);
+    assert(camera.lens(0)->digital_zoom_max()==1);
+    assert(camera.lens(1)->optical_zoom_max()==30 && camera.lens(1)->digital_zoom_max()==6);
+    assert(camera.lens(2)->get_FOV()==0);
+    assert(!apcam_uses_zoom_lens(1) && !apcam_uses_zoom_lens(90));
+    near(apcam_zoom_lens_optical(90),30);
 #elif APCAM_TARGET == APCAM_TARGET_Z1_MINI
     near(ca_lens1_hfov(1), 54.7f);
     assert(APCAM_MAIN_RESOLUTIONS == APCAM_RES_MASK_1080P);

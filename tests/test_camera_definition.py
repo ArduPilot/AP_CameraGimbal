@@ -34,16 +34,16 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('VIDEO_SUB_CODEC' in params, target != 'rpi_libcam_caddx')
 
     def test_target_capabilities(self):
-        for target in ('mt11', 'a8', 'zr10', 'z1mini'):
+        for target in ('mt11', 'a8', 'zr10', 'zt30', 'z1mini'):
             with self.subTest(target=target):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name'): p for p in root.findall('parameters/parameter')}
                 self.assertEqual('CAM_MODE' in params, target != 'z1mini')
                 if 'CAM_MODE' in params:
                     options = params['CAM_MODE'].findall('options/option')
-                    self.assertEqual([o.get('value') for o in options], ['0', '1', '2'] if target == 'mt11' else ['0', '1'])
-                self.assertEqual('SURV_LENS' in params, target == 'mt11')
-                self.assertEqual('SURV_PATTERN' in params, target == 'mt11')
+                    self.assertEqual([o.get('value') for o in options], ['0', '1', '2'] if target in ('mt11', 'zt30') else ['0', '1'])
+                self.assertEqual('SURV_LENS' in params, target in ('mt11', 'zt30'))
+                self.assertEqual('SURV_PATTERN' in params, target in ('mt11', 'zt30'))
                 if target == 'mt11':
                     self.assertEqual(params['SURV_PATTERN'].get('default'), '0')
                     self.assertEqual([o.get('value') for o in params['SURV_PATTERN'].findall('options/option')], ['0','1','2','3'])
@@ -51,12 +51,12 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('OSD_RECORD' in params, target != 'z1mini')
                 if 'OSD_RECORD' in params:
                     self.assertEqual(params['OSD_RECORD'].get('default'), '0')
-                self.assertEqual('OSD_THERMAL_FOV' in params, target == 'mt11')
+                self.assertEqual('OSD_THERMAL_FOV' in params, target in ('mt11', 'zt30'))
                 self.assertEqual(params['OSD_CROSS'].get('default'), '0')
-                self.assertEqual('CAM_PALETTE' in params, target == 'mt11')
-                self.assertEqual('CAM_LENS' in params, target == 'mt11')
-                self.assertEqual('CAM_AUTOFOCUS' in params, target == 'mt11')
-                self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8'))
+                self.assertEqual('CAM_PALETTE' in params, target in ('mt11', 'zt30'))
+                self.assertEqual('CAM_LENS' in params, target in ('mt11', 'zt30'))
+                self.assertEqual('CAM_AUTOFOCUS' in params, target in ('mt11', 'zt30'))
+                self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8', 'zt30'))
                 self.assertEqual('CAM_OPT_ZOOM' in params, target == 'mt11')
                 if target == 'mt11':
                     self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2)
@@ -66,13 +66,17 @@ class Definitions(unittest.TestCase):
                                      ['CAM_OPT_ZOOM', 'CAM_ZOOM'])
                 if 'CAM_ZOOM' in params:
                     self.assertEqual((params['CAM_ZOOM'].get('min'), params['CAM_ZOOM'].get('max'),
-                                      params['CAM_ZOOM'].get('step')), ('1', '10' if target == 'mt11' else '6', '0.1'))
-                self.assertEqual('IMG_ISO' in params, target in ('mt11', 'a8'))
-                expected_res = ({'0', '1', '2'} if target in ('mt11', 'a8')
+                                      params['CAM_ZOOM'].get('step')), ('1', '10' if target == 'mt11' else '180' if target == 'zt30' else '6', '0.1'))
+                self.assertEqual('IMG_ISO' in params, target in ('mt11', 'a8', 'zt30'))
+                expected_res = ({'0', '1', '2', '3'} if target == 'zt30' else {'0', '1', '2'} if target in ('mt11', 'a8')
                                 else {'0', '1', '3'} if target == 'zr10' else {'1'})
                 self.assertEqual({o.get('value') for o in params['VIDEO_MAIN_RES'].findall('options/option')}, expected_res)
                 if target == 'z1mini':
                     self.assertEqual({o.get('value') for o in params['REC_RESOLUTION'].findall('options/option')}, {'1', '2'})
+                if target == 'zt30':
+                    self.assertEqual(params['CAM_LENS'].get('default'), '1')
+                    self.assertIsNone(params['CAM_LENS'].findall('options/option')[1].find('exclusions'))
+                    self.assertEqual(params['CAM_SOURCE'].findall('options/option')[1].findtext('exclusions/exclude'), 'CAM_ZOOM')
                 for name, p in params.items():
                     boolean = name in {'OSD_CROSS', 'OSD_RECORD', 'OSD_THERMAL_FOV',
                                        'LOG_DISARMED', 'MAV_POS_TARGET'}

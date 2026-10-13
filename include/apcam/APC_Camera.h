@@ -114,19 +114,20 @@ public:
             {APCAM_LENS1_NAME, APCAM_LENS1_TYPE == APCAM_LENS_TYPE_THERMAL ?
                  APC_Lens::Type::Thermal : APC_Lens::Type::RGB, APCAM_LENS1_WIDTH, APCAM_LENS1_HEIGHT,
              APCAM_LENS1_FOV_H, APCAM_LENS1_OPTICAL_ZOOM_MAX,
-             !APCAM_HAVE_ZOOM || (APCAM_HAVE_OPTICAL_ZOOM && APCAM_NUM_LENSES == 1) ?
-                 1.0f : APCAM_ZOOM_MAX,
+             APCAM_LENS1_DIGITAL_ZOOM_MAX,
              APCAM_LENS1_FOV_MODEL == APCAM_FOV_ENDPOINTS ? APC_Lens::FOV_Model::Endpoints :
                  APC_Lens::FOV_Model::FocalLength, APCAM_LENS1_FOV_H_TELE},
 #if APCAM_NUM_LENSES > 1
             {APCAM_LENS2_NAME, APCAM_LENS2_TYPE == APCAM_LENS_TYPE_THERMAL ?
                  APC_Lens::Type::Thermal : APC_Lens::Type::RGB, APCAM_LENS2_WIDTH, APCAM_LENS2_HEIGHT,
-             APCAM_LENS2_FOV_H, APCAM_LENS2_OPTICAL_ZOOM_MAX, 1},
+             APCAM_LENS2_FOV_H, APCAM_LENS2_OPTICAL_ZOOM_MAX, APCAM_LENS2_DIGITAL_ZOOM_MAX,
+             APCAM_LENS2_FOV_MODEL == APCAM_FOV_ENDPOINTS ? APC_Lens::FOV_Model::Endpoints :
+                 APC_Lens::FOV_Model::FocalLength, APCAM_LENS2_FOV_H_TELE},
 #endif
 #if APCAM_NUM_LENSES > 2
             {APCAM_LENS3_NAME, APCAM_LENS3_TYPE == APCAM_LENS_TYPE_THERMAL ?
                  APC_Lens::Type::Thermal : APC_Lens::Type::RGB, APCAM_LENS3_WIDTH, APCAM_LENS3_HEIGHT,
-             APCAM_LENS3_FOV_H, APCAM_LENS3_OPTICAL_ZOOM_MAX, 1},
+             APCAM_LENS3_FOV_H, APCAM_LENS3_OPTICAL_ZOOM_MAX, APCAM_LENS3_DIGITAL_ZOOM_MAX},
 #endif
         };
         static_assert(sizeof(lenses) / sizeof(lenses[0]) == APCAM_NUM_LENSES, "lens count");

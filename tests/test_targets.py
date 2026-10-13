@@ -11,9 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from sitl.target_properties import TARGETS, transform
 
-assert set(TARGETS) == {'mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'}
+assert set(TARGETS) == {'mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx', 'zt30'}
 recording_defaults = {
     'mt11': '3840x2160',
+    'zt30': '3840x2160',
     'a8': '3840x2160',
     'zr10': '2560x1440',
     'z1mini': '1920x1080',
@@ -49,7 +50,8 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
                 assert config[section]['resolution'] == compiled, (template, section)
             assert config['recording']['resolution'] == recording_defaults[name], template
         for lens in range(1, int(target['num_lenses']) + 1):
-            assert 0 < target[f'lens{lens}_fov_h'] < 180
+            fov = target[f'lens{lens}_fov_h']
+            assert 0 < fov < 180 or (name == 'zt30' and lens == 3 and fov == 0)
         for channel in ('feedback', 'private_feedback', 'angle_command', 'rate_command'):
             for inverted in (False, True):
                 prefix = 'gimbal_' + channel + ('_inverted' if inverted else '_upright')
@@ -62,4 +64,4 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
                     converted = transform(target, channel, inverted, vector, rates=rates)
                     recovered = transform(target, channel, inverted, converted, rates=rates, inverse=True)
                     assert list(vector) == recovered
-print('PASS five-target compiler exports, profile defaults, orthogonal mappings and known calibration vectors')
+print('PASS six-target compiler exports, profile defaults, orthogonal mappings and known calibration vectors')

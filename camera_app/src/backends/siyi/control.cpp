@@ -37,9 +37,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+#include "binlog_version.h"
+#include <stdio.h>
+#endif
+
 #define PI_F 3.14159265358979323846f
 #if APCAM_TARGET == APCAM_TARGET_ZR10
 #define SIYI_BACKEND_NAME "zr10"
+#elif APCAM_TARGET == APCAM_TARGET_ZT30
+#define SIYI_BACKEND_NAME "zt30"
 #else
 #define SIYI_BACKEND_NAME "a8"
 #endif
@@ -70,6 +77,9 @@ struct ca_backend {
     int uart_fd;
     bool datagram_transport;
     bool reply_to_mcu;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    uint8_t mcu_versions[8];
+#endif
 #if APCAM_TARGET == APCAM_TARGET_ZR10
     uint64_t zoom_query_ms;
 #endif
@@ -249,6 +259,9 @@ static int send_startup(struct ca_backend *backend)
     return send_public_command(backend, 0x01U, NULL, 0U);
 #else
     static const uint8_t stream_rate = 0x0aU;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    if (send_public_command(backend, 0x01U, NULL, 0U) < 0) return -1;
+#endif
 
     /* the vendor app queries these and sends 0x0d/10 once at start */
     if (send_link(backend, A8_LINK_FLAG_REQUEST, A8_SUB_UNKNOWN_14, NULL, 0) < 0 ||
@@ -424,6 +437,12 @@ static void handle_tunnel_reply(struct ca_backend *backend,
             (void)backend->zoom_set(backend->zoom_opaque, zoom);
     }
 #endif
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    if ((packet.control & 2U) && packet.opcode == 0x01U && packet.payload_length == 12U &&
+        packet.payload[7] == 0x7a && packet.payload[11] == 0x79) {
+        memcpy(backend->mcu_versions, packet.payload + 4, sizeof(backend->mcu_versions));
+    }
+#endif
     if (packet.opcode == 0x0dU && packet.payload_length >= 12U) {
         update_attitude(backend, packet.payload, 6U, true);
         /* The vendor protocol retains its own mounting and sign conventions. */
@@ -554,6 +573,12 @@ int ca_backend_open(struct ca_backend **result,
     device = config->uart_device != NULL ? config->uart_device : A8_DEFAULT_UART;
     backend = (struct ca_backend*)(calloc(1, sizeof(*backend)));
     if (backend == NULL) return -1;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    // Known product tags are independent from firmware discovery. A zero
+    // version is unknown until a validated MCU reply fills the cached tuples.
+    backend->mcu_versions[3] = 0x7a;
+    backend->mcu_versions[7] = 0x79;
+#endif
     backend->manual_control=config->manual_control;
     backend->private_emit=config->private_emit;
     backend->private_opaque=config->private_opaque;
@@ -818,6 +843,21 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
                              &mode, 1U);
         }
         break;
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    case 0x01: {
+        if (packet.payload_length) break;
+        uint8_t version[12] = {};
+        unsigned major=0,minor=0,patch=0;
+        int fields=sscanf(CA_FIRMWARE_VERSION,"v%u.%u.%u",&major,&minor,&patch);
+        if (fields>=2 && major<=255 && minor<=255 && patch<=255) {
+            version[0]=(uint8_t)patch; version[1]=(uint8_t)minor; version[2]=(uint8_t)major;
+        }
+        version[3]=0x7b;
+        memcpy(version+4,backend->mcu_versions,sizeof(backend->mcu_versions));
+        emit_local(backend,packet.opcode,version,sizeof(version));
+        return 0;
+    }
+#endif
     case 0x0b:
         if (packet.payload_length != 0U) break;
         emit_feedback(backend, backend->feedback_last);
@@ -863,7 +903,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         break;
     }
     case 0x16: {
-        static const uint8_t maximum[] = {6U, 0U};
+        static const uint8_t maximum[] = {(uint8_t)APCAM_ZOOM_CONTROL_MAX, 0U};
         if (packet.payload_length != 0U) break;
         emit_local(backend, packet.opcode, maximum, sizeof(maximum));
         return 0;
@@ -897,7 +937,7 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
             return -1;
         }
         if (zoom < 1.0f) zoom = 1.0f;
-        if (zoom > 6.0f) zoom = 6.0f;
+        if (zoom > APCAM_ZOOM_CONTROL_MAX) zoom = APCAM_ZOOM_CONTROL_MAX;
         if (backend->zoom_set(backend->zoom_opaque, zoom) < 0) return -1;
         tenths = (unsigned)(zoom * 10.0f + 0.5f);
         response[0] = (uint8_t)tenths;

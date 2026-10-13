@@ -299,7 +299,7 @@ static void usage(const char *program)
     ca_log("Usage: %s [--backend " APCAM_NAME "] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
            "[--config PATH]", program);
 #else
-    ca_log("Usage: %s [--backend mt11|a8|zr10|z1mini] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
+    ca_log("Usage: %s [--backend mt11|a8|zr10|zt30|z1mini] [--uart DEVICE|udp://IPv4:PORT] [--port PORT] "
            "[--config PATH]", program);
 #endif
 }

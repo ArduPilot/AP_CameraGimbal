@@ -8,6 +8,7 @@ static bool overlay_live, recording_active, fail_open;
 static unsigned closed, opened, log_count;
 static int control_result, overlay_result;
 static bool combined, thermal;
+static float active_hfov=50;
 static enum ca_media_lens selected=CA_MEDIA_LENS_WIDE;
 void ca_log(const char *, ...) { log_count++; }
 bool ca_binlog_active() { return false; }
@@ -24,6 +25,7 @@ public:
     int apply_overlay(const ca_config *) override
     { overlay_live=overlay_result==0; errno=ENOSPC; return overlay_result; }
     bool tracking_available() const override { return true; }
+    float hfov(bool) const override { return active_hfov; }
     bool side_by_side() const override { return combined; }
     int set_side_by_side(bool enable) override { combined=enable; return 0; }
     enum ca_media_lens lens() const override { return selected; }
@@ -71,6 +73,14 @@ int main()
     }
     control_result=overlay_result=0;
     const ca_tracking_rect rect {.1f,.1f,.3f,.3f};
+    for (float invalid : {0.0f, NAN, INFINITY, -1.0f}) {
+        active_hfov=invalid;
+        assert(!ca_media_tracking_available(media));
+        assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)<0 && errno==ENOTSUP);
+        assert(ca_media_tracking_status(media).state==CA_TRACK_IDLE);
+    }
+    active_hfov=50;
+    assert(ca_media_tracking_available(media));
     assert(ca_media_tracking_start(media,rect,CA_TRACK_OWNER_MAVLINK)==0);
     assert(ca_media_set_zoom(media,2)==0);
     assert(ca_media_tracking_status(media).state==CA_TRACK_ACQUIRING);

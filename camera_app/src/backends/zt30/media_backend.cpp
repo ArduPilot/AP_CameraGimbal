@@ -1,0 +1,82 @@
+#include "media_backend.h"
+#include <cstdio>
+#include <ctime>
+#include <unistd.h>
+namespace ca_zt30 {
+uint64_t MediaBackend::now() {
+    timespec t{};clock_gettime(CLOCK_MONOTONIC,&t);
+    return uint64_t(t.tv_sec)*1000000000+uint64_t(t.tv_nsec);
+}
+MediaBackend::~MediaBackend() {
+    // A failed cleanup can leave SDK callbacks alive. Do not return to an
+    // owner which might unload that SDK; independent RAM watchdog recovers.
+    if(shutdown())_exit(25);
+}
+int MediaBackend::init_failed(int code) {
+    failure_call.store(encoder.failed_call?encoder.failed_call:rgb.failed_call?rgb.failed_call:"media startup callback");
+    failure_status.store(encoder.failed_call?encoder.raw_status:rgb.failed_call?rgb.raw_status:-1);
+    worker_result.store(code);done.store(true);active.store(false);
+    (void)shutdown();errno=EIO;return -1;
+}
+int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity) {
+    if(used) { errno=EALREADY;return -1; }
+    used=true;
+    if(!buffer || capacity<4U*1024*1024 || !h.gate || !h.open_sink || !h.vui || !h.frame || !h.drain) {
+        errno=EINVAL;return -1;
+    }
+    hooks=h;copied.data=buffer;copied.capacity=capacity;
+    if(rgb.open(false)) { unsafe_sdk_failure=true;return init_failed(5); }
+    if(stopping() || !hooks.gate(hooks.opaque,false))return init_failed(6);
+    if(rgb.load_iq()) { unsafe_sdk_failure=true;return init_failed(7); }
+    if(stopping() || !hooks.gate(hooks.opaque,true))return init_failed(8);
+    if(!hooks.open_sink(hooks.opaque))return init_failed(26);
+    const int opened=encoder.open(EncoderCodec::H264,H264Timing::ReadOnly);
+    unsafe_sdk_failure=opened!=0; // same process-recovery fence as the qualified probe
+    if(encoder.have_default_vui() && !hooks.vui(hooks.opaque,"pre-start",encoder.default_vui()))return init_failed(21);
+    if(opened)return init_failed(21);
+    H264Vui started{};
+    if(encoder.read_h264_vui(started) || !hooks.vui(hooks.opaque,"started",started))return init_failed(21);
+    // Publish before pthread_create: an immediately exiting worker can clear
+    // readiness without initialize subsequently resurrecting it.
+    active.store(true);
+    const int rc=pthread_create(&thread,nullptr,[](void *opaque)->void* {
+        static_cast<MediaBackend*>(opaque)->consume();return nullptr;
+    },this);
+    if(rc) { (void)init_failed(29);errno=rc;return -1; }
+    thread_started=true;return 0;
+}
+void MediaBackend::consume() {
+    int code=0;unsigned count=0;size_t total=0;
+    const uint64_t deadline=now()+6000000000ULL;
+    while(!stopping() && count<90 && now()<deadline) {
+        const uint64_t before=now();const int got=encoder.copy_frame(copied);const uint64_t after=now();
+        if(got<0) { code=22;break; }
+        if(!got) { timespec delay{0,5000000};nanosleep(&delay,nullptr);continue; }
+        if(!count) {
+            H264Vui first{};
+            if(encoder.read_h264_vui(first) || !hooks.vui(hooks.opaque,"first-frame",first)) { code=22;break; }
+        }
+        if(copied.bytes>32U*1024*1024-total || !hooks.frame(hooks.opaque,copied,before,after)) { code=27;break; }
+        total+=copied.bytes;count++;frame_count.store(count);byte_count.store(total);
+    }
+    if(!code && (stopping() || count!=90))code=24;
+    if(!code && !hooks.drain(hooks.opaque))code=28;
+    if(code) { failure_call.store(encoder.failed_call?encoder.failed_call:"media sink/deadline");failure_status.store(encoder.failed_call?encoder.raw_status:-1); }
+    worker_result.store(code);active.store(false);done.store(true);
+}
+int MediaBackend::shutdown() {
+    active.store(false);local_stop.store(true);
+    // Failed RGB/IQ/encoder initialization can leave SDK callbacks or mutexes
+    // alive after attempted unwind. Recovery belongs to the independent
+    // watchdog; never continue RGB/SYS teardown or unload the SDK.
+    if(unsafe_sdk_failure)return EOWNERDEAD;
+    if(thread_started) {
+        const int rc=pthread_join(thread,nullptr);
+        if(rc) { if(!close_error)close_error=rc;return close_error; }
+        thread_started=false;
+    }
+    const int enc=encoder.close();if(enc && !close_error)close_error=enc;
+    const int raw=rgb.close();if(raw && !close_error)close_error=raw;
+    return close_error;
+}
+} // namespace ca_zt30

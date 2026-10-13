@@ -374,7 +374,7 @@ class Scene:
         # Terrain's texture LOD uses a vertical FOV. Use the narrowest stream
         # so zooming either view requests enough imagery for both encoders.
         vfov = min(math.degrees(2 * math.atan(math.tan(math.radians(f) / 2) * h / w))
-                   for f, (w, h) in zip(record['fov'], self.sizes))
+                   for f, (w, h) in zip(record['fov'], self.sizes) if 0 < f < 180)
         cam.SetViewAngle(vfov)
         if now - self.last_update >= 0.5:
             manager.update(self.tc)
@@ -447,6 +447,8 @@ class Scene:
         return image
 
     def render_sensor(self, width, height, hfov, thermal_aspect=None):
+        if not math.isfinite(hfov) or not 0 < hfov < 180:
+            return np.zeros((height, width, 3), dtype=np.uint8)
         if self.below_ground:
             return self.below_ground_image(width, height)
         # Keep the framebuffer allocation stable; native thermal is always

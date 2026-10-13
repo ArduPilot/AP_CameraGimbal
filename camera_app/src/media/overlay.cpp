@@ -23,7 +23,8 @@ void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned
                     cx + x*inner, cy + y*inner, cx + x*outer, cy + y*outer, 0, false};
     }
 #if APCAM_HAVE_THERMAL
-    if (thermal_box && isfinite(rgb_hfov) && rgb_hfov > 0 && rgb_hfov < 180) {
+    if (thermal_box && isfinite(rgb_hfov) && rgb_hfov > 0 && rgb_hfov < 180 &&
+        isfinite(APCAM_LENS3_FOV_H) && APCAM_LENS3_FOV_H > 0 && APCAM_LENS3_FOV_H < 180) {
         const double rad = 0.01745329251994329577;
         double half_w = width * .5 * tan(APCAM_LENS3_FOV_H * rad * .5) / tan(rgb_hfov * rad * .5);
         double half_h = half_w * APCAM_LENS3_HEIGHT / APCAM_LENS3_WIDTH;
