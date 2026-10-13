@@ -32,6 +32,12 @@
 #ifndef APCAM_HAVE_PHOTO_RESOLUTION
 #define APCAM_HAVE_PHOTO_RESOLUTION 0
 #endif
+/* Targets with a selectable recording resolution (REC_RESOLUTION, offered on the
+ * web page). Targets that record the stream they serve set this to 0 and record
+ * at the main stream's resolution. */
+#ifndef APCAM_HAVE_RECORDING_RESOLUTION
+#define APCAM_HAVE_RECORDING_RESOLUTION 1
+#endif
 /* Targets on a host OS which owns networking set this to 0. */
 #ifndef APCAM_HAVE_NETWORK_CONFIG
 #define APCAM_HAVE_NETWORK_CONFIG 1

@@ -12,6 +12,9 @@
 #define APCAM_NUM_LENSES 1
 /* One encoded stream, served as /video1 and used for recording. */
 #define APCAM_NUM_STREAMS 1
+/* The recording is that stream, so it must use the main resolution and has no
+ * resolution setting of its own. */
+#define APCAM_HAVE_RECORDING_RESOLUTION 0
 #define APCAM_STREAM1_LENS_MASK 1
 #define APCAM_STREAM2_LENS_MASK 1
 #define APCAM_HAVE_PHOTO 1

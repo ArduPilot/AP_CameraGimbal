@@ -635,10 +635,6 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
     {"photo_scope", "capture", "photo_scope", S_P_PHOTO_SCOPE, S_H_PHOTO_SCOPE,
      PARAM_ENUM, 0, 0, 0, photo_scope_options, 2},
-#if APCAM_HAVE_PHOTO_RESOLUTION
-    {"photo_resolution", "capture", "resolution", S_P_PHOTO_RESOLUTION, S_H_PHOTO_RESOLUTION,
-     PARAM_ENUM, 0, 0, 0, photo_resolution_options, 3},
-#endif
     {"orientation", "mount", "orientation", S_P_ORIENTATION, S_H_ORIENTATION,
      PARAM_ENUM, 0, 0, 0, orientation_options, 3},
     {"uart_protocol", "uart", "protocol", S_P_UART_PROTOCOL,
@@ -668,12 +664,6 @@ static const struct parameter replacement_parameters[] = {
     {"raw_record_fps", "thermal", "record_fps", S_P_RAW_RECORD_FPS, S_H_RAW_RECORD_FPS,
      PARAM_INTEGER, 0, 25, 1, NULL, 0},
 #endif
-    {"autorecord", "recording", "autorecord", S_P_AUTORECORD, S_H_AUTORECORD_APP,
-     PARAM_ENUM, 0, 0, 0, autorecord_options, 3},
-    {"recording_resolution", "recording", "resolution", S_P_RECORDING_RESOLUTION,
-     TARGET_TEXT(S_H_RECORDING_RESOLUTION_MT11, S_H_RECORDING_RESOLUTION_A8),
-     PARAM_ENUM, 0, 0, 0, recording_resolution_options,
-     sizeof(recording_resolution_options) / sizeof(recording_resolution_options[0])},
     {"main_resolution", "stream.main", "resolution", S_P_MAIN_RESOLUTION,
      TARGET_TEXT(S_H_MAIN_RESOLUTION_MT11, S_H_MAIN_RESOLUTION_A8),
      PARAM_ENUM, 0, 0, 0, main_resolution_options, sizeof(main_resolution_options) / sizeof(main_resolution_options[0])},
@@ -688,6 +678,16 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 63, 1, NULL, 0},
     {"sub_alias", "stream.sub", "alias", S_P_SUB_ALIAS, S_H_SUB_ALIAS,
      PARAM_TEXT, 0, 63, 1, NULL, 0},
+    {"recording_resolution", "recording", "resolution", S_P_RECORDING_RESOLUTION,
+     TARGET_TEXT(S_H_RECORDING_RESOLUTION_MT11, S_H_RECORDING_RESOLUTION_A8),
+     PARAM_ENUM, 0, 0, 0, recording_resolution_options,
+     sizeof(recording_resolution_options) / sizeof(recording_resolution_options[0])},
+    {"autorecord", "recording", "autorecord", S_P_AUTORECORD, S_H_AUTORECORD_APP,
+     PARAM_ENUM, 0, 0, 0, autorecord_options, 3},
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    {"photo_resolution", "capture", "resolution", S_P_PHOTO_RESOLUTION, S_H_PHOTO_RESOLUTION,
+     PARAM_ENUM, 0, 0, 0, photo_resolution_options, 3},
+#endif
     {"brightness", "image", "brightness", S_P_BRIGHTNESS,
      TARGET_TEXT(S_H_BRIGHTNESS_MT11, S_H_CARDV_BRIGHTNESS),
      PARAM_INTEGER, 0, 100, 1, NULL, 0},
@@ -796,20 +796,20 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
 
 static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
-#if APCAM_HAVE_PHOTO_RESOLUTION
-    "video",
-#endif
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",
 #if WEB_HAVE_THERMAL
     "5", "5",
 #endif
-    "false",
-    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION),
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264",
-    APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS, "50", "50", "50", "0",
+    APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS,
+    APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION), "false",
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    "video",
+#endif
+    "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
     "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2",
 #if WEB_HAVE_THERMAL
@@ -2112,6 +2112,7 @@ static bool parameter_shown(const struct parameter *parameter)
     if (APCAM_NUM_STREAMS < 2 && (!strcmp(parameter->section, "stream.sub") ||
         !strcmp(parameter->form_name, "proxy_video2_port") ||
         !strcmp(parameter->form_name, "proxy_video2_name"))) return false;
+    if (!APCAM_HAVE_RECORDING_RESOLUTION && !strcmp(parameter->form_name, "recording_resolution")) return false;
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;

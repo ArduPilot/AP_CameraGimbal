@@ -15,6 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Definitions(unittest.TestCase):
+    def test_recording_resolution_only_where_it_can_be_chosen(self):
+        """A target that records the stream it serves has no recording resolution setting."""
+        for target in ('mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'):
+            with self.subTest(target=target):
+                root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
+                params = {p.get('name') for p in root.findall('parameters/parameter')}
+                self.assertEqual('REC_RESOLUTION' in params, target != 'rpi_libcam_caddx')
+
     def test_single_stream_target_has_no_sub_stream_settings(self):
         """A target with one stream does not list settings for a second one."""
         for target in ('mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'):
