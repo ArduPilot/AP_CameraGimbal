@@ -224,6 +224,11 @@ int ca_config_param_assign(struct ca_config *config, size_t index, float value);
 void ca_config_defaults(struct ca_config *config);
 int ca_config_load(struct ca_config *config, const char *path,
                    char *error, size_t error_size);
+#ifdef CAMERA_APP_ZT30_DEV
+/* Parse candidate bytes with the same strict parser as application startup. */
+int ca_config_parse(struct ca_config *config, const char *text, size_t length,
+                    char *error, size_t error_size);
+#endif
 /* Numeric configuration values use stable MAVLink names and enum ordinals.
  * Writes persist to the INI; the caller applies supported runtime settings. */
 size_t ca_config_param_count(void);

@@ -39,6 +39,21 @@ class RateResponse(unittest.TestCase):
                                      ('yaw', 10, 8.6)]:
             self.assertAlmostEqual(gimbal.vendor_rate_response(axis, command), speed)
 
+    def test_zt30_measured_manual_response(self):
+        gimbal = Gimbal(1, 'zt30')
+        for axis in ('pitch', 'yaw'):
+            self.assertEqual(gimbal.properties['sim_' + axis + '_rate_curve'],
+                             gimbal.properties['vendor_' + axis + '_rate_curve'])
+        for axis in ('pitch', 'yaw'):
+            for command in range(-4, 5):
+                self.assertEqual(gimbal.vendor_rate_response(axis, command), 0)
+        # The calibrated web30deg/s requests use raw24 yaw and25 pitch.
+        for axis, command, speed in [('yaw', 5, 1.6), ('pitch', -5, -1.3),
+                                     ('yaw', 24, 29.58), ('yaw', -24, -29.3),
+                                     ('pitch', 25, 30.5), ('pitch', -25, -30.4),
+                                     ('yaw', 45, 59.5), ('pitch', -45, -59.4)]:
+            self.assertAlmostEqual(gimbal.vendor_rate_response(axis, command), speed)
+
     def test_a8_inverted_sweep_coordinates(self):
         with patch('mt11_rate_sweep.socket.socket') as factory:
             sock = factory.return_value

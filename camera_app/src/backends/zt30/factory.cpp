@@ -6,12 +6,15 @@
 #include "zoom_feedback.h"
 #include "thermal_file_test.h"
 #include "thermal_live.h"
+#include "photo_owner.h"
 #include "mi/native_sdk.h"
 #include "pts_clock.h"
 #include "camera_app/rtsp.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/video_metadata.h"
 #include "camera_app/log.h"
+#include "camera_app/raw_thermal.h"
+#include <string>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -89,10 +92,17 @@ struct Context {
     PtsClock clock;
     std::unique_ptr<ThermalFileTest> thermal_test;
     std::unique_ptr<ThermalLive> thermal_live;
+    std::unique_ptr<PhotoOwner> photos;
+    EncoderSource primary_source=EncoderSource::Zoom;
+    ThermalStartBudget photo_budget;bool photo_opened=false;
     int owner_lock=-1;
     unsigned rtsp_port=8554;
     ca_config settings{};
+    std::string capture_root;
+    ca_raw_thermal_server *raw_server=nullptr;ca_raw_thermal *raw_photo=nullptr;
+    ca_thermal_stream *raw_stream=nullptr;
     ~Context() {
+        ca_thermal_stream_close(raw_stream);ca_raw_thermal_server_close(raw_server);ca_raw_thermal_close(raw_photo);
         ca_live_video_server_close(live);ca_rtsp_close(rtsp);
         sdk.close(); // keep cross-process ownership through SDK destruction
         if(owner_lock>=0)close(owner_lock);
@@ -104,42 +114,42 @@ struct Context {
             !st.st_uid && st.st_nlink==1 && !(st.st_mode&0022) && !flock(owner_lock,LOCK_EX|LOCK_NB);
     }
     bool observe() {
-        uint64_t pts=0;const auto before=monotonic_ns();
-        const int rc=sdk.current_pts(0,&pts);const auto after=monotonic_ns();
-        const bool valid=!rc && clock.observe(pts,before,after);
-        if(!valid)ca_log("ZT30 presentation clock failed: raw=%d bracket_ns=%llu pts=%llu",
-            rc,(unsigned long long)(after-before),(unsigned long long)pts);
+        PtsObservation sample;
+        const bool valid=observe_pts_clock(clock,[this](uint64_t *pts) { return sdk.current_pts(0,pts); },monotonic_ns,sample);
+        if(!valid)ca_log("ZT30 presentation clock failed: raw=%d bracket_ns=%llu pts=%llu attempts=%u",
+            sample.status,(unsigned long long)sample.bracket_ns,(unsigned long long)sample.pts,sample.attempts);
         return valid;
     }
-    static bool isp_frames(uint64_t &frames) {
-        FILE *proc=std::fopen("/proc/mi_modules/mi_isp/mi_isp0","r");
-        if(!proc)return false;
+    static bool isp_frames(uint64_t &frames,unsigned wanted_channel) {
+        FILE *proc=std::fopen("/proc/mi_modules/mi_isp/mi_isp0","r");if(!proc)return false;
         char line[512]{};bool found=false;
-        // The MI create/start calls return before the ISP hardware exists.
-        // Wait for actual frame completions before the IQ API is safe to use.
-        for(unsigned i=0;i<2048 && std::fgets(line,sizeof(line),proc);i++) {
-            if(!std::strstr(line,"CreChnNum") || !std::strstr(line,"FrameDoneCnt"))continue;
-            unsigned dev=0,channels=0,mask=0,enabled=0,mode=0,num=0;
-            unsigned long long cmdq=0,vsync=0,done=0,dropped=0;
-            if(std::fgets(line,sizeof(line),proc) &&
-               std::sscanf(line,"%u %u %u %llx %u %u %u %llu %llu %llu",
-                    &dev,&channels,&mask,&cmdq,&enabled,&mode,&num,&vsync,&done,&dropped)==10 &&
-               dev==0 && channels==1 && mask==1 && enabled==1) {
-                frames=done;found=true;
+        // Per-channel checkout counter, independently observed in mi_isp0.
+        // Device-level FrameDoneCnt cannot qualify a second sensor.
+        while(std::fgets(line,sizeof(line),proc)) {
+            if(!std::strstr(line,"PreCnt") || !std::strstr(line,"checkout"))continue;
+            for(unsigned row=0;row<32 && std::fgets(line,sizeof(line),proc);row++) {
+                unsigned dev=0,ch=0;unsigned long long pre=0,enq=0,bar=0,in=0,out=0,deq=0,drop=0,ot=0;
+                if(std::sscanf(line,"%u %u %llu %llu %llu %llu %llu %llu %llu %llu",
+                    &dev,&ch,&pre,&enq,&bar,&in,&out,&deq,&drop,&ot)!=10)break;
+                if(!dev && ch==wanted_channel) { frames=out;found=true;break; }
             }
             break;
         }
         std::fclose(proc);return found;
     }
-    static bool gate(void*,bool after_iq) {
+    static bool gate(void *opaque,bool after_iq) {
+        return gate_channel(opaque,after_iq,uint32_t(static_cast<Context*>(opaque)->primary_source));
+    }
+    static bool gate_channel(void *opaque,bool after_iq,unsigned channel) {
+        (void)opaque;
         uint64_t first=0;bool sampled=false;
         const uint64_t deadline=monotonic_ns()+4000000000ULL;
         while(monotonic_ns()<deadline) {
             uint64_t frames=0;
-            if(isp_frames(frames)) {
+            if(isp_frames(frames,channel)) {
                 if(sampled && frames>=first && frames-first>=3) {
-                    ca_log("ZT30 ISP frames ready %s IQ: %llu -> %llu",
-                        after_iq?"after":"before",(unsigned long long)first,(unsigned long long)frames);
+                    ca_log("ZT30 ISP channel=%u frames ready %s IQ: %llu -> %llu",
+                        channel,after_iq?"after":"before",(unsigned long long)first,(unsigned long long)frames);
                     return true;
                 }
                 if(!sampled) { first=frames;sampled=true; }
@@ -184,7 +194,26 @@ struct Context {
 class Backend final : public OwnedMediaBackend<Context> {
 public:
     explicit Backend(std::unique_ptr<Context> c):OwnedMediaBackend<Context>(std::move(c)) {}
-    ~Backend() override { if(context->thermal_test)context->thermal_test->join();if(context->thermal_live)context->thermal_live->join(); }
+    ~Backend() override { if(shutdown())_exit(25); }
+    int shutdown() {
+        if(context->thermal_test)context->thermal_test->join();
+        if(context->thermal_live)context->thermal_live->join();
+        if(context->photos && context->photos->close())return EOWNERDEAD;
+        if(context->photo_opened) { (void)context->photo_budget.reset();context->photo_opened=false; }
+        return MediaBackend::shutdown();
+    }
+    bool photo_available() const override {
+        // Both scopes include thermal; do not advertise working photos when
+        // the required live source has failed or has never produced a frame.
+        return context->photos && context->photo_opened && context->photos->available() &&
+            context->thermal_live && context->thermal_live->ready();
+    }
+    int capture_photo(ca_photo_scope scope) override {
+        if(!photo_available()) { errno=ENODATA;return -1; }
+        auto *frame=context->photos->snapshot_buffer();timespec at{};
+        if(!context->thermal_live->snapshot(frame,ThermalPixelFrameBytes,at))return -1;
+        return context->photos->capture(context->capture_root.c_str(),scope,frame,ThermalPixelFrameBytes,at,context->raw_photo);
+    }
     // SIYI/UniGCS use background module zoom even when wide is selected;
     // MAVLink selected-source geometry uses lens_zoom() and hfov().
     float zoom() const override { return zoom_feedback().get(monotonic_ns()/1000000); }
@@ -198,11 +227,42 @@ public:
         if(thermal)return context->thermal_live && context->thermal_live->ready()?15:0;
         return MediaBackend::frame_rate(false);
     }
+    int configure_raw_thermal(const ca_config *settings) override {
+        return ca_thermal_stream_configure(context->raw_stream,settings);
+    }
     int set_inverted(bool inverted) override { if(inverted) { errno=ENOTSUP;return -1; }return 0; }
     int start(EncoderSource source) {
         MediaHooks h{context.get(),nullptr,Context::gate,Context::open_sink,Context::vui,Context::frame,Context::drain};
+        context->primary_source=source;
         const int rc=initialize(h,context->buffer.get(),4U*1024*1024,source,MediaRun::Continuous);
         if(rc)return rc;
+        if(ca_raw_thermal_open(&context->raw_photo,context->capture_root.c_str()))
+            ca_log("ZT30 raw photo writer unavailable errno=%d",errno);
+        if(ca_raw_thermal_server_open(&context->raw_server,context->capture_root.c_str(),7345,640,512))
+            ca_log("ZT30 raw TCP unavailable errno=%d; video continues",errno);
+        if(ca_thermal_stream_open(&context->raw_stream,context->rtsp_port,false,&context->settings))
+            ca_log("ZT30 lossless stream unavailable errno=%d; video continues",errno);
+        ca_raw_thermal_server_source_timeout(context->raw_server,1000);
+        ca_thermal_stream_source_timeout(context->raw_stream,1000);
+        const char *photos_off=std::getenv("CAMERA_APP_ZT30_PHOTOS_OFF");
+        // A root-controlled persistent marker permits raw-only development
+        // qualification without changing saved settings or the startup script.
+        const bool disabled=(photos_off && !std::strcmp(photos_off,"1")) ||
+            !access("/customer/camera-app/photos.disabled",F_OK);
+        if(!disabled) {
+            const char *directory="/tmp/apcg-zt30-photos";struct stat st{};
+            const bool directory_ok=(!mkdir(directory,0700) || errno==EEXIST) &&
+                !lstat(directory,&st) && S_ISDIR(st.st_mode) && !st.st_uid && (st.st_mode&0777)==0700;
+            if(!context->raw_photo || !directory_ok || !context->photo_budget.begin("/tmp/apcg-zt30-photos/start-budget"))
+                ca_log("ZT30 photos unavailable: startup budget/writer; RGB continues");
+            else if(!context->sdk.resolve_jpeg() || !context->sdk.resolve_input())
+                ca_log("ZT30 JPEG API unavailable; RGB continues");
+            else {
+                context->photos.reset(new(std::nothrow) PhotoOwner(context->sdk,context->memory));
+                if(context->photos && !context->photos->open(source,Context::gate_channel,context.get()))
+                    context->photo_opened=true;
+            }
+        }
         const char *test=std::getenv("CAMERA_APP_ZT30_THERMAL_TEST_INPUT");
         if(test && *test && context->sdk.resolve_input()) {
             context->thermal_test.reset(new(std::nothrow) ThermalFileTest(context->sdk,context->memory));
@@ -213,7 +273,7 @@ public:
         const char *live=std::getenv("CAMERA_APP_ZT30_THERMAL_RUN");
         const char *off=std::getenv("CAMERA_APP_ZT30_THERMAL_OFF");
         if((!test || !*test) && (!off || std::strcmp(off,"1")) && context->sdk.resolve_input()) {
-            context->thermal_live.reset(new(std::nothrow) ThermalLive(context->sdk,context->memory,context->rtsp,context->live));
+            context->thermal_live.reset(new(std::nothrow) ThermalLive(context->sdk,context->memory,context->rtsp,context->live,context->raw_server,context->raw_stream));
             if(!context->thermal_live || !context->thermal_live->start(live && *live?live:nullptr)) {
                 ca_log("ZT30 live thermal refused; RGB continues");context->thermal_live.reset();
             }
@@ -235,6 +295,8 @@ std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_conf
     auto c=std::unique_ptr<Context>(new(std::nothrow) Context);
     if(!c || !c->buffer) { errno=ENOMEM;return nullptr; }
     if(!c->lock_owner()) { ca_log("Another AP media owner is active or lock is invalid");errno=EBUSY;return nullptr; }
+    if(!config.capture_root || !*config.capture_root) { errno=EINVAL;return nullptr; }
+    c->capture_root=config.capture_root;
     c->settings=config.settings;c->rtsp_port=config.rtsp_port;
     const char *sdk=std::getenv("CAMERA_APP_ZT30_SDK");
     if(!sdk || !*sdk)sdk="/customer/camera-app/encoder-sdk.so";

@@ -30,7 +30,11 @@
 /* No qualified Linux external UART; MCU forwarding awaits bench testing. */
 #define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 0
-#define APCAM_HAVE_SOC_TEMPERATURE 0
+#define APCAM_HAVE_SOC_TEMPERATURE 1
+#ifndef SOC_TEMPERATURE_PATH
+#define SOC_TEMPERATURE_PATH "/sys/devices/virtual/mstar/msys/TEMP_R"
+#endif
+#define SOC_TEMPERATURE_LABELLED_CELSIUS 1
 #define APCAM_VENDOR_PORT 37260
 #define APCAM_WEB_PORT 80
 #define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
@@ -69,9 +73,16 @@
 #define APCAM_GIMBAL_YAW_MIN -180.0f
 #define APCAM_GIMBAL_YAW_MAX 180.0f
 #define APCAM_GIMBAL_RATE_MAX 60.0f
-/* Nominal simulator response only; ZT30 hardware rate calibration is pending. */
+/* Nominal full scale outside the bench calibration; curve interpolation is
+ * used for manual motion. Upright native MCU, 12 October 2026: pose slopes
+ * after acceleration, signed raw4..45. Values beyond45 are unqualified;
+ * native DEV caps raw commands at45 (about60deg/s). Raw4 is the dead zone. */
 #define APCAM_VENDOR_YAW_RATE_FULL_SCALE 100.0f
 #define APCAM_VENDOR_PITCH_RATE_FULL_SCALE 100.0f
+#define APCAM_VENDOR_YAW_RATE_CURVE {-45, -59.6, -30, -38.2, -25, -30.8, -20, -23.3, -15, -15.9, -10, -8.2, -6, -2.6, -5, -1.3, -4, 0, 4, 0, 5, 1.6, 6, 3.0, 10, 8.3, 15, 16.4, 20, 23.5, 25, 31.1, 30, 38.6, 45, 59.5}
+#define APCAM_VENDOR_PITCH_RATE_CURVE {-45, -59.4, -30, -37.7, -25, -30.4, -20, -23.3, -15, -16.0, -10, -8.6, -6, -2.8, -5, -1.3, -4, 0, 4, 0, 5, 1.3, 6, 2.8, 10, 8.6, 15, 15.9, 20, 22.9, 25, 30.5, 30, 38.1, 45, 59.6}
+#define APCAM_SIM_YAW_RATE_CURVE {-45, -59.6, -30, -38.2, -25, -30.8, -20, -23.3, -15, -15.9, -10, -8.2, -6, -2.6, -5, -1.3, -4, 0, 4, 0, 5, 1.6, 6, 3.0, 10, 8.3, 15, 16.4, 20, 23.5, 25, 31.1, 30, 38.6, 45, 59.5}
+#define APCAM_SIM_PITCH_RATE_CURVE {-45, -59.4, -30, -37.7, -25, -30.4, -20, -23.3, -15, -16.0, -10, -8.6, -6, -2.8, -5, -1.3, -4, 0, 4, 0, 5, 1.3, 6, 2.8, 10, 8.6, 15, 15.9, 20, 22.9, 25, 30.5, 30, 38.1, 45, 59.6}
 #define APCAM_ZOOM_SELECTS_LENS 0
 #define APCAM_DEFAULT_RGB_LENS 1
 #define APCAM_LENS1_DIGITAL_ZOOM_MAX 1.0f
@@ -126,8 +137,12 @@
 #endif
 #undef APCAM_STREAM1_LENS_MASK
 #define APCAM_STREAM1_LENS_MASK 2
+#ifdef CAMERA_APP_ZT30_RAM
 #undef APCAM_HAVE_PHOTO
 #define APCAM_HAVE_PHOTO 0
+#else
+#define APCAM_HAVE_RAW_THERMAL 1
+#endif
 #undef APCAM_HAVE_ZOOM
 #define APCAM_HAVE_ZOOM 0
 #undef APCAM_HAVE_FOCUS

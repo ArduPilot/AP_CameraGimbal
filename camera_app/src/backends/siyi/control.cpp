@@ -757,9 +757,9 @@ static int dev_rates(ca_backend *backend,int yaw,int pitch)
 {
     // A stop must remain available after feedback loss or a mounting change.
     if ((yaw || pitch) && !ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
-    // Low raw units produced no convincing movement. Qualify fifteen with
-    // a shorter watchdog before enabling unrestricted rates.
-    yaw=yaw>15?15:yaw<-15?-15:yaw;pitch=pitch>15?15:pitch<-15?-15:pitch;
+    // Signed raw45 produces about60deg/s on both axes. Keep SDK/private
+    // requests within that qualified range and stop after refresh is lost.
+    yaw=yaw>45?45:yaw<-45?-45:yaw;pitch=pitch>45?45:pitch<-45?-45:pitch;
     const uint8_t payload[2]={(uint8_t)(int8_t)yaw,(uint8_t)(int8_t)pitch};
     if ((yaw || pitch) && backend->gimbal_mode!=1U) {
         // FPV rejects yaw motion. Ordinary manual PTZ uses follow mode.
@@ -954,6 +954,9 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
         return ca_backend_set_gimbal_angles(backend,angles[1]*PI_F/180,angles[2]*PI_F/180);
         }
     case 0x0c:
+        if(packet.payload_length==1U && packet.payload[0]==0) {
+            emit_feedback(backend,capture_photo(backend)?0U:1U);return 0;
+        }
         if (packet.payload_length==1U && packet.payload[0]>=3 && packet.payload[0]<=5 &&
             ca_backend_has_gimbal(backend)) {
             const uint8_t mode=packet.payload[0]-3U;

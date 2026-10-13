@@ -33,9 +33,16 @@ public:
     int open(EncoderCodec codec=EncoderCodec::H265,H264Timing timing=H264Timing::ReadOnly,
              EncoderSource source=EncoderSource::Zoom); // SCL0/channel0 or1/port1, 1280x720
     // Additional software-input channel; caller owns SYS and VENC device 0.
-    int open_thermal(); // H264 640x512/15fps, channel 2, no binds/device ownership
+    int open_thermal();
+    // JPEG device8: created once; channels never destroyed/recreated per shot.
+    // Normal RGB input is SCL0/source/port0. Thermal uses software input.
+    int open_jpeg(EncoderSource source,uint32_t channel,unsigned width,unsigned height,
+                  bool own_device,bool software_input=false,unsigned quality=90);
+    int start_once();
+    int stop_once(); // H264 640x512/15fps, channel 2, no binds/device ownership
     // 1: copied frame, 0: no frame ready, -1: failure (raw_status retained).
     int copy_frame(EncodedFrame &output);
+    int pending_packs(uint32_t &packs); // Query only, while started; no borrowed packet
     int read_h264_vui(H264Vui &output); // only on a ready H264 channel; failure poisons owner
     int close();
     bool ready() const { return started && (bound || software) && !unhealthy; }
@@ -51,8 +58,8 @@ private:
     EncoderApi &a;
     PacketMemory &m;
     H264Vui initial_vui{},verified_vui{};
-    bool got_default_vui=false,h264=false;
-    uint32_t source_channel=0,channel_id=1;
+    bool got_default_vui=false,h264=false,jpeg=false;
+    uint32_t source_channel=0,source_port=1,channel_id=1,device_id=0;
     bool software=false;
     bool used=false,unhealthy=false,device=false,channel=false,started=false,bound=false;
     EncoderPacket packets[32]{};

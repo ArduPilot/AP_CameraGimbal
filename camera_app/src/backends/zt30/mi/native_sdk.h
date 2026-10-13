@@ -84,6 +84,9 @@ public:
 #undef LOAD
         return true;
     }
+    bool resolve_jpeg() {
+        return handle && symbol(encoder.start_once,"libmi_venc.so","MI_VENC_StartRecvPicEx");
+    }
     bool resolve_h264_getter() {
         encoder.get_h264_vui=nullptr;encoder.set_h264_vui=nullptr;
         if(!handle)return false;

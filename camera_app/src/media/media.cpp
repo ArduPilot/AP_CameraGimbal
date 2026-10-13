@@ -490,9 +490,11 @@ int APC_Media::set_focus_percent(float percent)
 bool APC_Media::thermal_range(struct ca_thermal_range *range)
 { return _backend && _backend->thermal_range(range) &&
          ca_thermal_range_fresh(range, ca_binlog_time_us()); }
+bool APC_Media::photo_available() const { return APCAM_HAVE_PHOTO && _backend && _backend->photo_available(); }
 int APC_Media::capture_photo(enum ca_photo_scope scope)
 {
     REQUIRE_IMPL;
+    if(_photo_prepare && _photo_prepare(_photo_opaque)<0)return -1;
     struct ca_metadata snapshot;
     ca_metadata_snapshot(&snapshot);
     struct ca_log_cam r={};
@@ -663,6 +665,10 @@ int ca_media_set_focus_percent(struct ca_media *media, float percent)
 bool ca_media_thermal_range(struct ca_media *media, struct ca_thermal_range *range)
 {
     return media ? media->thermal_range(range) : (false);
+}
+bool ca_media_photo_available(const ca_media *media) { return media && media->photo_available(); }
+void ca_media_set_photo_prepare(ca_media *media,int (*fn)(void*),void *opaque) {
+    if(media)media->set_photo_prepare(fn,opaque);
 }
 int ca_media_capture_photo(struct ca_media *media, enum ca_photo_scope scope)
 {

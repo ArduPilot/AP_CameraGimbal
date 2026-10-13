@@ -12,11 +12,10 @@ void RgbOwner::cleanup(int result,const char *call,int &first_error) {
     (void)check(result,call);
 }
 #define CALL(expression) do { if(!check((expression),#expression)) { close();return raw_status; } } while(0)
-int RgbOwner::open(bool wide) {
+int RgbOwner::open(bool wide,bool borrow_devices) {
     if(path || sys || unhealthy) return -1;
     failed_call=nullptr;raw_status=0;path=wide?&WidePath:&ZoomPath;
-    CALL(a.sys_init(0));sys=true;
-    CALL(a.snr_init(nullptr));
+    if(!borrow_devices) { CALL(a.sys_init(0));sys=true;CALL(a.snr_init(nullptr)); }
     CALL(a.snr_plane_mode(path->sensor_pad,0));
     uint32_t count=0;
     CALL(a.snr_count(path->sensor_pad,&count));
@@ -50,7 +49,7 @@ int RgbOwner::open(bool wide) {
     auto voutput=vif_output(*path);
     CALL(a.sys_depth(0,&voutput,0,4));
     uint32_t combo=1;
-    CALL(a.isp_create_device(0,&combo));isp_device=true;
+    if(!borrow_devices) { CALL(a.isp_create_device(0,&combo));isp_device=true; }
     auto channel=ca_zt30::isp_channel(*path);
     const int created=a.isp_create_channel(0,path->isp_channel,&channel);
     if(created) {
@@ -72,7 +71,7 @@ int RgbOwner::open(bool wide) {
     CALL(a.sys_depth(0,&ioutput,0,4));
     CALL(a.sys_bind(0,&voutput,&ioutput,30,30,FrameBind,0));bound_isp=true;
     uint32_t mask=3;
-    CALL(a.scl_create_device(0,&mask));scl_device=true;
+    if(!borrow_devices) { CALL(a.scl_create_device(0,&mask));scl_device=true; }
     uint32_t reserved=0;
     CALL(a.scl_create_channel(0,path->scl_channel,&reserved));scl_channel=true;
     uint32_t rotation=0;

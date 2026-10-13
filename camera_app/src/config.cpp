@@ -4,6 +4,9 @@
 #include "apcam/network.h"
 #include "apcam/target.h"
 #include "apcam/APC_Config.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "apcam/APC_ZT30_Config.h"
+#endif
 
 #include <ctype.h>
 #include <arpa/inet.h>
@@ -96,6 +99,11 @@ void ca_config_defaults(struct ca_config *config)
     strcpy(config->support.video3_name, "Raw Thermal (16-bit)");
     strcpy(config->support.network_interface, "eth0");
     strcpy(config->network.interface, "eth0");
+#ifdef CAMERA_APP_ZT30_DEV
+    // Omitted keys use implemented native defaults. Explicit legacy values
+    // remain parseable and are normalized separately at application startup.
+    APC_ZT30_Config::effective(*config);
+#endif
 }
 
 const char *ca_mount_orientation_name(enum ca_mount_orientation orientation)
@@ -161,23 +169,16 @@ const char *ca_photo_scope_name(enum ca_photo_scope scope)
     return scope == CA_PHOTO_SCOPE_ALL ? "all" : "thermal";
 }
 
-int ca_config_load(struct ca_config *config, const char *path,
-                   char *error, size_t error_size)
+static int read_config(struct ca_config *config, FILE *file,
+                       char *error, size_t error_size)
 {
-    FILE *file;
     char line[CONFIG_LINE_MAX];
     char section[64] = "";
     unsigned line_number = 0U;
     bool seen[APC_Config::count()] = {false};
     struct ca_config parsed;
 
-    if (config == NULL || path == NULL || *path == '\0') {
-        errno = EINVAL;
-        return -1;
-    }
     parsed = *config;
-    file = fopen(path, "r");
-    if (file == NULL) return -1;
 
     while (fgets(line, sizeof(line), file) != NULL) {
         char *text;
@@ -256,6 +257,7 @@ int ca_config_load(struct ca_config *config, const char *path,
     }
     /* New Network keys take precedence even when explicitly empty. Legacy
      * proxy network settings retain their old enabled-only behavior until saved. */
+#ifndef CAMERA_APP_ZT30_DEV
     if (parsed.support.enabled) {
         for (size_t i = 0; i < APC_Config::count(); i++) {
             const APC_Config::Field *f = &APC_Config::fields()[i];
@@ -266,19 +268,54 @@ int ca_config_load(struct ca_config *config, const char *path,
             if (legacy) snprintf((char *)&parsed + f->offset, f->size, "%s", legacy);
         }
     }
+#endif
     if (!apcam_network_valid(parsed.network.primary_address, parsed.network.secondary_address, parsed.network.gateway)) {
         snprintf(error, error_size, "Network needs distinct host addresses and a gateway reachable through either configured subnet");
         errno = EINVAL;
         goto fail;
     }
-    fclose(file);
     *config = parsed;
     return 0;
 
 fail:
-    fclose(file);
     return -1;
 }
+
+int ca_config_load(struct ca_config *config, const char *path,
+                   char *error, size_t error_size)
+{
+    if (!config || !path || !*path) { errno = EINVAL; return -1; }
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        const int saved_errno = errno;
+        snprintf(error, error_size, "Cannot read configuration: %s", strerror(saved_errno));
+        errno = saved_errno;
+        return -1;
+    }
+    int result = read_config(config, file, error, error_size);
+    int saved_errno = errno;
+    fclose(file);
+    errno = saved_errno;
+    return result;
+}
+
+#ifdef CAMERA_APP_ZT30_DEV
+int ca_config_parse(struct ca_config *config, const char *text, size_t length,
+                    char *error, size_t error_size)
+{
+    if (!config || !text || !length || memchr(text, 0, length)) {
+        snprintf(error, error_size, "Configuration is empty or contains NUL bytes");
+        errno = EINVAL; return -1;
+    }
+    FILE *file = fmemopen((void *)text, length, "r");
+    if (!file) return -1;
+    int result = read_config(config, file, error, error_size);
+    int saved_errno = errno;
+    fclose(file);
+    errno = saved_errno;
+    return result;
+}
+#endif
 
 static const APC_Config::Field *param_field(size_t index)
 {
@@ -446,6 +483,9 @@ int ca_config_param_save(struct ca_config *config, const char *path,
                           size_t index, float value)
 {
     const APC_Config::Field *field = param_field(index);
+#ifdef CAMERA_APP_ZT30_DEV
+    if (field && !APC_ZT30_Config::editable(*field)) { errno = ENOTSUP; return -1; }
+#endif
     char number[32];
     const char *text = number;
     char error[160];
@@ -511,6 +551,9 @@ void ca_config_copy_image(struct ca_config *destination, const struct ca_config 
 int ca_config_param_assign(struct ca_config *config, size_t index, float value)
 {
     const APC_Config::Field *field = param_field(index);
+#ifdef CAMERA_APP_ZT30_DEV
+    if (field && !APC_ZT30_Config::editable(*field)) { errno = ENOTSUP; return -1; }
+#endif
     if (!field || !isfinite(value) || value < -65535 || value > 65535 || value != truncf(value)) {
         errno = EINVAL;
         return -1;

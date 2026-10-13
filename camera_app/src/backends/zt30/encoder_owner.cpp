@@ -86,12 +86,46 @@ int EncoderOwner::read_h264_vui(H264Vui &output) {
     if(!check(a.get_h264_vui(0,channel_id,&output),"a.get_h264_vui active")) { output={};return raw_status; }
     return 0;
 }
+int EncoderOwner::open_jpeg(EncoderSource source,uint32_t id,unsigned width,unsigned height,
+                            bool own_device,bool software_input,unsigned quality) {
+    if(used || !a.start_once || id<4 || id>6 || !width || width>3840 || !height || height>2160 ||
+       (source!=EncoderSource::Zoom && source!=EncoderSource::Wide) || !quality || quality>100)return -1;
+    used=true;jpeg=true;device_id=8;channel_id=id;source_channel=uint32_t(source);source_port=0;software=software_input;
+#define CALL(expr) do { if(!check((expr),#expr)) { close();return raw_status; } } while(0)
+    if(own_device) { EncoderDevice dev{3840,2160};CALL(a.create_device(device_id,&dev));device=true; }
+    const auto j=jpeg_channel(width,height,quality);H26xChannel attr{};std::memcpy(&attr,&j,sizeof(attr));
+    CALL(a.create_channel(device_id,channel_id,&attr));channel=true;
+    const uint32_t normal=0;CALL(a.set_input_source(device_id,channel_id,&normal));
+    if(!software) {
+        Port src{Scl,0,source_channel,source_port},dst{Venc,device_id,channel_id,0};
+        CALL(s.sys_bind(0,&src,&dst,30,30,FrameBind,0));bound=true;
+    }
+#undef CALL
+    return 0;
+}
+int EncoderOwner::start_once() {
+    if(!jpeg || !channel || unhealthy || started)return -1;
+    const int32_t count=1;started=true;
+    return check(a.start_once(device_id,channel_id,&count),"JPEG start once")?0:-1;
+}
+int EncoderOwner::stop_once() {
+    if(!started)return 0;
+    const int result=a.stop(device_id,channel_id);
+    if(!check(result,"JPEG stop once"))return -1;
+    started=false;return 0;
+}
+int EncoderOwner::pending_packs(uint32_t &packs) {
+    packs=0;if(!ready())return -1;
+    EncoderStatus status{};
+    if(!check(a.query(device_id,channel_id,&status),"a.query pending"))return -1;
+    packs=status.current_packs;return 0;
+}
 int EncoderOwner::copy_frame(EncodedFrame &output) {
     output.bytes=0;output.packets=0;output.sequence=0;
     std::memset(output.pts,0,sizeof(output.pts));
     if(!ready() || !output.data || !output.capacity)return -1;
     EncoderStatus status{};
-    if(!check(a.query(0,channel_id,&status),"a.query"))return -1;
+    if(!check(a.query(device_id,channel_id,&status),"a.query"))return -1;
     if(!status.current_packs)return 0;
     if(status.current_packs>32) { check(-1,"packet capacity exceeded");return -1; }
     EncoderStream stream{};
@@ -102,7 +136,7 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
     stream.count=status.current_packs;
     std::memset(packets,0,sizeof(packets));
     // Query showed output available; never block beyond this finite SDK bound.
-    if(!check(a.get_stream(0,channel_id,&stream,100),"a.get_stream"))return -1;
+    if(!check(a.get_stream(device_id,channel_id,&stream,100),"a.get_stream"))return -1;
     // ReleaseStream iterates the caller's array. A corrupt returned pointer or
     // capacity cannot safely be passed back. Poison and let process teardown
     // reclaim mappings instead of dereferencing untrusted output.
@@ -121,22 +155,23 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
     }
     stream.count=filled; // only count is an input capacity, not SDK output
     const uint32_t sequence=stream.sequence;
-    bool valid=packets[filled-1].frame_flags!=0;
-    for(uint32_t i=0;i+1<filled;i++)valid=valid && packets[i].frame_flags==0;
+    bool valid=jpeg || packets[filled-1].frame_flags!=0;
+    if(!jpeg)for(uint32_t i=0;i+1<filled;i++)valid=valid && packets[i].frame_flags==0;
     size_t bytes=0;
     uint64_t pts[32]{};
     for(uint32_t i=0;valid && i<stream.count;i++) {
         const auto &p=packets[i];
         const size_t length=p.length>=p.offset?p.length-p.offset:0;
-        if(!p.data_address || !length || p.length>4U*1024*1024 ||
+        if(!p.data_address || !length || p.length>(jpeg?8U:4U)*1024*1024 ||
            uint64_t(p.data_address)+p.length>UINT64_C(0x100000000) ||
            length>output.capacity-bytes ||
            !m.copy(p.data_address+p.offset,output.data+bytes,length)) { valid=false;break; }
         bytes+=length;pts[i]=p.pts;
     }
+    if(jpeg)valid=valid && bytes>=4 && output.data[0]==0xff && output.data[1]==0xd8 && output.data[bytes-2]==0xff && output.data[bytes-1]==0xd9;
     // Preserve every SDK output field, including the mapped virtual handle;
     // count now names only packets actually acquired by GetStream.
-    const int released=a.release_stream(0,channel_id,&stream);
+    const int released=a.release_stream(device_id,channel_id,&stream);
     if(!check(released,"a.release_stream"))return -1;
     if(!valid) { check(-1,"invalid/unreadable packet payload");return -1; }
     output.bytes=bytes;output.packets=filled;output.sequence=sequence;
@@ -145,12 +180,12 @@ int EncoderOwner::copy_frame(EncodedFrame &output) {
 }
 int EncoderOwner::close() {
     int first=0;
-    Port source{Scl,0,source_channel,1},destination{Venc,0,1,0};
+    Port source{Scl,0,source_channel,source_port},destination{Venc,device_id,channel_id,0};
 #define CLEAN(flag,expr) do { if(flag) { cleanup((expr),#expr,first);flag=false; } } while(0)
     CLEAN(bound,s.sys_unbind(0,&source,&destination));
-    CLEAN(started,a.stop(0,channel_id));
-    CLEAN(channel,a.destroy_channel(0,channel_id));
-    CLEAN(device,a.destroy_device(0));
+    CLEAN(started,a.stop(device_id,channel_id));
+    CLEAN(channel,a.destroy_channel(device_id,channel_id));
+    CLEAN(device,a.destroy_device(device_id));
 #undef CLEAN
     return first;
 }

@@ -393,7 +393,10 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         reply(s,0x9f,p,1); return;
     case 0xb4:
         if(n) break;
-        out[0]=APCAM_HAVE_THERMAL ? (cfg.photo_scope==CA_PHOTO_SCOPE_ALL ? 0x0b : 0x08) : 1;
+#ifdef CAMERA_APP_ZT30_DEV
+        if(!ca_media_photo_available(s->media)) { out[0]=0;reply(s,0xb4,out,1);return; }
+#endif
+        out[0]=APCAM_HAVE_THERMAL_VIDEO ? (cfg.photo_scope==CA_PHOTO_SCOPE_ALL ? 0x0b : 0x08) : 1;
         reply(s,0xb4,out,1); return;
     case 0x99:
         if(n!=1 || (int8_t(p[0]) < -1 || int8_t(p[0])>1)) break;

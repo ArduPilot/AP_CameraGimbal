@@ -7,6 +7,9 @@
 #include "pts_clock.h"
 #include "camera_app/live_video_server.h"
 #include "camera_app/rtsp.h"
+#include "camera_app/raw_thermal_server.h"
+#include "camera_app/thermal_stream.h"
+#include <vector>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -17,12 +20,14 @@ namespace ca_zt30 {
 // RGB owns SYS/device0 for the entire lifetime. join() precedes RGB teardown.
 class ThermalLive {
 public:
-    ThermalLive(NativeSdk&,PacketMemory&,ca_rtsp*,ca_live_video_server*);
+    ThermalLive(NativeSdk&,PacketMemory&,ca_rtsp*,ca_live_video_server*,ca_raw_thermal_server* =nullptr,ca_thermal_stream* =nullptr);
     ~ThermalLive() { join(); }
     // nullptr selects ordinary startup; a name enables one-shot diagnostic capture.
     bool start(const char *run_name=nullptr);
     bool ready() const;
     void join();
+    // Same USB frame supplies display and raw plane; refuse stale/degraded data.
+    bool snapshot(uint8_t *frame,size_t capacity,timespec &captured_at);
 private:
     static uint64_t now(void* =nullptr);
     static void pause(void*,unsigned);
@@ -35,11 +40,13 @@ private:
     void capture();
     void encode();
     NativeSdk &sdk;ThermalEncoder encoder;
+    ca_raw_thermal_server *raw_server;ca_thermal_stream *raw_stream;
     ca_rtsp *rtsp;ca_live_video_server *live;unsigned stream_id=0;
     std::unique_ptr<UsbIso> usb;
     UvcFrame assembler;
     std::unique_ptr<uint8_t[]> latest,owned,nv12,encoded;
-    std::mutex lock;uint64_t receipt=0,generation=0;
+    std::unique_ptr<uint16_t[]> radiometric;
+    std::mutex lock;uint64_t receipt=0,generation=0;timespec captured_at{};
     pthread_t start_thread{},usb_thread{},encode_thread{};
     bool start_started=false;
     char run_name[49]{};
