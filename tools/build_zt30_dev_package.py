@@ -100,10 +100,13 @@ def build(args):
         app=customer/'camera-app'
         if app.is_symlink():raise ValueError('baseline app directory is a symlink')
         app.mkdir(exist_ok=True)
+        app.chmod(0o755)
         sources={'camera-app':args.camera_app,'zt30-web':args.web_app,'encoder-sdk.so':args.sdk,
             'dropbear':args.dropbear,'dropbearkey':args.dropbearkey,
+            'zt30-slot':getattr(args,'slot_tool',ROOT/'build/zt30/zt30-slot'),
             'app-init.sh':ROOT/'packaging/zt30/app-init.sh',
             'app-supervisor.sh':ROOT/'packaging/zt30/app-supervisor.sh',
+            'web-supervisor.sh':ROOT/'packaging/zt30/web-supervisor.sh',
             'start-dropbear.sh':ROOT/'packaging/zt30/start-dropbear.sh',
             'camera.ini.default':ROOT/'packaging/zt30/camera.ini.dev'}
         for name,source in sources.items():
@@ -118,6 +121,8 @@ def build(args):
                 dest=assets/source.relative_to(ROOT/'web/webroot')
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 install_file(source,dest,0o644)
+        for directory in [assets] + [p for p in assets.rglob('*') if p.is_dir()]:
+            directory.chmod(0o755)
         # Initial credential only; existing user-chosen credentials are retained.
         default=app/'web.pass.default'
         if default.is_symlink():raise ValueError('credential default is a symlink')
