@@ -21,6 +21,8 @@ static const struct {
 };
 
 enum string_id {
+    S_ZT30_NATIVE_PARAMETERS,
+    S_ZT30_FIXED_VIDEO,
     S_LANGUAGE_NAME,
     S_LANGUAGE,
     S_APPLY,
@@ -989,7 +991,9 @@ static constexpr Translations translations = [] {
     result[S_STATUS_CPU_BUSY] = {"%u%% busy across %u cores (load average %.*s is inflated by the media driver's kernel threads)", "占用 %u%%，共 %u 个核心（负载平均值 %.*s 因媒体驱动的内核线程而偏高）", "使用率 %u%%、%u コア（ロードアベレージ %.*s はメディアドライバーのカーネルスレッドにより高めに出ます）"};
     result[S_STATUS_LOAD] = {"Load", "负载", "負荷"};
     result[S_STATUS_SOC_TEMPERATURE] = {"SoC temperature", "SoC 温度", "SoC 温度"};
-#if APCAM_TARGET == APCAM_TARGET_Z1_MINI
+#if APCAM_TARGET == APCAM_TARGET_ZT30
+    result[S_STATUS_SOC_AVERAGE] = {"%s%d &deg;C", "%s%d &deg;C", "%s%d &deg;C"};
+#elif APCAM_TARGET == APCAM_TARGET_Z1_MINI
     result[S_STATUS_SOC_AVERAGE] = {"%s%d.%d &deg;C", "%s%d.%d &deg;C", "%s%d.%d &deg;C"};
 #else
     result[S_STATUS_SOC_AVERAGE] = {"%s%d.%d &deg;C (three-sensor average)", "%s%d.%d &deg;C（三个传感器的平均值）", "%s%d.%d &deg;C（3 センサーの平均）"};
@@ -1238,6 +1242,8 @@ static constexpr Translations translations = [] {
     result[S_E_MALFORMED] = {"Malformed HTTP request", "HTTP 请求格式错误", "不正な HTTP リクエストです"};
     result[S_E_LIVE_UNAVAILABLE] = {"Native live video is not available", "原生实时视频不可用", "ネイティブライブ映像を利用できません"};
     result[S_E_LIVE_H264] = {"This stream must be configured for H.264", "此视频流必须配置为 H.264", "このストリームは H.264 に設定する必要があります"};
+    result[S_ZT30_NATIVE_PARAMETERS] = {"Native ZT30 settings require an application restart. Recording, tracking and image controls are not yet available. Network addresses are managed by the host OS.", "原生 ZT30 设置需要重启应用程序。录像、跟踪和图像控制尚不可用。网络地址由主机操作系统管理。", "ネイティブ ZT30 の設定にはアプリの再起動が必要です。録画、追跡、画像調整はまだ利用できません。ネットワークアドレスはホスト OS が管理します。"};
+    result[S_ZT30_FIXED_VIDEO] = {"Fixed video: visible %u × %u H264; thermal %u × %u H264.", "固定视频格式：可见光 %u × %u H264；热成像 %u × %u H264。", "固定映像形式: 可視光 %u × %u H264、熱画像 %u × %u H264。"};
     return result;
 }();
 /* ---- end of user-visible strings ---- */

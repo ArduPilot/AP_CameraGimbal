@@ -397,6 +397,22 @@ int main() {
         const auto count=calls.size();assert(owner.close()==0 && calls.size()==count);
         assert(owner.open(wide)==-1 && calls.size()==count);
     }
+    for(bool wide:{false,true}) {
+        reset(wide);resources={"SYS","ISP_DEVICE","SCL_DEVICE"};
+        const auto borrowed=resources;
+        RgbOwner secondary(api);assert(secondary.open(wide,true)==0);
+        assert(secondary.close()==0 && resources==borrowed);
+        for(const auto &call:calls)assert(call!="sys_init" && call!="snr_init" &&
+            call!="sys_exit" && call!="isp_create_device" && call!="isp_destroy_device" &&
+            call!="scl_create_device" && call!="scl_destroy_device");
+        reset(wide);resources=borrowed;RgbOwner count(api);assert(count.open(wide,true)==0);
+        const unsigned starts=unsigned(calls.size());assert(count.close()==0 && resources==borrowed);
+        for(unsigned fail=1;fail<=starts;fail++) {
+            reset(wide,fail);resources=borrowed;RgbOwner bad(api);
+            assert(bad.open(wide,true)==-99 && !bad.ready());
+            assert(resources==borrowed);assert(bad.close()==0);
+        }
+    }
     reset(false);wrong_resolution=true;RgbOwner incompatible(api);
     assert(incompatible.open()==-1 && resources.empty());
     assert(calls.back()=="sys_exit");

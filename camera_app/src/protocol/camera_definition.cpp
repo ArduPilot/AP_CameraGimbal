@@ -73,13 +73,20 @@ static const struct ca_camera_parameter parameters[] = {
     OPTIONS("CAM_SOURCE", "Main video source", CA_CAMERA_SOURCE, 0, sources),
     OPTIONS("CAM_THERM_GAIN", "Thermal gain", CA_CAMERA_GAIN, 1, gains),
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
+#endif
+#if APCAM_HAVE_THERMAL_VIDEO
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
+#endif
+#if APCAM_HAVE_RAW_THERMAL
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
+#endif
+#if APCAM_HAVE_THERMAL
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif
 #if APCAM_HAVE_PHOTO_RESOLUTION
     CONFIG("PHOTO_RES", "Photo resolution (larger sizes briefly pause video)"),
 #endif
+#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("OSD_CROSS", "Targeting cross"),
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
     CONFIG("OSD_RECORD", "Overlays in recordings"),
@@ -87,7 +94,9 @@ static const struct ca_camera_parameter parameters[] = {
 #if APCAM_HAVE_THERMAL
     CONFIG("OSD_THERMAL_FOV", "Thermal field of view in RGB (nominal alignment)"),
 #endif
+#endif
     CONFIG("LOG_DISARMED", "Log when disarmed"),
+#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("TRACK_METHOD", "Location tracking control method"),
     CONFIG("MAV_POS_TARGET", "Position targeting"),
     CONFIG("REC_AUTOSTART", "Automatic recording"),
@@ -96,6 +105,7 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
     CONFIG("VIDEO_SUB_RES", "Secondary RGB stream resolution"),
     CONFIG("VIDEO_SUB_CODEC", "Secondary RGB stream codec"),
+#endif
 #if APCAM_HAVE_IMAGE_CONTROLS
     CONFIG("IMG_BRIGHTNESS", "Brightness"),
     CONFIG("IMG_SATURATION", "Saturation"),

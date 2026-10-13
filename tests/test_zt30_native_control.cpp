@@ -70,7 +70,7 @@ int main() {
     assert(!std::isfinite(zoom.get(999)));zoom.reset();assert(!std::isfinite(zoom.get(1000)));
 
     static_assert(APCAM_NUM_STREAMS==2 && APCAM_HAVE_THERMAL_VIDEO);
-    static_assert(!APCAM_HAVE_PHOTO && !APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && !APCAM_HAVE_OPTICAL_ZOOM && !APCAM_HAVE_IMAGE_CONTROLS);
+    static_assert(APCAM_HAVE_PHOTO && !APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && !APCAM_HAVE_OPTICAL_ZOOM && !APCAM_HAVE_IMAGE_CONTROLS);
     for (unsigned i=0;i<9;i++) {
         assert(apcam_feedback[0].matrix[i]==(i==8?-1:i%4==0?1:0));
         assert(apcam_angle_command[0].matrix[i]==(i==8?-1:i%4==0?1:0));
@@ -150,8 +150,23 @@ int main() {
     b->attitude.yaw_rad=3*PI_F/180;b->angle_target.sent_ms=monotonic_ms()-1001;
     assert(ca_backend_set_gimbal_angles(b,0,3*PI_F/180)==0 && empty(fds[1]));
     attitude(b,fds[1]);
+    // The web/MAVLink value is degrees/s, distinct from raw SDK percent.
+    struct RateCase { int dps, yaw, pitch; };
+    for (const RateCase &rate : {RateCase{-60,-45,-45}, {-30,-24,-25},
+            {-5,-8,-8}, {-3,-6,-6}, {-2,-6,-5}, {0,0,0},
+            {2,5,5}, {3,6,6}, {5,8,8}, {30,24,25}, {60,45,45}}) {
+        assert(ca_backend_set_gimbal_rates(b,rate.dps*PI_F/180,rate.dps*PI_F/180)==0);
+        auto v=take(fds[1]);auto p=sdk(v);
+        assert(p.opcode==7 && (int8_t)p.payload[0]==rate.yaw && (int8_t)p.payload[1]==rate.pitch);
+    }
+    const uint8_t raw_thirty[2]={30,(uint8_t)(int8_t)-30};
+    assert(command(b,0x07,raw_thirty,2)==0);
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.payload[0]==30 && (int8_t)p.payload[1]==-30);}
+    const uint64_t old_stop=b->rate_stop_ms;
+    usleep(20000);
     assert(ca_backend_set_gimbal_rates(b,-10,10)==0);
-    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && p.payload[0]==15 && (int8_t)p.payload[1]==-15);}
+    assert(b->rate_stop_ms>old_stop);
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && p.payload[0]==45 && (int8_t)p.payload[1]==-45);}
     usleep(180000);ca_backend_periodic(b);
     {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==7 && !p.payload[0] && !p.payload[1]);}
     {auto v=take(fds[1]);assert(sdk(v).opcode==0x0d);}assert(empty(fds[1]));
@@ -173,7 +188,7 @@ int main() {
     const uint8_t private_rates[2]={128,100};private_cmd.command=0x9a;private_cmd.payload=private_rates;
     private_cmd.payload_length=2;private_cmd.control=9;private_cmd.sequence=97;private_cmd.source=0x2c;
     assert(ca_backend_handle_private(b,&private_cmd)==0 && private_replies==1);
-    {auto v=take(fds[1]);auto p=sdk(v);assert((int8_t)p.payload[0]==-15 && p.payload[1]==15);}
+    {auto v=take(fds[1]);auto p=sdk(v);assert((int8_t)p.payload[0]==-45 && p.payload[1]==45);}
     assert(dev_rates(b,0,0)==0);take(fds[1]);
     b->attitude.timestamp_ms=monotonic_ms()-1001;assert(!ca_backend_has_gimbal(b));
     assert(ca_backend_set_gimbal_rates(b,0,.1f)<0 && empty(fds[1]));

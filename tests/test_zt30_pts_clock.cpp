@@ -40,4 +40,26 @@ int main() {
     PtsClock drift;assert(drift.observe(seed,ns,ns));
     assert(drift.observe(seed+1001000,ns+1000000000,ns+1000000000));
     assert(!drift.observe(seed+2010000,ns+2000000000,ns+2000000000));
+    // A scheduling overrun must not poison the clock before a precise retry.
+    ca_zt30::PtsObservation observation;
+    unsigned reads=0,ticks=0;
+    const uint64_t times[]={ns,ns+2000001,ns+3000000,ns+3050000};
+    PtsClock retried;
+    assert(ca_zt30::observe_pts_clock(retried,[&](uint64_t *pts) { *pts=seed+reads++*3000;return 0; },
+        [&]() { assert(ticks<4);return times[ticks++]; },observation));
+    assert(reads==2 && observation.attempts==2 && retried.healthy());
+    assert(retried.frame(seed+3001,(ns+3050000)/1000,out));
+    // Exhaustion is bounded; an actual reset/error is never retried.
+    reads=ticks=0;PtsClock busy;
+    assert(!ca_zt30::observe_pts_clock(busy,[&](uint64_t *pts) { *pts=seed;reads++;return 0; },
+        [&]() { return ns+(ticks++)*3000000; },observation));
+    assert(reads==3 && observation.attempts==3 && !busy.healthy());
+    reads=ticks=0;
+    assert(!ca_zt30::observe_pts_clock(retried,[&](uint64_t *pts) { *pts=0;reads++;return 0; },
+        [&]() { return ns+10000000+(ticks++)*1000; },observation));
+    assert(reads==1 && !retried.healthy());
+    reads=ticks=0;PtsClock sdk_failed;
+    assert(!ca_zt30::observe_pts_clock(sdk_failed,[&](uint64_t*) { reads++;return -7; },
+        [&]() { return ns+(ticks++)*1000; },observation));
+    assert(reads==1 && observation.status==-7 && !sdk_failed.healthy());
 }

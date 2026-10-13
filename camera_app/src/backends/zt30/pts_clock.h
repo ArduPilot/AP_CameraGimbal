@@ -63,4 +63,23 @@ private:
     uint64_t origin_pts=0,origin_us=0,last_pts=0,last_us=0;
     uint64_t last_frame_pts=0,last_frame_us=0;
 };
+struct PtsObservation {
+    uint64_t pts=0,bracket_ns=0;
+    int status=0;
+    unsigned attempts=0;
+};
+// Scheduling delay makes an observation imprecise, not evidence of a clock
+// reset. Retry a bounded number of samples before passing a precise one to the
+// clock. Never retry an SDK error, reversed time, reset or drift failure.
+template<typename Read,typename Now>
+bool observe_pts_clock(PtsClock &clock,Read read,Now now,PtsObservation &sample) {
+    for(unsigned i=0;i<3;i++) {
+        sample.pts=0;const uint64_t before=now();
+        sample.status=read(&sample.pts);const uint64_t after=now();
+        sample.attempts=i+1;sample.bracket_ns=after>=before?after-before:UINT64_MAX;
+        if(!sample.status && after>=before && sample.bracket_ns>2000000ULL)continue;
+        return !sample.status && clock.observe(sample.pts,before,after);
+    }
+    return false;
+}
 } // namespace ca_zt30

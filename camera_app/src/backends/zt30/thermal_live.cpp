@@ -23,10 +23,10 @@ uint64_t ThermalLive::now(void*) { timespec t{};clock_gettime(CLOCK_MONOTONIC,&t
 void ThermalLive::pause(void*,unsigned ms) { timespec t{time_t(ms/1000),long(ms%1000)*1000000};nanosleep(&t,nullptr); }
 int ThermalLive::ioctl_call(void*,int fd,unsigned long cmd,void *arg) { return ioctl(fd,cmd,arg); }
 int ThermalLive::close_call(void*,int fd) { return ::close(fd); }
-ThermalLive::ThermalLive(NativeSdk &s,PacketMemory &p,ca_rtsp *r,ca_live_video_server *l):
-    sdk(s),encoder(s.api,s.encoder,p,s.input),rtsp(r),live(l),assembler(ThermalFrameBytes,frame,this),
+ThermalLive::ThermalLive(NativeSdk &s,PacketMemory &p,ca_rtsp *r,ca_live_video_server *l,ca_raw_thermal_server *rs,ca_thermal_stream *stream):
+    sdk(s),encoder(s.api,s.encoder,p,s.input),raw_server(rs),raw_stream(stream),rtsp(r),live(l),assembler(ThermalFrameBytes,frame,this),
     latest(new(std::nothrow) uint8_t[ThermalFrameBytes]),owned(new(std::nothrow) uint8_t[ThermalFrameBytes]),
-    nv12(new(std::nothrow) uint8_t[ThermalNv12Bytes]),encoded(new(std::nothrow) uint8_t[4*1024*1024]) {}
+    nv12(new(std::nothrow) uint8_t[ThermalNv12Bytes]),encoded(new(std::nothrow) uint8_t[4*1024*1024]),radiometric(new(std::nothrow) uint16_t[640*512]) {}
 static bool sys_number(const char *directory,const char *name,unsigned &number,unsigned base) {
     char path[320],text[40]{};std::snprintf(path,sizeof(path),"%s/%s",directory,name);
     FILE *f=std::fopen(path,"r");if(!f)return false;
@@ -74,7 +74,7 @@ bool ThermalLive::start(const char *name) {
     return start_started;
 }
 bool ThermalLive::initialize(const char *name) {
-    if(!assembler.ready() || !latest || !owned || !nv12 || !encoded)return false;
+    if(!assembler.ready() || !latest || !owned || !nv12 || !encoded || !radiometric)return false;
     normal=name==nullptr;
     if(!normal) {
         if(!*name || std::strlen(name)>48)return false;
@@ -120,7 +120,16 @@ bool ThermalLive::frame(void *opaque,const uint8_t *bytes,size_t length,const Uv
     auto &self=*static_cast<ThermalLive*>(opaque);
     if(length!=ThermalFrameBytes || !info.last_ns)return false;
     std::lock_guard<std::mutex> guard(self.lock);
-    std::memcpy(self.latest.get(),bytes,length);self.receipt=info.last_ns;++self.generation;return true;
+    timespec wall{};if(clock_gettime(CLOCK_REALTIME,&wall))return false;
+    std::memcpy(self.latest.get(),bytes,length);self.receipt=info.last_ns;self.captured_at=wall;++self.generation;return true;
+}
+bool ThermalLive::snapshot(uint8_t *frame,size_t capacity,timespec &at) {
+    if(!frame || capacity<ThermalFrameBytes) { errno=EINVAL;return false; }
+    if(stop.load() || usb_failed.load() || degraded.load()) { errno=ENODATA;return false; }
+    std::lock_guard<std::mutex> guard(lock);
+    const uint64_t current=now();
+    if(!receipt || current<receipt || current-receipt>250000000ULL) { errno=EAGAIN;return false; }
+    std::memcpy(frame,latest.get(),ThermalFrameBytes);at=captured_at;return true;
 }
 bool ThermalLive::packet(void *opaque,const IsoPacket &p) {
     auto &self=*static_cast<ThermalLive*>(opaque);
@@ -142,18 +151,27 @@ void ThermalLive::capture() {
 }
 void ThermalLive::encode() {
     uint64_t seen=0,frames=0,last=now(),last_receipt=0,healthy_since=0;
-    bool budget_reset=false;
+    bool budget_reset=false,raw_error_logged=false;
     EncodedFrame f{};f.data=encoded.get();f.capacity=4*1024*1024;
     while(!stop.load() && !usb_failed.load()) {
-        uint64_t received=0;
+        uint64_t received=0;timespec at{};
         {
             std::lock_guard<std::mutex> guard(lock);
-            if(generation!=seen) { seen=generation;received=receipt;std::memcpy(owned.get(),latest.get(),ThermalFrameBytes); }
+            if(generation!=seen) { seen=generation;received=receipt;at=captured_at;std::memcpy(owned.get(),latest.get(),ThermalFrameBytes); }
         }
         if(received) {
             last_receipt=received;
             if(now()-received>150000000ULL)continue; // bounded age, discard stale input
             if(thermal_uyvy_nv12(owned.get(),ThermalFrameBytes,nv12.get(),640*512,640,nv12.get()+640*512,640*256,640)!=ThermalPixelResult::Ok) { ca_log("ZT30 thermal degraded: pixel conversion");degraded.store(true);break; }
+            if(thermal_be16(owned.get(),ThermalFrameBytes,radiometric.get(),640*512)!=ThermalPixelResult::Ok) {
+                ca_log("ZT30 thermal degraded: raw plane conversion");degraded.store(true);break;
+            }
+            if(raw_server) {
+                const bool error=ca_raw_thermal_server_publish(raw_server,radiometric.get(),&at)<0;
+                if(error && !raw_error_logged)ca_log("ZT30 raw TCP publish failed errno=%d; repeats suppressed",errno);
+                raw_error_logged=error;
+            }
+            ca_thermal_stream_publish_counts(raw_stream,radiometric.get(),&at,255,false,received/1000);
             uint64_t pts=0;const auto before=now();const int rc=sdk.current_pts(0,&pts);const auto after=now();
             if(rc) { ca_log("ZT30 thermal degraded: GetCurPts raw=%d",rc);degraded.store(true);break; }
             if(after-before>2000000ULL) {

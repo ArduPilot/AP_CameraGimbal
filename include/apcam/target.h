@@ -82,6 +82,9 @@
 #define APCAM_STRING_VALUE(value) APCAM_STRING_VALUE_(value)
 /* A fixed thermal video stream need not expose module controls or calibrated
  * temperature data (for example the initial native ZT30 backend). */
+#ifndef APCAM_HAVE_RAW_THERMAL
+#define APCAM_HAVE_RAW_THERMAL APCAM_HAVE_THERMAL
+#endif
 #ifndef APCAM_HAVE_THERMAL_VIDEO
 #define APCAM_HAVE_THERMAL_VIDEO APCAM_HAVE_THERMAL
 #endif

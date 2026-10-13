@@ -37,6 +37,7 @@ public:
     virtual int manual_focus(int direction) = 0;
     virtual int set_focus_percent(float percent) = 0;
     virtual bool thermal_range(struct ca_thermal_range *range) = 0;
+    virtual bool photo_available() const { return ready(); }
     virtual int capture_photo(enum ca_photo_scope scope) = 0;
     virtual float survey_hfov(unsigned) const { return 0; }
     virtual bool survey_available(unsigned) const { return false; }

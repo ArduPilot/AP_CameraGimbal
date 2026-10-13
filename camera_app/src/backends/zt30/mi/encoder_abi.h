@@ -52,6 +52,22 @@ inline bool baseline_h264_vui(const H264Vui &value) {
     }
     return matches==1 && location==12;
 }
+// Measured JPEG union: vendor codec4, device8/channels4..6. The entire
+// create payload is76bytes, with a different picture/rate union from H26x.
+struct JpegChannel {
+    uint32_t codec,max_width,max_height,buffer_size;
+    uint8_t by_frame,reserved[3];uint32_t width,height;
+    uint8_t thumbnail,reserved_thumbnail[3];uint32_t marks_per_row,reserved_union;
+    uint32_t rate_mode,fps_num,fps_den,quality,rate_padding[4],rate_extension;
+};
+static_assert(sizeof(JpegChannel)==76 && offsetof(JpegChannel,width)==20 &&
+              offsetof(JpegChannel,rate_mode)==40 && offsetof(JpegChannel,quality)==52 &&
+              offsetof(JpegChannel,rate_extension)==72,"captured JPEG create union");
+inline JpegChannel jpeg_channel(uint32_t width,uint32_t height,unsigned quality=90) {
+    JpegChannel a{};a.codec=4;a.max_width=3840;a.max_height=2160;
+    a.by_frame=1;a.width=width;a.height=height;a.rate_mode=7;
+    a.fps_num=1;a.fps_den=1;a.quality=quality;return a;
+}
 struct EncoderApi {
     int (*create_device)(uint32_t,EncoderDevice*);
     int (*destroy_device)(uint32_t);
@@ -62,6 +78,7 @@ struct EncoderApi {
     int (*set_h264_vui)(uint32_t,uint32_t,const H264Vui*);
     int (*start)(uint32_t,uint32_t);
     int (*stop)(uint32_t,uint32_t);
+    int (*start_once)(uint32_t,uint32_t,const int32_t*);
     // GetFd returns an SDK-cached borrowed fd; CloseFd is a no-op in this SDK.
     // Do not close it, or destroy/recreate its channel within the same SDK load.
     int (*get_fd)(uint32_t,uint32_t);

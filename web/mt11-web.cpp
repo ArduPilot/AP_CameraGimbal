@@ -9,6 +9,7 @@
 #include "build/icons.h"
 #include "../include/apcam/config_status.h"
 #include "../include/apcam/network.h"
+#include "../include/apcam/soc_temperature.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -63,6 +64,9 @@
 #include "../include/apcam/target.h"
 #include "../include/apcam/APC_Camera.h"
 #include "../include/apcam/APC_Config.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "../include/apcam/APC_ZT30_Config.h"
+#endif
 #include "../include/apcam/gimbal_transform.h"
 #include "../include/apcam/manual_control.h"
 #include "../include/apcam/survey_runtime.h"
@@ -671,7 +675,7 @@ static const struct parameter replacement_parameters[] = {
     {"thermal_palette", "thermal", "palette", S_P_THERMAL_PALETTE, S_H_THERMAL_PALETTE,
      PARAM_ENUM, 0, 0, 0, palette_options,
      sizeof(palette_options) / sizeof(palette_options[0])},
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     {"raw_stream_fps", "thermal", "stream_fps", S_P_RAW_STREAM_FPS, S_H_RAW_STREAM_FPS,
      PARAM_INTEGER, 1, 25, 1, NULL, 0},
     {"raw_record_fps", "thermal", "record_fps", S_P_RAW_RECORD_FPS, S_H_RAW_RECORD_FPS,
@@ -737,7 +741,7 @@ static const struct parameter replacement_parameters[] = {
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"proxy_video2_name", "support_proxy", "video2_name", S_P_PROXY_VIDEO2_NAME, S_H_PROXY_VIDEO2_NAME,
      PARAM_TEXT, 0, 63, 1, NULL, 0},
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     {"proxy_video3_port", "support_proxy", "video3_port", S_P_PROXY_VIDEO3_PORT, S_H_PROXY_VIDEO3_PORT,
      PARAM_INTEGER, 0, 65535, 1, NULL, 0},
     {"proxy_video3_name", "support_proxy", "video3_name", S_P_PROXY_VIDEO3_NAME, S_H_PROXY_VIDEO3_NAME,
@@ -811,7 +815,7 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
     APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     "5", "5",
 #endif
     "false",
@@ -821,7 +825,7 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS, "50", "50", "50", "0",
     "auto", "auto", "average", "auto",
     "false", "", "10001", "false", "", "1", "0", "video1", "0", "video2",
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_RAW_THERMAL
     "0", "Raw Thermal (16-bit)",
 #endif
     "", "false", "false", "false", "eth0", "", "", "", "false",
@@ -2126,12 +2130,17 @@ static bool append_update(struct ini_update *updates, size_t capacity, size_t *c
 /* parameters that do not exist on this camera stay out of the form */
 static bool parameter_shown(const struct parameter *parameter)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    const auto *field = APC_Config::find(parameter->section, parameter->key);
+    if (!field || !APC_ZT30_Config::editable(*field)) return false;
+#endif
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
-    if (!APCAM_HAVE_THERMAL && (!strcmp(parameter->section, "thermal") ||
-        !strcmp(parameter->key, "photo_scope"))) return false;
+    if (!APCAM_HAVE_THERMAL && !strcmp(parameter->section,"thermal") &&
+        !(APCAM_HAVE_RAW_THERMAL && !strcmp(parameter->key,"stream_fps"))) return false;
+    if (!APCAM_HAVE_THERMAL_VIDEO && !strcmp(parameter->key,"photo_scope")) return false;
     return true;
 }
 
@@ -2165,7 +2174,17 @@ static bool collect_described_parameters(const APC_HTTPRequest *request,
         size_t value_length = 0;
         char *value;
 
-        if (!parameter_shown(parameter)) continue;
+        if (!parameter_shown(parameter)) {
+#ifdef CAMERA_APP_ZT30_DEV
+            value = form_value(request, parameter->form_name, &value_length);
+            if (value) {
+                free(value);
+                snprintf(error, error_size, "%s is not configurable on the native ZT30 build", parameter->form_name);
+                return false;
+            }
+#endif
+            continue;
+        }
         value = form_value(request, parameter->form_name, &value_length);
         bool valid = value != NULL && value_length < sizeof(updates[0].value);
         char normalized[160] = "";
@@ -2943,9 +2962,31 @@ static bool save_config(const char *config_path, const char *backup_path,
     bool ok = false;
 
     if (!validate_ini(config, length, error, error_size)) return false;
-    if (stat(config_path, &st) < 0) {
-        snprintf(error, error_size, T(S_E_CANNOT_STAT), config_path, strerror(errno));
-        return false;
+#ifdef CAMERA_APP_ZT30_DEV
+    ca_config before, candidate;
+    ca_config_defaults(&before);
+    ca_config_defaults(&candidate);
+    if (ca_config_load(&before, config_path, error, error_size) < 0) {
+        if (errno != EINVAL && errno != ENOENT) return false;
+        // Permit repair of invalid/missing INI, but only supported/default
+        // values for unavailable controls. Never guess the corrupt old values.
+        ca_config_defaults(&before);
+        APC_ZT30_Config::effective(before);
+    }
+    if (ca_config_parse(&candidate, config, length, error, error_size) < 0 ||
+        !APC_ZT30_Config::validate_change(before, candidate, error, error_size)) return false;
+#endif
+    bool existing = stat(config_path, &st) == 0;
+    if (!existing) {
+#ifdef CAMERA_APP_ZT30_DEV
+        if (errno == ENOENT) {
+            st = {}; st.st_mode = 0644; st.st_uid = geteuid(); st.st_gid = getegid();
+        } else
+#endif
+        {
+            snprintf(error, error_size, T(S_E_CANNOT_STAT), config_path, strerror(errno));
+            return false;
+        }
     }
     if (snprintf(config_temp, sizeof(config_temp), "%s.web.new.%ld",
                  config_path, (long)getpid()) >= (int)sizeof(config_temp) ||
@@ -2957,8 +2998,8 @@ static bool save_config(const char *config_path, const char *backup_path,
     unlink(config_temp);
     unlink(backup_temp);
 
-    if (!copy_to_temp(config_path, backup_temp, st.st_mode & 0777, st.st_uid, st.st_gid) ||
-        rename(backup_temp, backup_path) < 0) {
+    if (existing && (!copy_to_temp(config_path, backup_temp, st.st_mode & 0777, st.st_uid, st.st_gid) ||
+        rename(backup_temp, backup_path) < 0)) {
         snprintf(error, error_size, T(S_E_CONFIG_BACKUP), strerror(errno));
         goto done;
     }
@@ -4646,16 +4687,12 @@ static bool read_soc_temperature(int *millidegrees)
 {
 /* Kernel thermal zone where available; otherwise the SS928 sensor registers. */
 #ifdef SOC_TEMPERATURE_PATH
-    FILE *file = fopen(SOC_TEMPERATURE_PATH, "r");
-    if (!file) return false;
-    char text[64], extra;
-    long value;
-    bool ok = fgets(text, sizeof(text), file) != NULL &&
-              sscanf(text, "%ld %c", &value, &extra) == 1 &&
-              value >= -40000 && value <= 150000;
-    fclose(file);
-    if (ok) *millidegrees = (int)value;
-    return ok;
+#ifdef SOC_TEMPERATURE_LABELLED_CELSIUS
+    constexpr bool labelled=true;
+#else
+    constexpr bool labelled=false;
+#endif
+    return apcam_read_soc_temperature(SOC_TEMPERATURE_PATH,labelled,millidegrees);
 #else
     int fd = -1;
     void *mapping = MAP_FAILED;
@@ -4814,9 +4851,13 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
     page.appendf("<tr><th>%s</th><td>", T(S_STATUS_SOC_TEMPERATURE));
     if (have_soc_temperature) {
         int absolute = soc_temperature < 0 ? -soc_temperature : soc_temperature;
+#ifdef SOC_TEMPERATURE_LABELLED_CELSIUS
+        page.appendf(T(S_STATUS_SOC_AVERAGE),soc_temperature < 0 ? "-" : "",absolute / 1000);
+#else
         page.appendf(T(S_STATUS_SOC_AVERAGE),
                    soc_temperature < 0 ? "-" : "", absolute / 1000,
                    (absolute % 1000) / 100);
+#endif
     } else {
         page.append(T(S_UNAVAILABLE));
     }
@@ -4953,7 +4994,7 @@ static char *render_sensors_page(const char *message, bool message_is_error,
     webroot.render(page, "sensors-values.html", {T(S_SENSORS_LIVE), T(S_SENSORS_LIDAR), T(S_LOADING), T(S_ENABLE), T(S_SENSORS_MIN), T(S_LOADING), T(S_SENSORS_MAX), T(S_LOADING), T(S_SENSORS_CPU), T(S_LOADING), T(S_SENSORS_UPDATING), T(S_SENSORS_LASER_NOTICE)});
 #endif
     webroot.render(page, "sensors-capture.html", {T(S_SENSORS_SHUTTER), T(S_SENSORS_SHUTTER_TEXT), csrf_token, T(S_SENSORS_CAPTURE)});
-#if WEB_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL_VIDEO
     page.appendf("<p class=muted>%s</p>", T(S_SENSORS_SCOPE_NOTE));
 #endif
     page.appendf("</section></div><section class=card><h2>%s</h2>", T(S_SENSORS_RECENT));
@@ -5148,6 +5189,14 @@ static char *render_parameter_page(const char *message, bool message_is_error,
         if (message == NULL && live_config_notice(config, config_len, applied, sizeof(applied), &message_is_error))
             message = applied;
         append_notice(&page, message, message_is_error);
+#ifdef CAMERA_APP_ZT30_DEV
+        unsigned native_width, native_height;
+        ca_video_resolution_size(CA_VIDEO_720P, &native_width, &native_height);
+        page.appendf("<p class=notice>%s</p><p class=help>", T(S_ZT30_NATIVE_PARAMETERS));
+        page.appendf(T(S_ZT30_FIXED_VIDEO), native_width, native_height,
+                     APCAM_THERMAL_STREAM_WIDTH, APCAM_THERMAL_STREAM_HEIGHT);
+        page.append("</p>");
+#endif
         webroot.render(page, "parameters-form.html", {T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES)});
         for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
             page.appendf("<button type=button role=tab id=tab-%s aria-controls=parameters-%s "

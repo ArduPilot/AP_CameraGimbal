@@ -38,12 +38,14 @@ void ca_thermal_test_pattern(uint16_t *pixels, uint64_t sequence)
 
 using thermal_mkv::Bytes;
 static std::atomic<unsigned> public_port{0}, public_fps{5};
+static std::atomic<uint64_t> public_source_timeout{0}, public_last_frame{0};
 static std::atomic<bool> enabled{true}, available{false};
 static uint64_t mono_us() {
     timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
     return uint64_t(t.tv_sec)*1000000 + t.tv_nsec/1000;
 }
 struct ca_thermal_stream {
+    std::atomic<uint64_t> source_timeout{0};
     int listener = -1;
     ca_support_video *proxy = nullptr;
     pthread_t thread{};
@@ -102,7 +104,8 @@ struct ThermalClient {
 static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t now,
                           const char *telemetry, uint8_t gain, bool rotated,
                           const char *simulation_source, float hfov,
-                          const ca_metadata &pose, const timespec &captured_at)
+                          const ca_metadata &pose, const timespec &captured_at,
+                          bool calibrated=true)
 {
     unsigned minimum = UINT16_MAX, maximum = 0;
     for (unsigned i=0;i<640U*512U;i++) {
@@ -114,19 +117,25 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     char hfov_json[32] = "null";
     const bool known_fov = isfinite(hfov) && hfov > 0 && hfov < 180;
     if (known_fov) snprintf(hfov_json,sizeof(hfov_json),"%.6f",double(hfov));
+    char minimum_c[32]="null",maximum_c[32]="null";
+    if (calibrated) {
+        snprintf(minimum_c,sizeof(minimum_c),"%.6f",minimum/64.0-273.15);
+        snprintf(maximum_c,sizeof(maximum_c),"%.6f",maximum/64.0-273.15);
+    }
     char json[CA_VIDEO_METADATA_JSON_MAX+2048];
     int n = snprintf(json,sizeof(json),
         "{\"schema\":\"apcg.thermal.v1\",\"frame_id\":%llu,\"capture_monotonic_us\":%llu,"
         "\"timestamp_source\":\"%s\",\"simulated\":%s,\"simulation_source\":\"%s\",\"width\":640,\"height\":512,"
         "\"pixel_format\":\"gray16le\",\"bits_per_sample\":16,"
-        "\"temperature_scale_k\":0.015625,\"temperature_offset_k\":0,\"gain\":%d,"
-        "\"minimum_raw\":%u,\"maximum_raw\":%u,\"minimum_c\":%.6f,\"maximum_c\":%.6f,"
+        "\"temperature_scale_k\":%s,\"temperature_offset_k\":%s,\"temperature_calibration\":\"%s\",\"gain\":%d,"
+        "\"minimum_raw\":%u,\"maximum_raw\":%u,\"minimum_c\":%s,\"maximum_c\":%s,"
         "\"rotation_deg\":%u,\"hfov_deg\":%s,\"calibration\":\"%s\","
         "\"altitude_datum\":\"AMSL\",\"gimbal_frame\":\"roll_pitch_level_yaw_vehicle\","
         "\"telemetry\":%s}",
         (unsigned long long)s->sequence,(unsigned long long)now,
-        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,gain==255?-1:int(gain),
-        minimum,maximum,minimum/64.0-273.15,maximum/64.0-273.15,
+        s->simulated?"simulation":"usb_receive",s->simulated?"true":"false",simulation_source,calibrated?"0.015625":"null",calibrated?"0":"null",
+        calibrated?"sensor_kelvin_64":"unverified_sensor_counts",gain==255?-1:int(gain),
+        minimum,maximum,minimum_c,maximum_c,
         rotated?180:0,hfov_json,known_fov?"nominal_pinhole":"unknown",telemetry);
     if (n<0 || size_t(n)>=sizeof(json)) return;
     memcpy(s->pixels.data(),pixels,640U*512U*sizeof(uint16_t));
@@ -136,10 +145,14 @@ static void publish_frame(ca_thermal_stream *s, const uint16_t *pixels, uint64_t
     wake_worker(s);
 }
 
-void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
-                               const timespec *captured_at, uint8_t gain, bool rotated)
+static void publish_sensor(ca_thermal_stream *s, const uint16_t *pixels,
+                           const timespec *captured_at, uint8_t gain, bool rotated, bool calibrated,uint64_t received_us=0)
 {
     if (!s || !pixels || !captured_at) return;
+    const uint64_t current=mono_us();
+    const uint64_t now=received_us?received_us:current;
+    if(now>current || current-now>1000000)return;
+    public_last_frame=now;
     if (!frames_wanted(s)) {
         // frame_id still counts every sensor frame; drop the cached frame so
         // a new consumer never starts from a stale one
@@ -150,13 +163,25 @@ void ca_thermal_stream_publish(ca_thermal_stream *s, const uint16_t *pixels,
     }
     ca_metadata metadata;
     ca_metadata_snapshot(&metadata); // freeze telemetry with pixels, never at client-read time
-    const uint64_t now = mono_us();
     char telemetry[CA_VIDEO_METADATA_JSON_MAX];
     if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
     publish_frame(s, pixels, now, telemetry, gain, rotated,
-                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H, metadata, *captured_at);
+                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H, metadata, *captured_at, calibrated);
 }
 
+void ca_thermal_stream_publish(ca_thermal_stream *s,const uint16_t *pixels,
+                               const timespec *at,uint8_t gain,bool rotated) {
+    publish_sensor(s,pixels,at,gain,rotated,true);
+}
+void ca_thermal_stream_publish_counts(ca_thermal_stream *s,const uint16_t *pixels,
+                                      const timespec *at,uint8_t gain,bool rotated,uint64_t received_us) {
+    publish_sensor(s,pixels,at,gain,rotated,false,received_us);
+}
+void ca_thermal_stream_source_timeout(ca_thermal_stream *s,unsigned milliseconds) {
+    if(!s)return;
+    s->source_timeout=uint64_t(milliseconds)*1000;
+    public_source_timeout=s->source_timeout.load();public_last_frame=0;
+}
 void ca_thermal_stream_publish_terrain(ca_thermal_stream *s, const uint16_t *pixels,
                                       uint64_t capture_us, const char *telemetry, uint8_t gain, float hfov,
                                       const ca_metadata *render_pose, const timespec *render_utc)
@@ -433,7 +458,8 @@ static void *thermal_worker(void *opaque)
                 s->survey_frames.pop_front();
             } else {
                 sequence=s->sequence; capture=s->capture_us;
-                if (s->json.empty()) continue;
+                const uint64_t timeout=s->source_timeout.load();
+                if (s->json.empty() || (timeout && (now<capture || now-capture>timeout))) continue;
                 pixels=s->pixels; json=s->json;
             }
         }
@@ -524,7 +550,7 @@ int ca_thermal_stream_open(ca_thermal_stream **result,unsigned rtsp_port,bool si
         if (s->listener >= 0) close(s->listener);
         delete s; return -1;
     }
-    enabled=true; public_fps=fps;
+    enabled=true; public_fps=fps;public_source_timeout=0;public_last_frame=0;
     int error=pthread_create(&s->thread,nullptr,thermal_worker,s);
     if (error) { ca_support_video_close(s->proxy); close(s->listener); delete s; errno=error; return -1; }
     s->started=true; public_port=port; available=port || s->proxy; *result=s;
@@ -543,7 +569,10 @@ void ca_thermal_stream_close(ca_thermal_stream *s)
     delete s;
 }
 unsigned ca_thermal_stream_port() { return public_port.load(); }
-bool ca_thermal_stream_available() { return available.load(); }
+bool ca_thermal_stream_available() {
+    const uint64_t timeout=public_source_timeout.load(),last=public_last_frame.load(),now=mono_us();
+    return available.load() && (!timeout || (last && now>=last && now-last<=timeout));
+}
 unsigned ca_thermal_stream_fps() { return public_fps.load(); }
 bool ca_thermal_stream_enabled() { return enabled.load(); }
 void ca_thermal_stream_enable(bool value) { enabled=value; }
@@ -554,6 +583,8 @@ int ca_thermal_stream_configure(ca_thermal_stream *,const ca_config *) { return 
 int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 0; }
 int ca_thermal_stream_capture(ca_thermal_stream *,const char *,const ca_survey_request &,ca_survey_result &,const std::atomic<uint64_t> &) { errno=ENOTSUP; return -1; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
+void ca_thermal_stream_source_timeout(ca_thermal_stream *, unsigned) {}
+void ca_thermal_stream_publish_counts(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool,uint64_t) {}
 void ca_thermal_stream_publish_terrain(ca_thermal_stream *, const uint16_t *, uint64_t, const char *, uint8_t, float, const ca_metadata *, const timespec *) {}
 unsigned ca_thermal_stream_port() { return 0; }
 bool ca_thermal_stream_available() { return false; }

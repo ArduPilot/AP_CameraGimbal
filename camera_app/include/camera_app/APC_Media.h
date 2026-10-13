@@ -36,12 +36,14 @@ public:
     int manual_focus(int direction);
     int set_focus_percent(float percent);
     bool thermal_range(struct ca_thermal_range *range);
+    bool photo_available() const;
     int capture_photo(enum ca_photo_scope scope);
     bool survey_available(unsigned lens) const;
     float survey_hfov(unsigned lens) const;
     bool survey_start(const ca_survey_request &request);
     bool survey_poll(ca_survey_result &result);
     void survey_cancel();
+    void set_photo_prepare(int (*fn)(void*),void *opaque) { _photo_prepare=fn;_photo_opaque=opaque; }
     bool cached_thermal_controls(uint8_t *gain, uint8_t *palette);
     int get_thermal_gain(uint8_t *gain);
     int set_thermal_gain(uint8_t gain);
@@ -50,6 +52,7 @@ public:
     int set_inverted(bool inverted);
     APC_Tracking &tracking() { return _tracking; }
 private:
+    int (*_photo_prepare)(void*)=nullptr;void *_photo_opaque=nullptr;
     struct LiveControls;
     struct SurveyWorker;
     SurveyWorker *_survey = nullptr;

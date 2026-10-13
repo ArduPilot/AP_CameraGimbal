@@ -24,7 +24,7 @@ int main(void)
     float pose[3] = {5, -20, 30}, out[3];
     apcam_transform(&apcam_feedback[0], pose, out, false);
     near(out[0], 5); near(out[1], -20);
-#if APCAM_TARGET == APCAM_TARGET_MT11 || APCAM_TARGET == APCAM_TARGET_A8 || APCAM_TARGET == APCAM_TARGET_ZR10
+#if APCAM_TARGET == APCAM_TARGET_MT11 || APCAM_TARGET == APCAM_TARGET_A8 || APCAM_TARGET == APCAM_TARGET_ZR10 || APCAM_TARGET == APCAM_TARGET_ZT30
     near(out[2], -30);
 #else
     near(out[2], 30);

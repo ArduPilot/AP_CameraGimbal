@@ -17,6 +17,9 @@
 #include "camera_app/backend.h"
 #include "camera_app/manual_control.h"
 #include "camera_app/config.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "apcam/APC_ZT30_Config.h"
+#endif
 #include "camera_app/log.h"
 #include "camera_app/binlog.h"
 #include "camera_app/media.h"
@@ -364,14 +367,10 @@ int APC_CameraApp::run(int argc, char **argv)
     ca_zt30::ram_app_configure(app_config);
     #endif
     #ifdef CAMERA_APP_ZT30_DEV
-    // Preserve the saved configuration for future builds, but this development
-    // backend has one qualified output mode. Unsupported saved modes cannot
-    // prevent the continuous image from starting.
-    app_config.main_resolution=app_config.sub_resolution=app_config.recording_resolution=CA_VIDEO_720P;
-    app_config.main_codec=app_config.sub_codec=CA_VIDEO_H264;
-    app_config.position_targeting=false;app_config.osd_recording=false;
-    app_config.orientation=CA_MOUNT_AUTO; // native DEV requires an MCU mounting report
-    app_config.autorecord=CA_AUTORECORD_DISABLED;
+    if (APC_ZT30_Config::effective(app_config)) {
+        ca_log("native ZT30: unsupported saved settings clamped in memory; "
+               "visible video is 1280x720 H264, recording/OSD/targeting disabled; INI preserved");
+    }
     #endif
     if (APC_Timezone::apply(app_config.timezone) < 0) {
         ca_log("cannot apply timezone %s: %s", app_config.timezone,
@@ -527,6 +526,13 @@ int APC_CameraApp::run(int argc, char **argv)
         ca_log("cannot open backend %s: %s", backend_name, strerror(errno));
         return result;
     }
+#ifdef CAMERA_APP_ZT30_DEV
+    // One-shot photos can wait for hardware/storage. Stop the sole UART
+    // owner first, so no nonzero rate depends on a blocked main-loop timer.
+    ca_media_set_photo_prepare(_media,[](void *opaque) {
+        return ca_backend_set_gimbal_rates(static_cast<ca_backend*>(opaque),0,0);
+    },_backend);
+#endif
 #if APCAM_TARGET == APCAM_TARGET_Z1_MINI
     /* Do not report ready before gimbal feedback is available. */
     bool gimbal_ready = false;

@@ -107,7 +107,9 @@
     try {
       const message = await controlRequest(action, previous, value);
       controlStatus.textContent = message || L.commandSent;
-      await new Promise(resolve => window.setTimeout(resolve, 200));
+      // Refresh before the 180 ms manual pulse and 150 ms native watchdog.
+      // Keep requests serialized; a slow or throttled browser stops safely.
+      await new Promise(resolve => window.setTimeout(resolve, 50));
       return lease === previous;
     } catch (error) {
       if (lease === previous) dropControl();

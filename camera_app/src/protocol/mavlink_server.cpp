@@ -7,6 +7,9 @@
 #include "apcam/lens.h"
 #include "apcam/APC_Timezone.h"
 #include "apcam/config_status.h"
+#ifdef CAMERA_APP_ZT30_DEV
+#include "apcam/APC_ZT30_Config.h"
+#endif
 
 #include "camera_app/backend.h"
 #include "camera_app/camera_definition.h"
@@ -725,16 +728,29 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
 #ifdef CAMERA_APP_ZT30_DEV
-    // This initial continuous development backend exposes one RGB stream.
-    info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM;
+    // Native recording and lens controls remain unavailable; photographs
+    // use the qualified local JPEG/raw paths.
+    info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM | CAMERA_CAP_FLAGS_CAPTURE_IMAGE |
+                 CAMERA_CAP_FLAGS_HAS_MODES | CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE;
     // Optional gimbal identity above is based on actual fresh MCU feedback.
 #endif
+    if(!ca_media_photo_available(server->media))
+        info.flags &= ~(CAMERA_CAP_FLAGS_CAPTURE_IMAGE | CAMERA_CAP_FLAGS_HAS_MODES |
+                        CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE);
     snprintf(info.cam_definition_uri, sizeof(info.cam_definition_uri),
              "mftp://[;comp=%u]" CA_CAMERA_DEFINITION_PATH, server->camera_component_id);
     unsigned width, height;
     ca_video_resolution_size(server->settings.main_resolution, &width, &height);
     info.resolution_h = (uint16_t)width;
     info.resolution_v = (uint16_t)height;
+#ifdef CAMERA_APP_ZT30_DEV
+    // CAMERA_INFORMATION describes photographs; streaming dimensions belong
+    // to VIDEO_STREAM_INFORMATION. Full-scope native capture includes zoom 4K.
+    if(ca_media_photo_available(server->media)) {
+        info.resolution_h=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?640:3840;
+        info.resolution_v=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?512:2160;
+    }
+#endif
     put_text((char *)info.vendor_name, sizeof(info.vendor_name), "ArduPilot");
     put_text((char *)info.model_name, sizeof(info.model_name),
              APCAM_MODEL_NAME);
@@ -2006,7 +2022,7 @@ static void handle_system_time(struct ca_mavlink_server *server,
                                const mavlink_message_t *message)
 {
     /* Adopt the autopilot's UTC date if ours predates 1 September 2026 UTC. */
-#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+#ifdef CAMERA_APP_ZT30_RAM
     (void)server;(void)message;return;
 #else
     const time_t earliest_valid_time = 1788220800;
@@ -2231,6 +2247,9 @@ static void refresh_parameters(struct ca_mavlink_server *server)
     char error[160];
     ca_config_defaults(&parameters);
     if (ca_config_load(&parameters, server->config_path, error, sizeof(error)) == 0) {
+#ifdef CAMERA_APP_ZT30_DEV
+        APC_ZT30_Config::effective(parameters);
+#endif
         server->parameters = parameters;
     }
 }
@@ -2264,6 +2283,10 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
 /* Share runtime application between PARAM_SET, PARAM_EXT_SET and INI reload. */
 static bool live_config_parameter(size_t index)
 {
+#ifdef CAMERA_APP_ZT30_DEV
+    (void)index;
+    return false; // Native configuration is explicitly restart-only for now.
+#else
     const char *name = ca_config_param_name(index);
     if (strcmp(name, "PHOTO_SCOPE") == 0) return true;
     if (strcmp(name, "THERMAL_PALETTE") == 0) return APCAM_HAVE_THERMAL;
@@ -2271,6 +2294,7 @@ static bool live_config_parameter(size_t index)
     struct ca_camera_parameter p;
     return camera_index >= 0 && ca_camera_param_info((size_t)camera_index, &p) &&
         p.operation == CA_CAMERA_CONFIG;
+#endif
 }
 
 static int apply_runtime_config(struct ca_mavlink_server *server, const struct ca_config *next)
@@ -2690,7 +2714,14 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
     switch (p->operation) {
     case CA_CAMERA_MODE: return set_camera_mode(server,(unsigned)value)==MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_CONFIG:
+#ifdef CAMERA_APP_ZT30_DEV
+        if (ca_config_param_save(&server->parameters, server->config_path,
+                                 (size_t)p->config_index, value) < 0) return -1;
+        parameter_status(server, "Parameter saved; restart required");
+        return 0;
+#else
         return apply_camera_config(server, (size_t)p->config_index, value);
+#endif
     case CA_CAMERA_ZOOM:
         server->zoom_rate = 0;
         return !APCAM_ZOOM_SELECTS_LENS ? set_selected_zoom(server, value) :

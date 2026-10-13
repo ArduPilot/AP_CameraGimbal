@@ -942,3 +942,9 @@ zt30_thermal_start_budget-test:
 	mkdir -p build/tests
 	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_thermal_start_budget.cpp -o build/tests/zt30-thermal-start-budget-test
 	build/tests/zt30-thermal-start-budget-test
+
+.PHONY: zt30_jpeg_owner-test
+zt30_jpeg_owner-test:
+	mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror tests/test_zt30_jpeg_owner.cpp camera_app/src/backends/zt30/encoder_owner.cpp -o build/tests/zt30-jpeg-owner-test
+	build/tests/zt30-jpeg-owner-test
