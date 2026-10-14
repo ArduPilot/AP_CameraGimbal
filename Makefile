@@ -103,6 +103,10 @@ camera-definitions:
 camera-definition-test: camera-definitions
 	python3 tests/test_camera_definition.py
 
+.PHONY: survey-runtime-test
+survey-runtime-test:
+	python3 tests/test_survey_runtime.py
+
 release: camera-definitions
 	+python3 tools/build_release.py --make '$(MAKE)' --version '$(MT11_VERSION)' \
 		--output '$(RELEASE_ROOT)' --targets $(RELEASE_TARGETS)

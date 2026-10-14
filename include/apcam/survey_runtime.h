@@ -17,6 +17,9 @@ inline bool apcam_survey_status_path(const char *config, char *path, size_t size
     if (!root || !*root) root = getenv("TEMP");
     if (!root || !*root) root = ".";
 #else
+    // Embedded launchers set TMP to their writable RAM filesystem; /tmp
+    // can belong to a read-only rootfs (as on MT11).
+    if (!root || !*root) root = getenv("TMP");
     if (!root || !*root) root = "/tmp";
 #endif
     const int n = snprintf(path, size, "%s/apcam-survey-%016llx.json", root,

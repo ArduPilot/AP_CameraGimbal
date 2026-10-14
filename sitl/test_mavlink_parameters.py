@@ -25,7 +25,7 @@ def survey_status_path(config):
     value = 14695981039346656037
     for byte in os.fsencode(config):
         value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
-    root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else "/tmp")
+    root = os.environ.get("TMPDIR") or (os.environ.get("TEMP", ".") if os.name == "nt" else os.environ.get("TMP") or "/tmp")
     return pathlib.Path(root) / f"apcam-survey-{value:016x}.json"
 
 
