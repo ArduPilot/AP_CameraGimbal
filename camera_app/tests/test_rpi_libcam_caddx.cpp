@@ -8,6 +8,7 @@
 #include <math.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -154,9 +155,40 @@ static void single_stream_support_proxy(void)
     }
 }
 
+/* VIDEO_MAIN_KBPS and VIDEO_MAIN_FPS: defaults, range checks and the ini keys. */
+static void video_encoder_settings(void)
+{
+    struct ca_config c;
+    ca_config_defaults(&c);
+    assert(c.main_bitrate_kbps == 4096 && c.main_frame_rate == 30);
+    int bitrate = ca_config_param_find("VIDEO_MAIN_KBPS");
+    int rate = ca_config_param_find("VIDEO_MAIN_FPS");
+    assert(bitrate >= 0 && rate >= 0);
+    assert(ca_config_param_assign(&c, (size_t)bitrate, 8000) == 0 && c.main_bitrate_kbps == 8000);
+    assert(ca_config_param_assign(&c, (size_t)bitrate, 999) < 0 && c.main_bitrate_kbps == 8000);
+    assert(ca_config_param_assign(&c, (size_t)bitrate, 20001) < 0 && c.main_bitrate_kbps == 8000);
+    assert(ca_config_param_assign(&c, (size_t)rate, 15) == 0 && c.main_frame_rate == 15);
+    assert(ca_config_param_assign(&c, (size_t)rate, 4) < 0 && c.main_frame_rate == 15);
+    assert(ca_config_param_assign(&c, (size_t)rate, 31) < 0 && c.main_frame_rate == 15);
+
+    char path[] = "/tmp/camera-video-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    const char ini[] = "[stream.main]\nbitrate_kbps = 12000\nframe_rate = 25\n";
+    assert(write(fd, ini, sizeof(ini) - 1) == (ssize_t)(sizeof(ini) - 1));
+    close(fd);
+    struct ca_config loaded;
+    ca_config_defaults(&loaded);
+    char error[256] = "";
+    assert(ca_config_load(&loaded, path, error, sizeof(error)) == 0);
+    assert(loaded.main_bitrate_kbps == 12000 && loaded.main_frame_rate == 25);
+    unlink(path);
+}
+
 int main(void)
 {
     single_stream_support_proxy();
+    video_encoder_settings();
     struct ca_config settings;
     ca_config_defaults(&settings);
     struct ca_rpi_image_controls c;
