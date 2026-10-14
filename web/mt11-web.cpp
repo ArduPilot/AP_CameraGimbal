@@ -669,6 +669,14 @@ static const struct parameter replacement_parameters[] = {
      PARAM_ENUM, 0, 0, 0, main_resolution_options, sizeof(main_resolution_options) / sizeof(main_resolution_options[0])},
     {"main_codec", "stream.main", "codec", S_P_MAIN_CODEC, S_H_MAIN_CODEC,
      PARAM_ENUM, 0, 0, 0, replacement_codec_options, sizeof(replacement_codec_options) / sizeof(replacement_codec_options[0])},
+#if APCAM_HAVE_VIDEO_BITRATE
+    {"main_bitrate", "stream.main", "bitrate_kbps", S_P_MAIN_BITRATE, S_H_MAIN_BITRATE,
+     PARAM_INTEGER, APCAM_MAIN_BITRATE_MIN_KBPS, APCAM_MAIN_BITRATE_MAX_KBPS, 1, NULL, 0},
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+    {"main_frame_rate", "stream.main", "frame_rate", S_P_MAIN_FPS, S_H_MAIN_FPS,
+     PARAM_INTEGER, APCAM_MAIN_FPS_MIN, APCAM_FRAME_RATE, 1, NULL, 0},
+#endif
     {"sub_resolution", "stream.sub", "resolution", S_P_SUB_RESOLUTION,
      TARGET_TEXT(S_H_SUB_RESOLUTION_MT11, S_H_SUB_RESOLUTION_A8),
      PARAM_ENUM, 0, 0, 0, sub_resolution_options, sizeof(sub_resolution_options) / sizeof(sub_resolution_options[0])},
@@ -803,6 +811,12 @@ static const char *replacement_defaults[] = {
     "5", "5",
 #endif
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_MAIN_RESOLUTION), "h264",
+#if APCAM_HAVE_VIDEO_BITRATE
+    APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS),
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+    APCAM_STRING_VALUE(APCAM_FRAME_RATE),
+#endif
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_SUB_RESOLUTION), "h264",
     APCAM_DEFAULT_MAIN_ALIAS, APCAM_DEFAULT_SUB_ALIAS,
     APCAM_RESOLUTION_NAME(APCAM_DEFAULT_RECORDING_RESOLUTION), "false",

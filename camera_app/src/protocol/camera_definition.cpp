@@ -79,6 +79,9 @@ static const struct ca_camera_parameter parameters[] = {
 #if APCAM_HAVE_PHOTO_RESOLUTION
     CONFIG("PHOTO_RES", "Photo resolution (larger sizes briefly pause video)"),
 #endif
+#if APCAM_HAVE_VIDEO_BITRATE
+    CONFIG("VIDEO_MAIN_KBPS", "Main RTSP bitrate (kbps)"),
+#endif
     CONFIG("OSD_CROSS", "Targeting cross"),
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
     CONFIG("OSD_RECORD", "Overlays in recordings"),

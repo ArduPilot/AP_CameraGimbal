@@ -38,6 +38,39 @@
 #ifndef APCAM_HAVE_RECORDING_RESOLUTION
 #define APCAM_HAVE_RECORDING_RESOLUTION 1
 #endif
+/* Main stream encoder settings. A target opts in to each separately:
+ *   APCAM_HAVE_VIDEO_BITRATE     VIDEO_MAIN_KBPS    ([stream.main] bitrate_kbps)
+ *   APCAM_HAVE_VIDEO_FRAME_RATE  VIDEO_MAIN_FPS     ([stream.main] frame_rate)
+ * The settings are in struct ca_config as main_bitrate_kbps and main_frame_rate.
+ * To adopt one, define its flag, then have the backend read the value where it
+ * opens its encoder instead of a fixed rate (the Pi backend does this in
+ * rpi_libcam/media.cpp). Both are saved in the ini and applied after a restart,
+ * except that a backend can apply a new bitrate while running by acting on it in
+ * apply_image(); also add VIDEO_MAIN_KBPS to camera_definition.cpp so ground
+ * stations see it as a live setting. A target with a separate sub stream adds the
+ * same pair for it. The defaults are APCAM_DEFAULT_MAIN_BITRATE_KBPS and
+ * APCAM_FRAME_RATE, which is also the highest frame rate offered.
+ * A backend with its own bitrate rule (for example by resolution) can define
+ * APCAM_MAIN_BITRATE_MIN_KBPS and APCAM_DEFAULT_MAIN_BITRATE_KBPS as 0, meaning
+ * automatic: it then applies its rule when the setting is 0. */
+#ifndef APCAM_HAVE_VIDEO_BITRATE
+#define APCAM_HAVE_VIDEO_BITRATE 0
+#endif
+#ifndef APCAM_HAVE_VIDEO_FRAME_RATE
+#define APCAM_HAVE_VIDEO_FRAME_RATE 0
+#endif
+#ifndef APCAM_DEFAULT_MAIN_BITRATE_KBPS
+#define APCAM_DEFAULT_MAIN_BITRATE_KBPS 4096
+#endif
+#ifndef APCAM_MAIN_BITRATE_MIN_KBPS
+#define APCAM_MAIN_BITRATE_MIN_KBPS 1000
+#endif
+#ifndef APCAM_MAIN_BITRATE_MAX_KBPS
+#define APCAM_MAIN_BITRATE_MAX_KBPS 20000
+#endif
+#ifndef APCAM_MAIN_FPS_MIN
+#define APCAM_MAIN_FPS_MIN 5
+#endif
 /* Targets on a host OS which owns networking set this to 0. */
 #ifndef APCAM_HAVE_NETWORK_CONFIG
 #define APCAM_HAVE_NETWORK_CONFIG 1

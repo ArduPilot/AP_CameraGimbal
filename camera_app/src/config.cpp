@@ -37,6 +37,12 @@ void ca_config_defaults(struct ca_config *config)
     memset(config, 0, sizeof(*config));
     memcpy(config->timezone, APCAM_DEFAULT_TIMEZONE, sizeof(APCAM_DEFAULT_TIMEZONE));
     config->photo_scope = (enum ca_photo_scope)APCAM_DEFAULT_PHOTO_SCOPE;
+#if APCAM_HAVE_VIDEO_BITRATE
+    config->main_bitrate_kbps = APCAM_DEFAULT_MAIN_BITRATE_KBPS;
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+    config->main_frame_rate = APCAM_FRAME_RATE;
+#endif
     config->orientation = (enum ca_mount_orientation)APCAM_DEFAULT_ORIENTATION;
     config->uart_protocol = CA_UART_NONE;
     config->thermal_palette = CA_PALETTE_WHITE_HOT;
@@ -462,14 +468,20 @@ int ca_config_param_save(struct ca_config *config, const char *path,
     return 0;
 }
 
-/* The photo size travels with the image settings to the media backend. */
+/* The photo size and the video bitrate travel with the image settings to the
+ * media backend, which applies them while running. */
 #if APCAM_HAVE_PHOTO_RESOLUTION
-#define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
-    X(iso) X(shutter) X(metering) X(white_balance) X(photo_resolution)
+#define PHOTO_FIELDS(X) X(photo_resolution)
 #else
-#define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
-    X(iso) X(shutter) X(metering) X(white_balance)
+#define PHOTO_FIELDS(X)
 #endif
+#if APCAM_HAVE_VIDEO_BITRATE
+#define ENCODER_FIELDS(X) X(main_bitrate_kbps)
+#else
+#define ENCODER_FIELDS(X)
+#endif
+#define IMAGE_FIELDS(X) X(brightness) X(saturation) X(contrast) X(exposure_compensation) \
+    X(iso) X(shutter) X(metering) X(white_balance) PHOTO_FIELDS(X) ENCODER_FIELDS(X)
 
 bool ca_config_image_equal(const struct ca_config *a, const struct ca_config *b)
 {
