@@ -112,23 +112,33 @@ const char *ca_uart_protocol_name(enum ca_uart_protocol protocol)
     return "none";
 }
 
+/* Indexed by enum ca_video_resolution. */
+static const struct {
+    const char *name;
+    unsigned width, height;
+} video_resolutions[] = {
+    {"1280x720", 1280U, 720U},   {"1920x1080", 1920U, 1080U}, {"3840x2160", 3840U, 2160U},
+    {"2560x1440", 2560U, 1440U}, {"960x540", 960U, 540U},     {"854x480", 854U, 480U},
+    {"640x360", 640U, 360U},     {"426x240", 426U, 240U},     {"320x180", 320U, 180U},
+};
+
+static size_t video_resolution_index(enum ca_video_resolution resolution)
+{
+    return (unsigned)resolution < sizeof(video_resolutions) / sizeof(video_resolutions[0])
+        ? (size_t)resolution : (size_t)CA_VIDEO_1080P;
+}
+
 const char *ca_video_resolution_name(enum ca_video_resolution resolution)
 {
-    if (resolution == CA_VIDEO_720P) return "1280x720";
-    if (resolution == CA_VIDEO_1440P) return "2560x1440";
-    if (resolution == CA_VIDEO_2160P) return "3840x2160";
-    return "1920x1080";
+    return video_resolutions[video_resolution_index(resolution)].name;
 }
 
 void ca_video_resolution_size(enum ca_video_resolution resolution,
                               unsigned *width, unsigned *height)
 {
-    unsigned w = 1920U, h = 1080U;
-    if (resolution == CA_VIDEO_720P) { w = 1280U; h = 720U; }
-    else if (resolution == CA_VIDEO_1440P) { w = 2560U; h = 1440U; }
-    else if (resolution == CA_VIDEO_2160P) { w = 3840U; h = 2160U; }
-    if (width != NULL) *width = w;
-    if (height != NULL) *height = h;
+    size_t i = video_resolution_index(resolution);
+    if (width != NULL) *width = video_resolutions[i].width;
+    if (height != NULL) *height = video_resolutions[i].height;
 }
 
 const char *ca_video_codec_name(enum ca_video_codec codec)

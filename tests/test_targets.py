@@ -19,7 +19,8 @@ recording_defaults = {
     'z1mini': '1920x1080',
     'rpi_libcam_caddx': '1920x1080',
 }
-resolutions = ('1280x720', '1920x1080', '3840x2160', '2560x1440')
+resolutions = ('1280x720', '1920x1080', '3840x2160', '2560x1440', '960x540', '854x480',
+               '640x360', '426x240', '320x180')
 with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
     for name, target in TARGETS.items():
         binary = str(Path(temp) / name)

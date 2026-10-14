@@ -92,7 +92,10 @@
 #endif
 /* String forms for configuration defaults; numeric IDs remain stable. */
 #define APCAM_RESOLUTION_NAME(value) ((value) == APCAM_RES_720P ? "1280x720" : \
-    (value) == APCAM_RES_1080P ? "1920x1080" : (value) == APCAM_RES_1440P ? "2560x1440" : "3840x2160")
+    (value) == APCAM_RES_1080P ? "1920x1080" : (value) == APCAM_RES_1440P ? "2560x1440" : \
+    (value) == APCAM_RES_540P ? "960x540" : (value) == APCAM_RES_480P ? "854x480" : \
+    (value) == APCAM_RES_360P ? "640x360" : (value) == APCAM_RES_240P ? "426x240" : \
+    (value) == APCAM_RES_180P ? "320x180" : "3840x2160")
 #define APCAM_STRING_VALUE_(value) #value
 #define APCAM_STRING_VALUE(value) APCAM_STRING_VALUE_(value)
 #endif

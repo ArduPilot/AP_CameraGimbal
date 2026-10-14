@@ -100,6 +100,11 @@ enum string_id {
     S_OPT_RES_1080,
     S_OPT_RES_4K,
     S_OPT_RES_1440,
+    S_OPT_RES_540,
+    S_OPT_RES_480,
+    S_OPT_RES_360,
+    S_OPT_RES_240,
+    S_OPT_RES_180,
     S_OPT_CODEC_H264,
     S_OPT_CODEC_H265,
     S_OPT_PAL_WHITE_HOT,
@@ -699,7 +704,7 @@ static constexpr Translations translations = [] {
     result[S_OPT_SCOPE_THERMAL] = {"Thermal only", "仅热成像", "サーマルのみ"};
     result[S_OPT_SCOPE_ALL] = {"All lenses", "全部镜头", "すべてのレンズ"};
 #if APCAM_HAVE_PHOTO_RESOLUTION
-    result[S_OPT_PHOTO_RES_VIDEO] = {"Video frame 1920x1080 (no pause)", "视频帧 1920x1080（不中断）", "動画フレーム 1920x1080（中断なし）"};
+    result[S_OPT_PHOTO_RES_VIDEO] = {"Video frame (no pause)", "视频帧（不中断）", "動画フレーム（中断なし）"};
     result[S_OPT_PHOTO_RES_BINNED] = {"Binned sensor " APCAM_PHOTO_BINNED_NAME " (pauses video)", "传感器合并模式 " APCAM_PHOTO_BINNED_NAME "（暂停视频）", "ビニング " APCAM_PHOTO_BINNED_NAME "（動画を一時停止）"};
     result[S_OPT_PHOTO_RES_FULL] = {"Full sensor " APCAM_PHOTO_FULL_NAME " (pauses video)", "传感器全分辨率 " APCAM_PHOTO_FULL_NAME "（暂停视频）", "フル解像度 " APCAM_PHOTO_FULL_NAME "（動画を一時停止）"};
 #endif
@@ -713,6 +718,11 @@ static constexpr Translations translations = [] {
     result[S_OPT_RES_1080] = {"1920 x 1080", "1920 x 1080", "1920 x 1080"};
     result[S_OPT_RES_1440] = {"2560 x 1440", "2560 x 1440", "2560 x 1440"};
     result[S_OPT_RES_4K] = {"3840 x 2160 / 4K", "3840 x 2160 / 4K", "3840 x 2160 / 4K"};
+    result[S_OPT_RES_540] = {"960 x 540", "960 x 540", "960 x 540"};
+    result[S_OPT_RES_480] = {"854 x 480", "854 x 480", "854 x 480"};
+    result[S_OPT_RES_360] = {"640 x 360", "640 x 360", "640 x 360"};
+    result[S_OPT_RES_240] = {"426 x 240", "426 x 240", "426 x 240"};
+    result[S_OPT_RES_180] = {"320 x 180", "320 x 180", "320 x 180"};
     result[S_OPT_CODEC_H264] = {"H.264 / AVC", "H.264 / AVC", "H.264 / AVC"};
     result[S_OPT_CODEC_H265] = {"H.265 / HEVC", "H.265 / HEVC", "H.265 / HEVC"};
     result[S_OPT_PAL_WHITE_HOT] = {"White hot", "白热", "ホワイトホット"};
