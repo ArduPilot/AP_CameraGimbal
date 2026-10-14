@@ -185,8 +185,51 @@ static void video_encoder_settings(void)
     unlink(path);
 }
 
+/* The main resolutions on offer: names, sizes and the ini key. */
+static void main_resolutions(void)
+{
+    static const struct { enum ca_video_resolution id; const char *name; unsigned width, height; } sizes[] = {
+        {CA_VIDEO_1080P, "1920x1080", 1920, 1080}, {CA_VIDEO_720P, "1280x720", 1280, 720},
+        {CA_VIDEO_540P, "960x540", 960, 540}, {CA_VIDEO_480P, "854x480", 854, 480},
+        {CA_VIDEO_360P, "640x360", 640, 360}, {CA_VIDEO_240P, "426x240", 426, 240},
+        {CA_VIDEO_180P, "320x180", 320, 180},
+    };
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        unsigned width = 0, height = 0;
+        ca_video_resolution_size(sizes[i].id, &width, &height);
+        assert(width == sizes[i].width && height == sizes[i].height);
+        assert(strcmp(ca_video_resolution_name(sizes[i].id), sizes[i].name) == 0);
+        char path[] = "/tmp/camera-res-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        char ini[64];
+        int n = snprintf(ini, sizeof(ini), "[stream.main]\nresolution = %s\n", sizes[i].name);
+        assert(write(fd, ini, (size_t)n) == n);
+        close(fd);
+        struct ca_config loaded;
+        ca_config_defaults(&loaded);
+        char error[256] = "";
+        assert(ca_config_load(&loaded, path, error, sizeof(error)) == 0);
+        assert(loaded.main_resolution == sizes[i].id);
+        unlink(path);
+    }
+    /* The encoder stops at 1080p, so larger sizes are not accepted. */
+    char path[] = "/tmp/camera-res-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    const char ini[] = "[stream.main]\nresolution = 3840x2160\n";
+    assert(write(fd, ini, sizeof(ini) - 1) == (ssize_t)(sizeof(ini) - 1));
+    close(fd);
+    struct ca_config rejected;
+    ca_config_defaults(&rejected);
+    char error[256] = "";
+    assert(ca_config_load(&rejected, path, error, sizeof(error)) < 0);
+    unlink(path);
+}
+
 int main(void)
 {
+    main_resolutions();
     single_stream_support_proxy();
     video_encoder_settings();
     struct ca_config settings;
