@@ -6,8 +6,12 @@ XFRobot C20-T. It runs alongside [Rpanion-server](https://github.com/stephendade
 keeps ownership of networking and the flight-controller link.
 
 Video is captured with libcamera and encoded by the Pi 4 / CM4 hardware H.264
-encoder. A single 1080p stream is served at `rtsp://<pi>:8554/video1` and
-used for recording. Its bitrate (default 4096 kbps, 1000 to 20000) and frame
+encoder. A single stream is served at `rtsp://<pi>:8554/video1` and used for
+recording, at the main resolution: 1920x1080 (default), 1280x720, 960x540,
+854x480, 640x360, 426x240 or 320x180, set by `[stream.main] resolution` and the
+`VIDEO_MAIN_RES` parameter, and on the web Parameters page. Smaller sizes need
+less bandwidth. The size applies without restarting the camera app, but not
+while recording. Its bitrate (default 4096 kbps, 1000 to 20000) and frame
 rate (default 30, the most the encoder handles at 1080p; 5 to 30) are
 `[stream.main] bitrate_kbps` and `frame_rate` in `camera.ini`, the MAVLink
 parameters `VIDEO_MAIN_KBPS` and `VIDEO_MAIN_FPS`, and on the web Parameters
@@ -28,7 +32,7 @@ resolution` (MAVLink parameter `PHOTO_RES`, also on the web Parameters page):
 
 | Setting | Photo | Video during the photo |
 |---|---|---|
-| `video` (default) | 1920x1080 video frame | not interrupted |
+| `video` (default) | video frame at the main resolution | not interrupted |
 | `2028x1520` | 2x2 binned sensor, full field of view | paused about 0.5 s |
 | `4056x3040` | full sensor resolution | paused about 0.7 s |
 

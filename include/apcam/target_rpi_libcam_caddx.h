@@ -75,8 +75,10 @@
 #define APCAM_THERMAL_FRAME_RATE 0
 #define APCAM_THERMAL_STREAM_WIDTH 0
 #define APCAM_THERMAL_STREAM_HEIGHT 0
-/* One encoded 1080p stream serves the RTSP path (/video1) and recording. */
-#define APCAM_MAIN_RESOLUTIONS APCAM_RES_MASK_1080P
+/* One encoded stream serves the RTSP path (/video1) and recording. The hardware
+ * encoder stops at 1080p; smaller sizes save bandwidth. */
+#define APCAM_MAIN_RESOLUTIONS (APCAM_RES_MASK_1080P | APCAM_RES_MASK_720P | APCAM_RES_MASK_540P | \
+    APCAM_RES_MASK_480P | APCAM_RES_MASK_360P | APCAM_RES_MASK_240P | APCAM_RES_MASK_180P)
 #define APCAM_SUB_RESOLUTIONS APCAM_RES_MASK_1080P
 #define APCAM_RECORDING_RESOLUTIONS APCAM_RES_MASK_1080P
 #define APCAM_STREAM_CODECS 1

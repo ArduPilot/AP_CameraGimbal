@@ -29,6 +29,7 @@ class APC_Media_RPiLibcam;
 struct APC_Media_RPiLibcam_State {
     struct ca_media_config config;
     atomic_bool ready, recording;
+    unsigned width, height; /* the main resolution; recordings use it too */
     bool wait_key, have_pts;
     pthread_mutex_t lock;
     struct ca_rtsp *rtsp;
@@ -49,9 +50,9 @@ struct APC_Media_RPiLibcam_State {
  * waits for it, so keep the failure case short. */
 #define RPI_MODE_SWITCH_TIMEOUT_MS 1500U
 
-// One 1080p H.264 stream from libcamera and the Pi 4 / CM4 encoder serves the RTSP
-// path, the web live view and recording. The pipeline's encoder thread is
-// joined before any of those outputs are released.
+// One H.264 stream from libcamera and the Pi 4 / CM4 encoder, at the main
+// resolution, serves the RTSP path, the web live view and recording. The
+// pipeline's encoder thread is joined before any of those outputs are released.
 class APC_Media_RPiLibcam final : public APC_Media_Backend {
 public:
     ~APC_Media_RPiLibcam() override { shutdown(); }
@@ -137,37 +138,39 @@ int APC_Media_RPiLibcam::init(const struct ca_media_config *c)
 {
     if (!c || !c->backend || strcmp(c->backend, APCAM_NAME) ||
         !c->record_root || !c->capture_root) { errno = EINVAL; return -1; }
-    if (c->settings.main_resolution != CA_VIDEO_1080P ||
-        c->settings.recording_resolution != CA_VIDEO_1080P ||
-        c->settings.main_codec != CA_VIDEO_H264) {
-        ca_log("RPi media requires a 1080p H264 stream and 1080p recording");
+    if (c->settings.main_codec != CA_VIDEO_H264) {
+        ca_log("RPi media requires an H264 stream");
         errno = ENOTSUP; return -1;
     }
     auto *m = new (std::nothrow) APC_Media_RPiLibcam_State{};
     if (!m) { errno = ENOMEM; return -1; }
     _state = m;
     m->config = *c;
+    ca_video_resolution_size(c->settings.main_resolution, &m->width, &m->height);
     pthread_mutex_init(&m->lock, NULL);
     pthread_mutex_init(&m->photo_lock, NULL);
     atomic_init(&m->photo_resolution, (int)c->settings.photo_resolution);
-    const unsigned fps = c->frame_rate ? c->frame_rate : APCAM_FRAME_RATE;
+    /* Read the running settings, not the startup values in c: this also runs when
+     * the resolution changes, and a bitrate changed since startup must stay. */
+    const unsigned fps = c->settings.main_frame_rate;
+    m->config.frame_rate = fps;
     struct ca_rpi_pipeline_config pipeline = {
-        .width = 1920, .height = 1080, .frame_rate = fps,
-        .bit_rate_kbps = c->bit_rate_kbps ? c->bit_rate_kbps : 4096,
+        .width = m->width, .height = m->height, .frame_rate = fps,
+        .bit_rate_kbps = c->settings.main_bitrate_kbps,
         .inverted = c->settings.orientation == CA_MOUNT_INVERTED,
         .image = c->settings,
         .frame = consume, .exposure = consume_exposure, .opaque = m,
     };
     if (ca_rtsp_open(&m->rtsp, c->rtsp_port, "video1", CA_VIDEO_H264, fps) < 0 ||
         ca_live_video_server_open(&m->live, c->rtsp_port + 1U) < 0 ||
-        ca_live_video_server_configure(m->live, 0, 1920, 1080, fps, true) < 0) goto fail;
+        ca_live_video_server_configure(m->live, 0, m->width, m->height, fps, true) < 0) goto fail;
     ca_rtsp_add_config_aliases(m->rtsp, &c->settings);
     if (ca_rtsp_support_proxy(m->rtsp, &c->settings.support) < 0)
         ca_log("RPi SupportProxy startup failed: %s", strerror(errno));
     if (ca_rpi_pipeline_open(&m->pipeline, &pipeline) < 0) goto fail;
     for (unsigned i = 0; i < 50 && !atomic_load(&m->ready); i++) usleep(100000);
     if (!atomic_load(&m->ready)) { ca_log("RPi no encoded video within 5s"); errno = ETIMEDOUT; goto fail; }
-    ca_log("RPi media ready: libcamera -> 1080p%u H264", fps);
+    ca_log("RPi media ready: libcamera -> %ux%u@%u H264", m->width, m->height, fps);
     return 0;
 fail:;
     int saved = errno; shutdown(); errno = saved; return -1;
@@ -188,7 +191,7 @@ int APC_Media_RPiLibcam::set_recording(bool active)
         int n = snprintf(m->path, sizeof(m->path), "%s/RPI_%lld_%09ld.mp4",
                          m->config.record_root, (long long)now.tv_sec, now.tv_nsec);
         if (n < 0 || n >= (int)sizeof(m->path)) { errno = ENAMETOOLONG; result = -1; goto done; }
-        if (ca_mp4_open(&m->mp4, m->path, 1920, 1080, frame_rate(false)) < 0) { result = -1; goto done; }
+        if (ca_mp4_open(&m->mp4, m->path, m->width, m->height, frame_rate(false)) < 0) { result = -1; goto done; }
         m->wait_key = true;
         atomic_store(&m->recording, true);
     } else {
