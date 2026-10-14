@@ -980,13 +980,26 @@ static unsigned stream_count()
     return APCAM_NUM_STREAMS + (ca_thermal_stream_available() ? 1U : 0U);
 }
 
+/* The main stream bitrate in bits per second, as MAVLink reports it. A target
+ * without the setting, or with it set to automatic (0), reports the nominal
+ * 4096 kbps. */
+static uint32_t main_bitrate_bps(const struct ca_mavlink_server *server)
+{
+#if APCAM_HAVE_VIDEO_BITRATE
+    if (server->settings.main_bitrate_kbps) return server->settings.main_bitrate_kbps * 1000U;
+#else
+    (void)server;
+#endif
+    return 4096000U;
+}
+
 static void send_stream_information(struct ca_mavlink_server *server,
                                     const struct route *route,
                                     unsigned stream_id)
 {
     mavlink_message_t message;
     mavlink_video_stream_information_t info = {};
-    info.bitrate = 4096000U;
+    info.bitrate = main_bitrate_bps(server);
     info.count = stream_count();
     info.type = VIDEO_STREAM_TYPE_RTSP;
     unsigned width, height;
@@ -1053,7 +1066,7 @@ static void send_stream_status(struct ca_mavlink_server *server,
 {
     mavlink_message_t message;
     mavlink_video_stream_status_t status = {};
-    status.bitrate = 4096000U;
+    status.bitrate = main_bitrate_bps(server);
     unsigned width, height;
     enum ca_video_codec codec;
     if (stream_id < 1U || stream_id > stream_count()) stream_id = 1U;

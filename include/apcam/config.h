@@ -169,6 +169,12 @@ struct ca_config {
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;
+#if defined(APCAM_HAVE_VIDEO_BITRATE) && APCAM_HAVE_VIDEO_BITRATE
+    unsigned main_bitrate_kbps;
+#endif
+#if defined(APCAM_HAVE_VIDEO_FRAME_RATE) && APCAM_HAVE_VIDEO_FRAME_RATE
+    unsigned main_frame_rate;
+#endif
 #if defined(APCAM_HAVE_PHOTO_RESOLUTION) && APCAM_HAVE_PHOTO_RESOLUTION
     enum ca_photo_resolution photo_resolution;
 #endif

@@ -419,8 +419,16 @@ int APC_CameraApp::run(int argc, char **argv)
         .rtsp_port = rtsp_port,
         .width = 1920,
         .height = 1080,
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+        .frame_rate = app_config.main_frame_rate,
+#else
         .frame_rate = APCAM_FRAME_RATE,
-        .bit_rate_kbps = 4096,
+#endif
+#if APCAM_HAVE_VIDEO_BITRATE
+        .bit_rate_kbps = app_config.main_bitrate_kbps,
+#else
+        .bit_rate_kbps = APCAM_DEFAULT_MAIN_BITRATE_KBPS,
+#endif
         .settings = app_config,
     };
     char network_error[256] = "";

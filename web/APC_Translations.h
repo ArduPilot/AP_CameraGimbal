@@ -127,6 +127,14 @@ enum string_id {
     S_H_TIMEZONE,
     S_P_PHOTO_SCOPE,
     S_H_PHOTO_SCOPE,
+#if APCAM_HAVE_VIDEO_BITRATE
+    S_P_MAIN_BITRATE,
+    S_H_MAIN_BITRATE,
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+    S_P_MAIN_FPS,
+    S_H_MAIN_FPS,
+#endif
 #if APCAM_HAVE_PHOTO_RESOLUTION
     S_P_PHOTO_RESOLUTION,
     S_H_PHOTO_RESOLUTION,
@@ -732,6 +740,36 @@ static constexpr Translations translations = [] {
     result[S_H_TIMEZONE] = {"Built-in IANA timezone name. GMT (UTC+0) is the default; daylight saving is automatic.", "内置 IANA 时区名称。默认为 GMT（UTC+0），自动应用夏令时。", "内蔵 IANA タイムゾーン名。デフォルトは GMT（UTC+0）で、夏時間は自動適用されます。"};
     result[S_P_PHOTO_SCOPE] = {"Photo capture scope", "拍照范围", "静止画の撮影範囲"};
     result[S_H_PHOTO_SCOPE] = {"Thermal saves the radiometric plane only. All saves both visible lenses, the thermal display and the radiometric plane.", "“仅热成像”只保存辐射测温数据；“全部镜头”保存两个可见光镜头的图像、热成像显示图像和辐射测温数据。", "「サーマルのみ」は放射温度データのみを保存します。「すべてのレンズ」は 2 つの可視光レンズの画像、サーマル表示画像、放射温度データをすべて保存します。"};
+/* A target whose backend has its own bitrate rule sets the minimum to 0 for automatic. */
+#if APCAM_MAIN_BITRATE_MIN_KBPS == 0
+#define MAIN_BITRATE_AUTO_EN " 0 selects the camera's own automatic bitrate."
+#define MAIN_BITRATE_AUTO_ZH "0 表示由相机自动选择码率。"
+#define MAIN_BITRATE_AUTO_JA "0 はカメラの自動設定です。"
+#else
+#define MAIN_BITRATE_AUTO_EN ""
+#define MAIN_BITRATE_AUTO_ZH ""
+#define MAIN_BITRATE_AUTO_JA ""
+#endif
+#if APCAM_HAVE_VIDEO_BITRATE
+    result[S_P_MAIN_BITRATE] = {"Main RTSP bitrate (kbps)", "主 RTSP 流码率 (kbps)", "メイン RTSP ビットレート (kbps)"};
+    result[S_H_MAIN_BITRATE] = {
+        "Bitrate in kbps for the RTSP stream and recordings, " APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "–" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "; default " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "." MAIN_BITRATE_AUTO_EN " Applies immediately, without a restart.",
+        "用于 RTSP 流和录像的码率 (kbps)，" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "–" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "，默认 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。" MAIN_BITRATE_AUTO_ZH "立即生效，无需重启。",
+        "RTSP 配信と録画のビットレート (kbps)、" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MIN_KBPS) "～" APCAM_STRING_VALUE(APCAM_MAIN_BITRATE_MAX_KBPS)
+            "、初期値 " APCAM_STRING_VALUE(APCAM_DEFAULT_MAIN_BITRATE_KBPS) "。" MAIN_BITRATE_AUTO_JA "再起動なしで即時反映されます。"};
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+    result[S_P_MAIN_FPS] = {"Main RTSP frame rate (fps)", "主 RTSP 流帧率 (fps)", "メイン RTSP フレームレート (fps)"};
+    result[S_H_MAIN_FPS] = {
+        APCAM_STRING_VALUE(APCAM_MAIN_FPS_MIN) "–" APCAM_STRING_VALUE(APCAM_FRAME_RATE) " fps; default " APCAM_STRING_VALUE(APCAM_FRAME_RATE)
+            ", the highest rate this camera supports. Applies after the camera app restarts.",
+        APCAM_STRING_VALUE(APCAM_MAIN_FPS_MIN) "–" APCAM_STRING_VALUE(APCAM_FRAME_RATE) " fps，默认 " APCAM_STRING_VALUE(APCAM_FRAME_RATE)
+            "，为本相机支持的最高帧率。重启相机程序后生效。",
+        APCAM_STRING_VALUE(APCAM_MAIN_FPS_MIN) "～" APCAM_STRING_VALUE(APCAM_FRAME_RATE) " fps、初期値 " APCAM_STRING_VALUE(APCAM_FRAME_RATE)
+            "（このカメラが対応する最高値）。カメラアプリの再起動後に反映されます。"};
+#endif
 #if APCAM_HAVE_PHOTO_RESOLUTION
     result[S_P_PHOTO_RESOLUTION] = {"Photo resolution", "照片分辨率", "写真の解像度"};
     result[S_H_PHOTO_RESOLUTION] = {"A video frame is captured without interrupting streaming or recording. Larger photos switch the camera sensor mode, pausing video and recording for under a second per photo (about 0.5 s binned, 0.7 s full), and also show the full sensor height.", "视频帧拍照不会中断视频流或录像。更大的照片需要切换传感器模式，每张照片会暂停视频和录像不到一秒（合并模式约 0.5 秒，全分辨率约 0.7 秒），并包含传感器的完整高度。", "動画フレームはストリーミングや録画を中断せずに撮影します。より大きな写真はセンサーモードを切り替えるため、1 枚ごとに動画と録画が 1 秒未満（ビニング約 0.5 秒、フル解像度約 0.7 秒）停止し、センサーの全高を写します。"};

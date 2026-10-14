@@ -225,6 +225,16 @@ private:
         {"stream.main", "codec", Kind::Enum, offsetof(struct ca_config, main_codec),
          sizeof(((struct ca_config *)0)->main_codec), codec_options,
          sizeof(codec_options) / sizeof(codec_options[0]), 0, 0, "VIDEO_MAIN_CODEC"},
+#if APCAM_HAVE_VIDEO_BITRATE
+        {"stream.main", "bitrate_kbps", Kind::Uint, offsetof(struct ca_config, main_bitrate_kbps),
+         sizeof(((struct ca_config *)0)->main_bitrate_kbps), NULL, 0U,
+         APCAM_MAIN_BITRATE_MIN_KBPS, APCAM_MAIN_BITRATE_MAX_KBPS, "VIDEO_MAIN_KBPS"},
+#endif
+#if APCAM_HAVE_VIDEO_FRAME_RATE
+        {"stream.main", "frame_rate", Kind::Uint, offsetof(struct ca_config, main_frame_rate),
+         sizeof(((struct ca_config *)0)->main_frame_rate), NULL, 0U,
+         APCAM_MAIN_FPS_MIN, APCAM_FRAME_RATE, "VIDEO_MAIN_FPS"},
+#endif
         {"stream.sub", "resolution", Kind::Enum,
          offsetof(struct ca_config, sub_resolution),
          sizeof(((struct ca_config *)0)->sub_resolution), sub_resolution_options,
