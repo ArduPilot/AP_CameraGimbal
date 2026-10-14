@@ -16,6 +16,7 @@ static bool fail_set;
 static unsigned failure_logs, forwarded;
 static char success_log[256];
 void ca_mavlink_server_suspend_gimbal(ca_mavlink_server *) {}
+bool ca_mavlink_server_survey_mode(const ca_mavlink_server *) { return false; }
 
 int test_clock_gettime(clockid_t clock,timespec *value)
 {

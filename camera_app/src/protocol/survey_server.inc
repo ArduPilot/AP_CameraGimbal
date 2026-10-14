@@ -72,19 +72,11 @@ static void survey_pause(ca_mavlink_server *s, const char *reason)
     parameter_status(s,reason);
 }
 
-// Routine manager output can still be in flight while ownership is acquired.
-// Once confirmed, any new pointing command interrupts the survey.
-static void survey_gimbal_command(ca_mavlink_server *s,const mavlink_message_t *m)
-{
-    if(survey_running(s) && !s->survey->owned &&
-       m->sysid==s->autopilot_system_id && m->compid==s->autopilot_component_id) return;
-    survey_pause(s,"survey paused: gimbal command");
-}
-
 static uint8_t set_camera_mode(ca_mavlink_server *s, unsigned mode)
 {
     if(mode>2 || (!APCAM_HAVE_PHOTO && mode!=1)) return MAV_RESULT_UNSUPPORTED;
     if(mode==2) {
+        if(s->manual_control && *s->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
         if(!s->settings.position_targeting || !ca_media_survey_available(s->media,s->settings.survey.lens)) return MAV_RESULT_UNSUPPORTED;
         auto &v=*s->survey;
         if(!survey_running(s)) {

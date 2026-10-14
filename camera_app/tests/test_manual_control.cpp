@@ -8,6 +8,8 @@
 static uint64_t clock_ms = 1000;
 static float pitch_rate, yaw_rate;
 static unsigned suspends;
+static bool survey_mode;
+bool ca_mavlink_server_survey_mode(const ca_mavlink_server *) { return survey_mode; }
 int manual_test_clock(clockid_t id, struct timespec *t) noexcept
 {
     assert(id == CLOCK_MONOTONIC);
@@ -60,6 +62,9 @@ int main(void)
     struct timeval timeout = {.tv_sec = 1};
     assert(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
     struct apcam_manual_packet p = {.magic = APCAM_MANUAL_MAGIC, .action = APCAM_MANUAL_ACQUIRE};
+    survey_mode = true;
+    assert(exchange(&c, fd, p).result == -EBUSY && !c.active && suspends == 0);
+    survey_mode = false;
     p = exchange(&c, fd, p);
     assert(p.result == 0 && c.active && suspends == 1);
     assert(exchange(&c, fd, p).result == -EBUSY);
@@ -68,6 +73,9 @@ int main(void)
     struct apcam_manual_packet forged = p;
     forged.token[0] ^= 1;
     assert(exchange(&c, fd, forged).result == -EACCES);
+    survey_mode = true;
+    assert(exchange(&c, fd, p).result == -EBUSY && yaw_rate == 0 && pitch_rate == 0);
+    survey_mode = false;
     assert(exchange(&c, fd, p).result == 0 && yaw_rate > 0.5f && pitch_rate == 0);
     clock_ms += APCAM_MANUAL_PULSE_MS + 1;
     ca_manual_control_update(&c);

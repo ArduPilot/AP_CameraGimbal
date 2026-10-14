@@ -73,8 +73,12 @@ component 100 and uploads the mission; add it before the survey flight segment.
 `MAV_CMD_IMAGE_STOP_CAPTURE` pauses surveying while retaining Survey mode.
 `MAV_CMD_IMAGE_START_CAPTURE` resumes it; its count limits images, not sweeps,
 and its interval is a minimum between images. Photo/Video mode exits surveying.
-Manual pointing, gimbal takeover or image tracking pauses surveying and requires
-an explicit resume. A camera that stops renewing its ownership releases the
+While Survey mode is selected, incoming gimbal pointing commands are ignored,
+including flight-controller setpoints, external ROI, SIYI/UniGCS motion and web
+PTZ. This also applies when capture is paused. Select Photo or Video mode before
+using those controls. Image tracking cannot start in Survey mode. Actual manager
+ownership loss still pauses surveying and requires an explicit resume.
+A camera that stops renewing its ownership releases the
 ArduPilot gimbal manager after three seconds.
 
 ## Parameters
