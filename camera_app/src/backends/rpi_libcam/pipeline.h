@@ -29,6 +29,8 @@ struct ca_rpi_pipeline_config {
 
 int ca_rpi_pipeline_open(struct ca_rpi_pipeline **pipeline,
                          const struct ca_rpi_pipeline_config *config);
+/* Change the H.264 bitrate while streaming. */
+int ca_rpi_pipeline_set_bitrate(struct ca_rpi_pipeline *pipeline, unsigned bit_rate_kbps);
 int ca_rpi_pipeline_set_image(struct ca_rpi_pipeline *pipeline,
                               const struct ca_config *settings);
 void ca_rpi_pipeline_close(struct ca_rpi_pipeline *pipeline);

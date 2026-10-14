@@ -6,8 +6,14 @@ XFRobot C20-T. It runs alongside [Rpanion-server](https://github.com/stephendade
 keeps ownership of networking and the flight-controller link.
 
 Video is captured with libcamera and encoded by the Pi 4 / CM4 hardware H.264
-encoder. A single 1080p30 stream is served at `rtsp://<pi>:8554/video1` and used for
-recording. The `IMG_*` camera parameters (brightness,
+encoder. A single 1080p stream is served at `rtsp://<pi>:8554/video1` and
+used for recording. Its bitrate (default 4096 kbps, 1000 to 20000) and frame
+rate (default 30, the most the encoder handles at 1080p; 5 to 30) are
+`[stream.main] bitrate_kbps` and `frame_rate` in `camera.ini`, the MAVLink
+parameters `VIDEO_MAIN_KBPS` and `VIDEO_MAIN_FPS`, and on the web Parameters
+page.
+The bitrate applies immediately; the frame rate applies after the camera app
+is restarted. The `IMG_*` camera parameters (brightness,
 contrast, saturation, exposure compensation, ISO, shutter, metering and white
 balance) can be changed from the GCS while streaming.
 
@@ -25,6 +31,10 @@ resolution` (MAVLink parameter `PHOTO_RES`, also on the web Parameters page):
 | `video` (default) | 1920x1080 video frame | not interrupted |
 | `2028x1520` | 2x2 binned sensor, full field of view | paused about 0.5 s |
 | `4056x3040` | full sensor resolution | paused about 0.7 s |
+
+The pauses are for 30 fps video. The first six frames after each photo are
+skipped, so at a lower `VIDEO_MAIN_FPS` they last longer: about 0.9 to 1.0 s at
+15 fps for the full-size photo.
 
 The larger sizes switch the sensor mode and back, holding the exposure and
 white balance of the last video frame, so they match the video's brightness

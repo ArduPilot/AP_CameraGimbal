@@ -640,6 +640,19 @@ int ca_rpi_pipeline_set_image(struct ca_rpi_pipeline *p, const struct ca_config 
     return 0;
 }
 
+int ca_rpi_pipeline_set_bitrate(struct ca_rpi_pipeline *p, unsigned bit_rate_kbps)
+{
+    if (!p || !bit_rate_kbps) { errno = EINVAL; return -1; }
+    if (bit_rate_kbps == p->config.bit_rate_kbps) return 0;
+    if (set_encoder_control(p->encoder, V4L2_CID_MPEG_VIDEO_BITRATE, (int32_t)bit_rate_kbps * 1000, "bitrate") < 0) {
+        errno = EIO;
+        return -1;
+    }
+    p->config.bit_rate_kbps = bit_rate_kbps;
+    ca_log("RPi encoder bitrate %u kbps", bit_rate_kbps);
+    return 0;
+}
+
 void ca_rpi_pipeline_close(struct ca_rpi_pipeline *p)
 {
     if (!p) return;

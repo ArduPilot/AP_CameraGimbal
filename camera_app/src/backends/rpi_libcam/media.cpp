@@ -306,6 +306,9 @@ int APC_Media_RPiLibcam::apply_image(const struct ca_config *settings)
 {
     auto *m = _state;
     if (ca_rpi_pipeline_set_image(m->pipeline, settings) < 0) return -1;
+#if APCAM_HAVE_VIDEO_BITRATE
+    if (ca_rpi_pipeline_set_bitrate(m->pipeline, settings->main_bitrate_kbps) < 0) return -1;
+#endif
     atomic_store(&m->photo_resolution, (int)settings->photo_resolution);
     ca_log("RPi image brightness=%d saturation=%d contrast=%d ev=%d iso=%d shutter=%d "
            "metering=%d white_balance=%d", settings->brightness, settings->saturation,

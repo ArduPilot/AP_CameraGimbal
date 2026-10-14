@@ -67,7 +67,10 @@
 #define APCAM_LENS1_WIDTH 4056
 #define APCAM_LENS1_HEIGHT 3040
 #define APCAM_ZOOM_MAX 1.0f
-/* The Pi 4 / CM4 hardware encoder is limited to 1080p30. */
+/* The Pi 4 / CM4 hardware encoder is limited to 1080p30, so 30 fps is the
+ * default and the highest rate; VIDEO_MAIN_FPS can lower it. */
+#define APCAM_HAVE_VIDEO_BITRATE 1
+#define APCAM_HAVE_VIDEO_FRAME_RATE 1
 #define APCAM_FRAME_RATE 30
 #define APCAM_THERMAL_FRAME_RATE 0
 #define APCAM_THERMAL_STREAM_WIDTH 0
