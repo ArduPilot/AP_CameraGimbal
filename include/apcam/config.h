@@ -42,6 +42,11 @@ enum ca_video_resolution {
     CA_VIDEO_1080P,
     CA_VIDEO_2160P,
     CA_VIDEO_1440P,
+    CA_VIDEO_540P,
+    CA_VIDEO_480P,
+    CA_VIDEO_360P,
+    CA_VIDEO_240P,
+    CA_VIDEO_180P,
 };
 
 enum ca_video_codec {
