@@ -54,7 +54,7 @@ jobs:
       - name: Compile and link both native ZT30 applications
         run: make zt30_ram_camera_build zt30_dev_camera_build
       - name: Check packaging and UUID helpers
-        run: make release-test platform-test camera-definition-test targets-test
+        run: make release-test platform-test camera-definition-test targets-test survey-runtime-test
       - name: Test native Z1-Mini overlay failures and request ordering
         run: make z1mini-overlay-test
       - name: Test Z1-Mini web firmware updates
