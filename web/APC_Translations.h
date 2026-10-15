@@ -370,6 +370,8 @@ enum string_id {
     S_H_NETWORK_INTERFACE,
     S_P_NETWORK_CAPTURE,
     S_H_NETWORK_CAPTURE,
+    S_P_NETWORK_VIDEO_IP_ADDRESS,
+    S_H_NETWORK_VIDEO_IP_ADDRESS,
     S_NETWORK_CAPTURE_FILES,
     S_P_NETWORK_ADDRESS,
     S_H_NETWORK_ADDRESS,
@@ -1018,6 +1020,8 @@ static constexpr Translations translations = [] {
     result[S_P_NETWORK_INTERFACE] = {"Network interface", "网络接口", "ネットワークインターフェース"};
     result[S_P_NETWORK_CAPTURE] = {"Network capture", "网络抓包", "ネットワークキャプチャ"};
     result[S_H_NETWORK_CAPTURE] = {"Off by default. Save to start or stop capturing all network interfaces, including loopback. Keeps the latest four 16 MiB PCAP files in DCIM/network on the microSD card. Disable before downloading and open the files in Wireshark.", "默认关闭。保存后开始或停止抓取所有网络接口（包括回环）的数据包。在 microSD 卡的 DCIM/network 中保留最新的四个 16 MiB PCAP 文件。下载前请禁用，然后用 Wireshark 打开。", "初期設定は無効です。保存するとループバックを含む全インターフェースのキャプチャを開始・停止します。microSD の DCIM/network に最新の16 MiB PCAPファイルを4個保持します。ダウンロード前に無効にし、Wiresharkで開いてください。"};
+    result[S_P_NETWORK_VIDEO_IP_ADDRESS] = {"Video stream IP address", "视频流 IP 地址", "映像ストリーム IP アドレス"};
+    result[S_H_NETWORK_VIDEO_IP_ADDRESS] = {"IP address the GCS should use to receive the video streams. Sent in the video-stream-information message's URI field. If left blank the default IP address is used. Applies without restarting.", "地面站接收视频流应使用的 IP 地址。通过 video-stream-information 消息的 URI 字段发送。留空则使用默认 IP 地址。无需重启即可生效。", "GCS が映像ストリームの受信に使用する IP アドレス。video-stream-information メッセージの URI フィールドで送信されます。空欄の場合は既定の IP アドレスを使用します。再起動なしで反映されます。"};
     result[S_NETWORK_CAPTURE_FILES] = {"Browse network captures", "浏览网络抓包文件", "キャプチャファイルを表示"};
     result[S_H_NETWORK_INTERFACE] = {"Interface used for camera addresses and the default gateway, independent of SupportProxy.", "用于相机地址和默认网关的接口，独立于 SupportProxy。", "カメラのアドレスとデフォルトゲートウェイのインターフェース。SupportProxy とは独立しています。"};
     result[S_P_NETWORK_ADDRESS] = {"Secondary IPv4 address/prefix", "附加 IPv4 地址/前缀", "追加 IPv4 アドレス/プレフィックス"};

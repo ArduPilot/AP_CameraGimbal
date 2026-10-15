@@ -775,6 +775,10 @@ static const struct parameter replacement_parameters[] = {
      PARAM_TEXT, 0, 15, 1, NULL, 0},
     {"network_capture", "network", "capture", S_P_NETWORK_CAPTURE, S_H_NETWORK_CAPTURE,
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+#if !APCAM_HAVE_NETWORK_CONFIG
+    {"network_video_ip_address", "network", "video_ip_address", S_P_NETWORK_VIDEO_IP_ADDRESS, S_H_NETWORK_VIDEO_IP_ADDRESS,
+     PARAM_TEXT, 0, 15, 1, NULL, 0},
+#endif
     {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
      PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
     {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
@@ -845,6 +849,9 @@ static const char *replacement_defaults[] = {
     "0", "Raw Thermal (16-bit)",
 #endif
     "", "false", "false", "false", "eth0", "", "", "", "false",
+#if !APCAM_HAVE_NETWORK_CONFIG
+    "",
+#endif
     "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
 
@@ -2098,7 +2105,8 @@ static bool valid_text_parameter(const struct parameter *parameter,
         if (!strcmp(parameter->key, "interface"))
             return length && strspn(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
         if (!length) return true;
-        if (!strcmp(parameter->key, "gateway")) return apcam_ipv4_host(text, &address);
+        if (!strcmp(parameter->key, "gateway") || !strcmp(parameter->key, "video_ip_address"))
+            return apcam_ipv4_host(text, &address);
         return apcam_ipv4_prefix(text, &address, &prefix);
     }
     if (!strcmp(parameter->key, "alias")) /* one RTSP path segment */
@@ -2146,6 +2154,9 @@ static bool parameter_shown(const struct parameter *parameter)
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
+    /* The host OS owns the interfaces; only capture and the video IP address apply. */
+    if (!APCAM_HAVE_NETWORK_CONFIG && !strcmp(parameter->section, "network") &&
+        strcmp(parameter->key, "capture") && strcmp(parameter->key, "video_ip_address")) return false;
     if (!APCAM_HAVE_THERMAL && (!strcmp(parameter->section, "thermal") ||
         !strcmp(parameter->key, "photo_scope"))) return false;
     return true;
@@ -4633,7 +4644,8 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
     page->append("<div class=help>");
     page->append_html(T(parameter->help));
     if (strcmp(parameter->section, "support_proxy") == 0 ||
-        (strcmp(parameter->section, "network") == 0 && strcmp(parameter->key, "capture") != 0) ||
+        (strcmp(parameter->section, "network") == 0 && strcmp(parameter->key, "capture") != 0 &&
+         strcmp(parameter->key, "video_ip_address") != 0) ||
         strcmp(parameter->form_name, "orientation") == 0 ||
         strcmp(parameter->form_name, "uart_protocol") == 0 ||
         strcmp(parameter->form_name, "mavlink_system_id") == 0 ||

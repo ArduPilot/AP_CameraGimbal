@@ -28,6 +28,8 @@ endif
 LDFLAGS ?= -static
 TEST_ROOT := $(CURDIR)/tests/runtime
 HOST_TEST := tests/mt11-web-host
+RPI_HOST_CHECK := tests/rpi-web-host
+RPI_TEST_ROOT := $(CURDIR)/tests/rpi-runtime
 SITL_ROOT ?= $(abspath ../build/sitl/runtime)
 SITL_TARGET ?= $(abspath ../build/sitl/mt11-web)
 SITL_BIN_ROOT ?= $(abspath ../build/sitl)
@@ -145,15 +147,16 @@ tests/test_webroot: tests/test_webroot.cpp APC_WebRoot.h APC_StringBuffer.h $(WE
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(WEB_CXXFLAGS) -o $@ $<
 
-test: $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
+test: $(HOST_TEST) $(A8_HOST_CHECK) $(RPI_HOST_CHECK) tests/test_string_buffer tests/test_webroot
 	./tests/test_string_buffer
 	./tests/test_webroot
 	python3 tests/test_integration.py ./$(HOST_TEST) '$(TEST_ROOT)'
 	python3 tests/test_a8_upgrade.py
+	python3 tests/test_rpi_parameters.py ./$(RPI_HOST_CHECK) '$(RPI_TEST_ROOT)'
 
 clean:
-	rm -f tests/test_string_buffer tests/test_webroot mt11-web a8-web zr10-web z1mini-web rpi_libcam_caddx-web $(HOST_TEST) $(A8_HOST_CHECK)
-	rm -rf tests/runtime build
+	rm -f tests/test_string_buffer tests/test_webroot mt11-web a8-web zr10-web z1mini-web rpi_libcam_caddx-web $(HOST_TEST) $(A8_HOST_CHECK) $(RPI_HOST_CHECK)
+	rm -rf tests/runtime tests/rpi-runtime build
 
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
 zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
@@ -174,6 +177,27 @@ RPI_MAVLINK := ../camera_app/build/mavlink/all/include
 rpi_libcam_caddx-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
 	$(RPI_CROSS_COMPILE)g++ $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -o $@ $< -lm
+
+# The RPi web service with test paths, for the host parameters test.
+$(RPI_HOST_CHECK): mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(RPI_MAVLINK)/all/mavlink.h Makefile
+	$(call progress,Linking $@)
+	$(HOST_CXX) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member \
+		-DAPCAM_TARGET=APCAM_TARGET_RPI_LIBCAM_CADDX -isystem $(RPI_MAVLINK) -DMT11_WEB_TEST \
+		-DAPP_DIR='"$(RPI_TEST_ROOT)/app"' \
+		-DAPP_SELECTION_DIR='"$(RPI_TEST_ROOT)/app"' \
+		-DMEDIA_ROOT='"$(RPI_TEST_ROOT)/mnt"' \
+		-DCAPTURE_ROOT='"$(RPI_TEST_ROOT)/mnt/capture"' \
+		-DWEBROOT_PATH='"$(RPI_TEST_ROOT)/webroot"' \
+		-DSESSION_PATH='"$(RPI_TEST_ROOT)/sessions"' \
+		-DUSER_LOCK_PATH='"$(RPI_TEST_ROOT)/users.lock"' \
+		-DUPGRADE_LOCK_PATH='"$(RPI_TEST_ROOT)/upgrade.lock"' \
+		-DTIME_SYNC_TEST_PATH='"$(RPI_TEST_ROOT)/time-sync"' \
+		-DCAMERA_READY_PATH='"$(RPI_TEST_ROOT)/camera-app.ready"' \
+		-DAPP_REQUEST_PATH='"$(RPI_TEST_ROOT)/camera-app.request"' \
+		-DAPP_REQUEST_LOCK_PATH='"$(RPI_TEST_ROOT)/camera-app.request.lock"' \
+		-DAPP_STARTED_PATH='"$(RPI_TEST_ROOT)/camera-app.started"' \
+		-DSOC_TEMPERATURE_PATH='"$(RPI_TEST_ROOT)/soc-temperature"' \
+		-o $@ $< -lm
 
 Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
