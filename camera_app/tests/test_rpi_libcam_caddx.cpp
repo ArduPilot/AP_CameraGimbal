@@ -155,6 +155,36 @@ static void single_stream_support_proxy(void)
     }
 }
 
+/* [network] video_ip_address: blank or an IPv4 host address the GCS can use. */
+static void video_ip_address(void)
+{
+    static const struct { const char *ini; bool loads; const char *value; } cases[] = {
+        {"[network]\ncapture = false\n", true, ""},
+        {"[network]\nvideo_ip_address = \"\"\n", true, ""},
+        {"[network]\nvideo_ip_address = 10.0.2.100\n", true, "10.0.2.100"},
+        {"[network]\nvideo_ip_address = 127.0.0.1\n", false, NULL},
+        {"[network]\nvideo_ip_address = 0.1.2.3\n", false, NULL},
+        {"[network]\nvideo_ip_address = 224.0.0.1\n", false, NULL},
+        {"[network]\nvideo_ip_address = 10.0.2.100/24\n", false, NULL},
+        {"[network]\nvideo_ip_address = raspberrypi.local\n", false, NULL},
+        {"[network]\nvideo_ip_address = 255.255.255.255\n", false, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[] = "/tmp/camera-video-address-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        size_t length = strlen(cases[i].ini);
+        assert(write(fd, cases[i].ini, length) == (ssize_t)length);
+        close(fd);
+        struct ca_config config;
+        ca_config_defaults(&config);
+        char error[256] = "";
+        assert((ca_config_load(&config, path, error, sizeof(error)) == 0) == cases[i].loads);
+        if (cases[i].loads) assert(strcmp(config.video_ip_address, cases[i].value) == 0);
+        unlink(path);
+    }
+}
+
 /* VIDEO_MAIN_KBPS and VIDEO_MAIN_FPS: defaults, range checks and the ini keys. */
 static void video_encoder_settings(void)
 {
@@ -232,6 +262,7 @@ int main(void)
     main_resolutions();
     single_stream_support_proxy();
     video_encoder_settings();
+    video_ip_address();
     struct ca_config settings;
     ca_config_defaults(&settings);
     struct ca_rpi_image_controls c;

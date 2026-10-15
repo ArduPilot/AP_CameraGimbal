@@ -641,10 +641,9 @@ static bool route_local_ipv4(const struct ca_mavlink_server *server,
 #if !APCAM_HAVE_NETWORK_CONFIG
     // Companion computers usually reach the GCS through a local MAVLink
     // router, so a loopback route says nothing about the GCS's network.
-    const char *configured = getenv("CAMERA_APP_VIDEO_ADDRESS");
-    struct in_addr parsed;
-    if (configured && inet_pton(AF_INET, configured, &parsed) == 1) {
-        snprintf(address, INET_ADDRSTRLEN, "%s", configured);
+    // The configured video IP address (validated when loaded) overrides it.
+    if (server->settings.video_ip_address[0]) {
+        snprintf(address, INET_ADDRSTRLEN, "%s", server->settings.video_ip_address);
         return true;
     }
 #endif
@@ -2404,6 +2403,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     }
     memcpy(next.timezone, desired.timezone, sizeof(next.timezone));
     next.network_capture = desired.network_capture;
+    memcpy(next.video_ip_address, desired.video_ip_address, sizeof(next.video_ip_address));
     next.main_resolution = server->settings.main_resolution;
     next.sub_resolution = server->settings.sub_resolution;
     next.recording_resolution = server->settings.recording_resolution;
