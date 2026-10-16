@@ -144,7 +144,7 @@ def protocol_checks(link, definition, target):
         write(link, definition, name, values[name])
     names = list(definition.parameters)
     assert read(link, '', len(names) - 1) == values[names[-1]]
-    assert 'CAM_MODE' not in definition.parameters
+    assert ('CAM_MODE' in definition.parameters) == (target != 'z1mini')
     write(link, definition, 'REC_AUTOSTART', 2)
     assert read(link, 'REC_AUTOSTART') == 2
     link.mav.param_request_read_send(42, CAMERA, b'REC_AUTOSTART', -1)
