@@ -31,28 +31,11 @@ static const ca_config_option modes[] = {{"Photo",0}, {"Video",1},
 #define CONFIG(name_, description_) \
     {name_, description_, CA_CAMERA_CONFIG, 6, 0, 0, 0, NULL, 0, -1}
 static const struct ca_camera_parameter parameters[] = {
+    /* A GCS lists parameters in this order: live controls first, then thermal,
+     * streams, recording, photo and image, overlays, tracking, survey. */
 #if APCAM_HAVE_PHOTO
     OPTIONS("CAM_MODE", "Camera mode", CA_CAMERA_MODE, 0, modes),
-#if APCAM_HAVE_THERMAL
-    CONFIG("SURV_LENS", "Survey camera"),
-    CONFIG("SURV_PATTERN", "Survey pattern"),
-    CONFIG("SURV_OVERLAP", "Overlap (%)"),
-    CONFIG("SURV_FORE", "Forward distance (% AGL)"),
-    CONFIG("SURV_AFT", "Rear distance (% AGL)"),
-    CONFIG("SURV_BURST", "Images per position"),
-    CONFIG("SURV_BURST_MS", "Burst interval (ms)"),
-    CONFIG("SURV_DWELL_MS", "Capture dwell limit (ms)"),
-    CONFIG("SURV_SETTLE_MS", "Settling window (ms)"),
-    CONFIG("SURV_ERROR_CD", "Pointing tolerance (0.01 deg)"),
-    CONFIG("SURV_RATE_CD", "Residual rate tolerance (0.01 deg/s)"),
-    CONFIG("SURV_TERR_MS", "Terrain maximum age (ms)"),
-    CONFIG("SURV_TERR_M", "Terrain report radius (m)"),
-    CONFIG("SURV_TERR_TOL", "Terrain consistency (m)"),
-    CONFIG("SURV_MIN_SPEED", "Minimum ground speed (m/s)"),
-    CONFIG("SURV_TURN_DEG", "Turn threshold (deg)"),
 #endif
-#endif
-
 #if APCAM_HAVE_ZOOM && !APCAM_ZOOM_NATIVE_RATE
     /* Native rate-only zoom has no trustworthy absolute position readback. */
     {"CAM_ZOOM", APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",
@@ -72,35 +55,27 @@ static const struct ca_camera_parameter parameters[] = {
     OPTIONS("CAM_SOURCE", "Main video source", CA_CAMERA_SOURCE, 0, sources),
     OPTIONS("CAM_THERM_GAIN", "Thermal gain", CA_CAMERA_GAIN, 1, gains),
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
-    CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif
-#if APCAM_HAVE_PHOTO_RESOLUTION
-    CONFIG("PHOTO_RES", "Photo resolution (larger sizes briefly pause video)"),
-#endif
+    CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
+    CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
 #if APCAM_HAVE_VIDEO_BITRATE
     CONFIG("VIDEO_MAIN_KBPS", "Main RTSP bitrate (kbps)"),
 #endif
-    CONFIG("OSD_CROSS", "Targeting cross"),
-#if APCAM_HAVE_OVERLAY_RECORDING_SELECT
-    CONFIG("OSD_RECORD", "Overlays in recordings"),
-#endif
-#if APCAM_HAVE_THERMAL
-    CONFIG("OSD_THERMAL_FOV", "Thermal field of view in RGB (nominal alignment)"),
-#endif
-    CONFIG("LOG_DISARMED", "Log when disarmed"),
-    CONFIG("TRACK_METHOD", "Location tracking control method"),
-    CONFIG("MAV_POS_TARGET", "Position targeting"),
-    CONFIG("REC_AUTOSTART", "Automatic recording"),
-#if APCAM_HAVE_RECORDING_RESOLUTION
-    CONFIG("REC_RESOLUTION", "Recording resolution"),
-#endif
-    CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
-    CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
 #if APCAM_NUM_STREAMS >= 2
     CONFIG("VIDEO_SUB_RES", "Secondary RGB stream resolution"),
     CONFIG("VIDEO_SUB_CODEC", "Secondary RGB stream codec"),
+#endif
+#if APCAM_HAVE_RECORDING_RESOLUTION
+    CONFIG("REC_RESOLUTION", "Recording resolution"),
+#endif
+    CONFIG("REC_AUTOSTART", "Automatic recording"),
+#if APCAM_HAVE_THERMAL
+    CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
+#endif
+#if APCAM_HAVE_PHOTO_RESOLUTION
+    CONFIG("PHOTO_RES", "Photo resolution (larger sizes briefly pause video)"),
 #endif
 #if APCAM_HAVE_IMAGE_CONTROLS
     CONFIG("IMG_BRIGHTNESS", "Brightness"),
@@ -111,6 +86,34 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("IMG_SHUTTER", "Shutter speed"),
     CONFIG("IMG_METERING", "Exposure metering"),
     CONFIG("IMG_WHITE_BAL", "White balance"),
+#endif
+    CONFIG("OSD_CROSS", "Targeting cross"),
+#if APCAM_HAVE_OVERLAY_RECORDING_SELECT
+    CONFIG("OSD_RECORD", "Overlays in recordings"),
+#endif
+#if APCAM_HAVE_THERMAL
+    CONFIG("OSD_THERMAL_FOV", "Thermal field of view in RGB (nominal alignment)"),
+#endif
+    CONFIG("MAV_POS_TARGET", "Position targeting"),
+    CONFIG("TRACK_METHOD", "Location tracking control method"),
+    CONFIG("LOG_DISARMED", "Log when disarmed"),
+#if APCAM_HAVE_PHOTO && APCAM_HAVE_THERMAL
+    CONFIG("SURV_LENS", "Survey camera"),
+    CONFIG("SURV_PATTERN", "Survey pattern"),
+    CONFIG("SURV_OVERLAP", "Overlap (%)"),
+    CONFIG("SURV_FORE", "Forward distance (% AGL)"),
+    CONFIG("SURV_AFT", "Rear distance (% AGL)"),
+    CONFIG("SURV_BURST", "Images per position"),
+    CONFIG("SURV_BURST_MS", "Burst interval (ms)"),
+    CONFIG("SURV_DWELL_MS", "Capture dwell limit (ms)"),
+    CONFIG("SURV_SETTLE_MS", "Settling window (ms)"),
+    CONFIG("SURV_ERROR_CD", "Pointing tolerance (0.01 deg)"),
+    CONFIG("SURV_RATE_CD", "Residual rate tolerance (0.01 deg/s)"),
+    CONFIG("SURV_TERR_MS", "Terrain maximum age (ms)"),
+    CONFIG("SURV_TERR_M", "Terrain report radius (m)"),
+    CONFIG("SURV_TERR_TOL", "Terrain consistency (m)"),
+    CONFIG("SURV_MIN_SPEED", "Minimum ground speed (m/s)"),
+    CONFIG("SURV_TURN_DEG", "Turn threshold (deg)"),
 #endif
 };
 
