@@ -120,6 +120,9 @@ interface under Parameters → Network → Video stream IP address
 the camera app, but a GCS that has already read the stream information may
 need to reconnect.
 
+`CAMERA_APP_VIDEO_ADDRESS` is no longer used. Move any value to the web setting
+and delete its `video-address.conf` systemd drop-in.
+
 ## Gimbal
 
 The CADDX gimbal uses the protocol of ArduPilot's `AP_Mount_CADDX` driver
