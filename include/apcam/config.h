@@ -171,6 +171,8 @@ struct ca_config {
     struct ca_survey_config survey;
     struct ca_network_config network;
     bool network_capture;
+    /* RTSP host advertised to the GCS on host-OS targets; empty = automatic. */
+    char video_ip_address[16];
     struct ca_support_config support;
     char timezone[CA_CONFIG_TIMEZONE_MAX];
     enum ca_photo_scope photo_scope;

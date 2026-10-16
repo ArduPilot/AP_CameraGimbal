@@ -271,6 +271,12 @@ int ca_config_load(struct ca_config *config, const char *path,
         errno = EINVAL;
         goto fail;
     }
+    struct in_addr video_ip_address;
+    if (parsed.video_ip_address[0] && !apcam_ipv4_host(parsed.video_ip_address, &video_ip_address)) {
+        snprintf(error, error_size, "Video IP address must be blank or an IPv4 host address");
+        errno = EINVAL;
+        goto fail;
+    }
     fclose(file);
     *config = parsed;
     return 0;

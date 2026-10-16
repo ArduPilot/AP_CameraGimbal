@@ -189,6 +189,10 @@ A8_HOST_TARGET := tests/camera-app-a8-host
 A8_HOST_SOURCES := $(filter-out src/backends/mt11/control.cpp \
 	src/backends/a8/control.cpp,$(COMMON_SOURCES)) \
 	src/backends/a8/control.cpp src/media/stub.cpp
+# RPi target with stub media, for host tests of its MAVLink behaviour.
+RPI_HOST_TARGET := tests/camera-app-rpi-host
+RPI_HOST_SOURCES := $(filter-out $(CONTROL_DIR)/control.cpp src/protocol/unigcs.cpp,$(COMMON_SOURCES)) \
+	src/backends/caddx/control.cpp src/media/stub.cpp
 SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sitl)
 SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
 SITL_OBJDIR ?= build/$(SITL_VARIANT)
@@ -438,6 +442,11 @@ $(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) \
 		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
+
+$(RPI_HOST_TARGET): CAMERA_BACKEND=rpi_libcam_caddx
+$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS)
+	$(call progress,Linking $@)
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
@@ -719,7 +728,7 @@ test: survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-
 	$(LIVE_VIDEO_SERVER_TEST_TARGET) \
 	$(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) \
 	$(MT11_IMX586_TEST_TARGET) \
-	$(HOST_TARGET) $(A8_HOST_TARGET)
+	$(HOST_TARGET) $(A8_HOST_TARGET) $(RPI_HOST_TARGET)
 	./$(TEST_TARGET)
 	./$(MAVLINK_TEST_TARGET)
 	./tests/test_telemetry_time
@@ -741,6 +750,7 @@ test: survey-test rpi_libcam_caddx-test timezone-test system-stats-test thermal-
 	./$(MT11_IMX586_TEST_TARGET)
 	python3 tests/test_integration.py ./$(HOST_TARGET)
 	python3 tests/test_a8_attitude.py ./$(A8_HOST_TARGET)
+	python3 tests/test_rpi_video_ip_address.py ./$(RPI_HOST_TARGET)
 	python3 tests/test_a8_delegated.py ./$(A8_HOST_TARGET)
 	ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x240:rate=10 \
 		-t 2.3 -c:v libx264 -x264-params aud=1:bframes=0:slices=4 \
@@ -786,7 +796,7 @@ clean:
 	rm -f tests/test_gimbal_rate
 	rm -f tests/test_telemetry_time tests/test_mavlink_time
 	rm -f tests/test_support_mavlink tests/test_thermal_monitor $(MP4_SYNC_TEST_TARGET) $(MP4_ROLLOVER_TEST_TARGET)
-	rm -f tests/test_system_stats tests/test_binlog_sys tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.cpp=.o) $(COMMON_SOURCES:.cpp=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET)
+	rm -f tests/test_system_stats tests/test_binlog_sys tests/test_manual_control $(TARGET) $(COMMON_SOURCES:.cpp=.o) $(COMMON_SOURCES:.cpp=.d) $(TEST_TARGET) $(MAVLINK_TEST_TARGET) $(MP4_TEST_TARGET) $(E5739_TEST_TARGET) $(THERMAL_TEST_TARGET) $(RAW_THERMAL_TEST_TARGET) $(RAW_THERMAL_SERVER_TEST_TARGET) $(LIVE_VIDEO_SERVER_TEST_TARGET) $(VIDEO_METADATA_TEST_TARGET) $(STILL_TEST_TARGET) $(AUTOFOCUS_TEST_TARGET) $(CONFIG_TEST_TARGET) $(TARGETING_TEST_TARGET) $(MT11_IMX586_TEST_TARGET) $(HOST_TARGET) $(A8_HOST_TARGET) $(RPI_HOST_TARGET)
 	rm -f tests/test.h264 tests/test.mp4 tests/test.mp4.fragmented \
 		tests/test.ffprobe.err tests/test.fragmented.ffprobe.err
 	rm -rf build
@@ -1019,7 +1029,7 @@ $(SITL_OBJDIR)/tracking_dlib.o: src/media/tracking_dlib.cpp include/camera_app/i
 	$(HOST_CXX) $(DEPFLAGS) $(DLIB_FLAGS) -c $< -o $@
 SITL_APP_OBJECTS += $(SITL_OBJDIR)/tracking_dlib.o
 $(SITL_TARGET): $(SITL_OBJDIR)/tracking_dlib.o
-$(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET): build/host/tracking_dlib.o
+$(HOST_TARGET) $(A8_HOST_TARGET) $(ZR10_HOST_TARGET) $(RPI_HOST_TARGET): build/host/tracking_dlib.o
 Z1_HOST_OBJECTS += build/host/tracking_dlib.o
 $(Z1_HOST_TARGET): build/host/tracking_dlib.o
 -include build/host/tracking_dlib.d build/$(CAMERA_BACKEND)/tracking_dlib.d $(SITL_OBJDIR)/tracking_dlib.d
