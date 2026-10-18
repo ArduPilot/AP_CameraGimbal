@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Survey keeps pointing ownership until a mode change, including while paused."""
+"""Survey ignores external pointing while it holds the gimbal, and follows it once paused."""
 import argparse
 import json
 import os
@@ -147,17 +147,52 @@ def run(binary):
                     client.sock.sendall(unigcs_command(opcode, payload, dest=0x2e, link=0x11))
                     ignored(before)
 
+                # Once paused the survey no longer holds the gimbal, so the
+                # flight controller's (pilot's) targets and other pointing work.
+                def follows(sender, pitch):
+                    before = attitude()
+                    sender.mav.gimbal_device_set_attitude_send(42, 154, 0,
+                        [math.cos(pitch/2), 0, math.sin(pitch/2), 0], math.nan, math.nan, math.nan)
+                    time.sleep(.5)
+                    assert attitude() != before, 'paused survey ignored external pointing'
+
                 command(M.MAV_CMD_IMAGE_STOP_CAPTURE, [])
                 state(lambda s: s['state'] == 'survey paused: capture stopped')
-                link.mav.gimbal_device_set_attitude_send(42, 154, 0,
-                    [math.cos(.15), 0, math.sin(.15), 0], math.nan, math.nan, math.nan)
-                ignored(before, 'survey paused: capture stopped')
+                follows(link, .3)
                 start()
                 fc.mav.gimbal_manager_status_send(1000, 0, 154, 99, 190, 0, 0)
                 state(lambda s: s['state'] == 'survey paused: gimbal takeover')
-                link.mav.gimbal_device_set_attitude_send(42, 154, 0,
-                    [math.cos(.15), 0, math.sin(.15), 0], math.nan, math.nan, math.nan)
-                ignored(before, 'survey paused: gimbal takeover')
+                follows(fc, -.3)
+                # every other pointing path works again too
+                # 2 (tracking disabled) rather than 6 (busy): past the survey check
+                assert client.request(0xaa, struct.pack('<BHHHH', 1, 100, 100, 200, 200)) == b'\x02'
+                before = attitude()
+                with socket.create_connection(('127.0.0.1', sp), 2) as sock:
+                    siyi_request(sock, 23, 0x0e, struct.pack('<hh', -300, -200))
+                time.sleep(.5)
+                assert attitude() != before, 'paused survey ignored SIYI pointing'
+                link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_SET_ROI_NONE, 0, 0,
+                                          0, 0, 0, 0, 0, 0, 0)
+                ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_DO_SET_ROI_NONE)
+                assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                # ArduPilot denies a renewal after a pilot or GCS takeover
+                start()
+                fc.mav.command_ack_send(M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE,
+                                        M.MAV_RESULT_DENIED, 0, 0, 42, 154)
+                state(lambda s: s['state'] == 'survey paused: gimbal takeover')
+                follows(fc, .3)
+                # and refuses a claim while the mount is retracted
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 0])
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 2])
+                fc.mav.command_ack_send(M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE,
+                                        M.MAV_RESULT_TEMPORARILY_REJECTED, 0, 0, 42, 154)
+                deadline = time.monotonic()+3
+                while 'retracted' not in json.loads(status_path.read_text())['state']:
+                    assert time.monotonic() < deadline, status_path.read_text()
+                    time.sleep(.05)
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 0])
+                state(lambda s: s['mode'] == 0)
+                before = attitude()
                 # Photo and Video are explicit exits: pointing works again.
                 for mode in (0, 1):
                     command(M.MAV_CMD_SET_CAMERA_MODE, [0, mode])
@@ -179,7 +214,7 @@ def run(binary):
                 after = state(lambda s: s['state'] == before['state'])
                 assert after['captured'] == before['captured']
                 assert not Path(str(cfg)+'.survey.json').exists()
-                print('PASS survey ignores FC/GCS attitude, ROI and SIYI/UniGCS pointing, paused mode retains guard, Photo/Video restore control')
+                print('PASS survey ignores FC/GCS attitude, ROI and SIYI/UniGCS pointing while it holds the gimbal, follows pointing once paused or denied, reports a refused claim, Photo/Video restore control')
             except BaseException:
                 log.flush()
                 log.seek(0)

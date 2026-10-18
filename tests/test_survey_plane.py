@@ -2,6 +2,7 @@
 """Plane AUTO mission survey through AP_Camera and the gimbal manager lease."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -155,13 +156,19 @@ def run(args):
             receive()
         status = json.loads(survey_status_path(cfg).read_text())
         assert 'paused' in status['state'], status
+        # the paused camera follows the pointing that took over
+
+        def pitch(m):
+            w, x, y, z = m.q
+            return math.degrees(math.asin(max(-1, min(1, 2*(w*y - z*x)))))
+        wait(lambda m: m.get_type() == 'GIMBAL_DEVICE_ATTITUDE_STATUS' and abs(pitch(m) + 45) < 5, 10)
         # Restart by command, then kill the camera and check lease expiry.
         ack = command(M.MAV_CMD_SET_CAMERA_MODE, [100, 2])
         assert ack.result == M.MAV_RESULT_ACCEPTED, ack
         wait(lambda m: m.get_type() == 'GIMBAL_MANAGER_STATUS' and m.primary_control_compid == 154)
         stop(camera)
         wait(lambda m: m.get_type() == 'GIMBAL_MANAGER_STATUS' and m.primary_control_compid == 0, 8)
-        print(f'PASS Plane AUTO: mission mode roundtrip, {len(captures)} captures at ~400m AGL, takeover and crash lease expiry')
+        print(f'PASS Plane AUTO: mission mode roundtrip, {len(captures)} captures at ~400m AGL, takeover steering the gimbal and crash lease expiry')
     finally:
         (out/'events.json').write_text(json.dumps(messages, indent=2))
         if link:

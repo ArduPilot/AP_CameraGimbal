@@ -52,7 +52,7 @@ static int token_create(uint8_t token[16])
 static int command(struct ca_manual_control *c, struct apcam_manual_packet *p)
 {
     uint64_t now = now_ms();
-    if (ca_mavlink_server_survey_mode(c->mavlink) &&
+    if (ca_mavlink_server_survey_owns_gimbal(c->mavlink) &&
         (p->action == APCAM_MANUAL_ACQUIRE || p->action == APCAM_MANUAL_CENTER ||
          (p->action >= APCAM_MANUAL_LEFT && p->action <= APCAM_MANUAL_DOWN))) return -EBUSY;
     if (p->action == APCAM_MANUAL_ACQUIRE) {

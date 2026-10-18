@@ -437,7 +437,7 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
     case 0xaa: {
         if(n!=9 || p[0]>1) break;
         if(!p[0]) { ca_media_tracking_stop(s->media); out[0]=1; }
-        else if(ca_mavlink_server_survey_mode(s->mavlink)) out[0]=6;
+        else if(ca_mavlink_server_survey_owns_gimbal(s->mavlink)) out[0]=6;
         else if(!s->tracking_enabled) out[0]=2;
         else if(!ca_media_tracking_available(s->media)) out[0]=7;
         else if(ca_media_side_by_side(s->media)) out[0]=3;
@@ -519,7 +519,7 @@ static void request(void *opaque,const ca_private_frame *f)
        (f->command==0xa0 || f->command==0xb4 || f->command==0xc2))) return;
     // This is the MCU gimbal namespace: fail closed for unknown pointing
     // commands. Camera controls (zoom, palette, photos) were handled above.
-    if(ca_mavlink_server_survey_mode(s->mavlink) &&
+    if(ca_mavlink_server_survey_owns_gimbal(s->mavlink) &&
        !(f->payload_length==0 && (f->command==0xa0 || f->command==0xb4 || f->command==0xc2)) &&
        f->command!=0xbb) return;
     s->gimbal_requested[f->command]=true;
