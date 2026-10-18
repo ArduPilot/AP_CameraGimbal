@@ -34,8 +34,18 @@ Send COMMAND_LONG to the camera's system ID and camera component (normally
   left, top, right, bottom in the selected main image. Sort reverse drags
   in the client. Each edge is in [0,1]; the rectangle must have positive
   area and be at least 8 pixels wide/high in the tracking image.
+- `MAV_CMD_CAMERA_TRACK_POINT` (2004): parameters 1–2 are the normalized point
+  and parameter 3 its radius as a fraction of the main image width. The camera
+  tracks a square of ±radius centred on the point, shrunk to fit inside the
+  image. It is never smaller than the tracker accepts, so a radius of 0 (one
+  pixel in MAVLink) or a point at the very edge gets that minimum box.
 - `MAV_CMD_CAMERA_STOP_TRACKING` (2010): cancels either SIYI or MAVLink tracking.
-- `CAMERA_INFORMATION.flags` advertises `CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE`.
+- `CAMERA_INFORMATION.flags` advertises `CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE`
+  and `CAMERA_CAP_FLAGS_HAS_TRACKING_POINT`.
+- These commands can also be sent to the flight controller, which forwards them
+  to the camera when it advertises the matching capability. The flight
+  controller accepts them as soon as they are forwarded, so a camera rejection
+  (for example while a survey holds the gimbal) does not reach the GCS.
 - `CAMERA_TRACKING_IMAGE_STATUS` is sent at 5 Hz by default. Rectangle corners
   are normalized; point/radius fields are NaN. ACTIVE means image-confirmed;
   ACTIVE|COASTING means predicted during a short occlusion; ERROR means lost;

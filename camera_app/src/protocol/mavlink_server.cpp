@@ -707,7 +707,7 @@ static void send_camera_information(struct ca_mavlink_server *server,
 #endif
     info.cam_definition_version = server->definition_version;
     if(ca_media_tracking_available(server->media))
-        info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE;
+        info.flags |= CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE | CAMERA_CAP_FLAGS_HAS_TRACKING_POINT;
     info.gimbal_device_id = server->gimbal_component_id;
 #if APCAM_GIMBAL_OPTIONAL
     if (!have_gimbal(server)) info.gimbal_device_id = 0U;
@@ -1716,6 +1716,20 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
         if(!ca_media_tracking_available(server->media)) return MAV_RESULT_UNSUPPORTED;
         if(server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
         const ca_tracking_rect rect={params[0],params[1],params[2],params[3]};
+        if(ca_media_tracking_start(server->media,rect,CA_TRACK_OWNER_MAVLINK)<0) return MAV_RESULT_DENIED;
+        server->target_location_active=false; stop_tracking_rate(server);
+        return MAV_RESULT_ACCEPTED;
+    }
+    case MAV_CMD_CAMERA_TRACK_POINT: {
+        if(ca_mavlink_server_survey_owns_gimbal(server)) return MAV_RESULT_TEMPORARILY_REJECTED;
+        if(!ca_media_tracking_available(server->media)) return MAV_RESULT_UNSUPPORTED;
+        if(server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
+        const float x=params[0], y=params[1];
+        if(!isfinite(x) || !isfinite(y) || x<0 || x>1 || y<0 || y>1) return MAV_RESULT_DENIED;
+        unsigned width=0,height=0; enum ca_video_codec codec; uint16_t flags=0;
+        stream_properties(server,1U,&width,&height,&codec,&flags);
+        const ca_tracking_rect rect=ca_tracking_point_rect(x,y,params[2],
+            width && height ? float(width)/height : 16.f/9);
         if(ca_media_tracking_start(server->media,rect,CA_TRACK_OWNER_MAVLINK)<0) return MAV_RESULT_DENIED;
         server->target_location_active=false; stop_tracking_rate(server);
         return MAV_RESULT_ACCEPTED;
