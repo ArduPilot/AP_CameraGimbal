@@ -72,6 +72,7 @@ def run(args, directory):
             link.mav.command_long_send(42, 100, M.MAV_CMD_REQUEST_CAMERA_INFORMATION, 0, *([0]*7))
             info = receive(link, 'CAMERA_INFORMATION')
             assert info.flags & M.CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE
+            assert info.flags & M.CAMERA_CAP_FLAGS_HAS_TRACKING_POINT
             client = Client(ports['private']) if args.backend=='mt11' else LongClient(ports['private'])
             version = client.request(0x94)
             assert len(version)==8 and version[7]==0x87, version.hex()
@@ -121,6 +122,17 @@ def run(args, directory):
             receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status & 1)
             assert client.request(0xaa,bytes(9))==b'\1'
             receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status==0)
+            # A point acquires the target as a box of +-radius around it
+            px, py = (rect[0]+rect[2])/2, (rect[1]+rect[3])/2
+            for bad in ((float('nan'), py), (1.5, py), (px, -.1)):
+                assert command(M.MAV_CMD_CAMERA_TRACK_POINT, *bad, .065)==M.MAV_RESULT_DENIED
+            assert command(M.MAV_CMD_CAMERA_TRACK_POINT, px, py, .065)==M.MAV_RESULT_ACCEPTED
+            point = receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status & 1)
+            assert abs(point.rec_bottom_x-point.rec_top_x-.13) < .03, point
+            # the radius is a fraction of width, so the box is square in pixels
+            assert abs(point.rec_bottom_y-point.rec_top_y-.13*width/height) < .04, point
+            assert command(M.MAV_CMD_CAMERA_STOP_TRACKING)==M.MAV_RESULT_ACCEPTED
+            receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status==0)
             # Explicit public SDK movement takes ownership back from tracking.
             assert command(M.MAV_CMD_CAMERA_TRACK_RECTANGLE,*rect)==M.MAV_RESULT_ACCEPTED
             receive(link, 'CAMERA_TRACKING_IMAGE_STATUS', lambda m: m.tracking_status & 1)
@@ -136,7 +148,7 @@ def run(args, directory):
                 assert len(client.reply(0x89,0x2e))==4
                 assert client.request(0xbb,b'\0',dest=0x2e,link=0x11)==b'\0'
             print(f'PASS {args.backend}: SIYI acquisition centers target {initial:.3f} -> {error:.3f}; '
-                  'shared MAVLink acquire/cancel/status, capability, scenes/range', flush=True)
+                  'shared MAVLink rectangle/point acquire, cancel, status, capability, scenes/range', flush=True)
             client.sock.close(); client=None
         except BaseException:
             print((root/'run.log').read_text()[-6000:], file=sys.stderr)

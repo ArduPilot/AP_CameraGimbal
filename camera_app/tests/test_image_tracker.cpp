@@ -20,8 +20,32 @@ static ca_tracking_frame frame(unsigned n, int dx=0, bool occluded=false)
     }
     return f;
 }
+static void point_rect_tests()
+{
+    auto near=[](float a,float b) { return std::fabs(a-b)<1e-5f; };
+    auto accepted=[](const ca_tracking_rect &r) {
+        // APC_Tracking::start() limits
+        return ca_tracking_rect_valid(r) && (r.right-r.left)*CA_TRACK_WIDTH>=8 && (r.bottom-r.top)*180>=8;
+    };
+    // square in pixels on 16:9, centred on the point
+    ca_tracking_rect r=ca_tracking_point_rect(.5f,.5f,.1f,16.f/9);
+    assert(near(r.left,.4f) && near(r.right,.6f) && near(r.top,.5f-.1f*16/9) && near(r.bottom,.5f+.1f*16/9));
+    // near an edge it shrinks around the point instead of moving off it
+    r=ca_tracking_point_rect(.05f,.97f,.1f,16.f/9);
+    assert(near((r.left+r.right)/2,.05f) && near((r.top+r.bottom)/2,.97f) && accepted(r));
+    // at the very edge, radius 0 or NaN: the smallest accepted box
+    for(float x : {0.f,1.f,.5f}) for(float radius : {0.f,NAN,-1.f}) {
+        r=ca_tracking_point_rect(x,x,radius,16.f/9);
+        assert(accepted(r));
+    }
+    // a huge radius is the whole image
+    r=ca_tracking_point_rect(.3f,.3f,5.f,5.f/4);
+    assert(near(r.left,0) && near(r.right,.6f) && accepted(r));
+}
+
 int main()
 {
+    point_rect_tests();
     // The MT11 holds still below 6 deg/s. The integrated physical motion must
     // follow a sub-threshold request without accumulating an integral bias.
     for(float requested : {-.25f,-1.f,-2.f,-5.9f,.25f,1.f,2.f,5.9f,6.f,10.f}) {

@@ -43,6 +43,9 @@ ca_tracking_status ca_image_tracker_update(ca_image_tracker *tracker,
                                            const ca_tracking_frame &frame,
                                            const ca_tracking_pose &pose);
 bool ca_tracking_rect_valid(const ca_tracking_rect &rect);
+// MAV_CMD_CAMERA_TRACK_POINT: a square of +-radius (a fraction of image width)
+// centred on the point, shrunk to fit the image but no smaller than start() accepts
+ca_tracking_rect ca_tracking_point_rect(float x, float y, float radius, float aspect);
 // Project a measured rectangle to another exposure/control time. This does
 // not refresh confirmation or mutate the correlation tracker.
 bool ca_tracking_project(ca_tracking_status &status, const ca_tracking_pose &pose, uint64_t ms);

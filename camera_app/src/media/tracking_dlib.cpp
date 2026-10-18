@@ -46,6 +46,20 @@ struct ca_image_tracker {
     bool have_motion=false;
 };
 
+ca_tracking_rect ca_tracking_point_rect(float x, float y, float radius, float aspect)
+{
+    const float r=std::clamp(std::isfinite(radius) ? radius : 0.f, 0.f, .5f);
+    auto span=[](float c,float half,float minimum,float &lo,float &hi) {
+        half=std::max(std::min({half,c,1-c}),minimum);
+        c=std::clamp(c,half,1-half);
+        lo=c-half; hi=c+half;
+    };
+    ca_tracking_rect rect{};
+    span(x,r,.015f,rect.left,rect.right);
+    span(y,r*aspect,.025f,rect.top,rect.bottom);
+    return rect;
+}
+
 bool ca_tracking_rect_valid(const ca_tracking_rect &r)
 {
     return std::isfinite(r.left) && std::isfinite(r.top) && std::isfinite(r.right) &&
