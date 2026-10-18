@@ -9,7 +9,7 @@ static uint64_t clock_ms = 1000;
 static float pitch_rate, yaw_rate;
 static unsigned suspends;
 static bool survey_mode;
-bool ca_mavlink_server_survey_mode(const ca_mavlink_server *) { return survey_mode; }
+bool ca_mavlink_server_survey_owns_gimbal(const ca_mavlink_server *) { return survey_mode; }
 int manual_test_clock(clockid_t id, struct timespec *t) noexcept
 {
     assert(id == CLOCK_MONOTONIC);

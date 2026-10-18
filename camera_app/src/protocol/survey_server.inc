@@ -3,7 +3,7 @@
 struct survey_runtime {
     ca_survey_grid grid{};
     ca_survey_request request{};
-    uint64_t session=0, generation=1, claim_ms=0, manager_ms=0, terrain_ms=0;
+    uint64_t session=0, generation=1, claim_ms=0, manager_ms=0, terrain_ms=0, rejected_ms=0;
     uint64_t cycle_start=0, steady_ms=0, next_image_ms=0, straight_ms=0, status_ms=0;
     uint64_t last_course_ms=0;
     float last_course=0, course_rate=0;
@@ -27,6 +27,9 @@ struct survey_runtime {
 
 static bool survey_running(const ca_mavlink_server *s)
 { return s->survey && s->camera_mode==CAMERA_MODE_IMAGE_SURVEY && !s->survey->paused; }
+
+bool ca_mavlink_server_survey_owns_gimbal(const ca_mavlink_server *s)
+{ return s && survey_running(s) && s->survey->owned; }
 
 static bool survey_navigation_allowed(const survey_runtime &v,uint64_t now)
 {
@@ -72,6 +75,13 @@ static void survey_pause(ca_mavlink_server *s, const char *reason)
     parameter_status(s,reason);
 }
 
+// the survey starts from its own targets, not an earlier ROI, rate or tracker
+static void survey_clear_external(ca_mavlink_server *s)
+{
+    ca_media_tracking_stop(s->media);
+    s->target_location_active=false; stop_tracking_rate(s);
+}
+
 static uint8_t set_camera_mode(ca_mavlink_server *s, unsigned mode)
 {
     if(mode>2 || (!APCAM_HAVE_PHOTO && mode!=1)) return MAV_RESULT_UNSUPPORTED;
@@ -80,9 +90,9 @@ static uint8_t set_camera_mode(ca_mavlink_server *s, unsigned mode)
         if(!s->settings.position_targeting || !ca_media_survey_available(s->media,s->settings.survey.lens)) return MAV_RESULT_UNSUPPORTED;
         auto &v=*s->survey;
         if(!survey_running(s)) {
-            ca_media_tracking_stop(s->media);
+            survey_clear_external(s);
             v.paused=false; v.owned=false; v.grid_valid=false; v.target_valid=false;
-            v.claim_ms=0; v.manager_ms=0; v.straight_ms=0; ++v.generation;
+            v.claim_ms=0; v.manager_ms=0; v.straight_ms=0; v.rejected_ms=0; ++v.generation;
             v.remaining=-1; v.interval_ms=0; v.state="waiting for gimbal ownership";
             s->captures_remaining=0; s->capture_interval_s=0;
         }
@@ -140,12 +150,22 @@ static void survey_message(ca_mavlink_server *s, const mavlink_message_t *m)
         } else v.path={};
     } else if(m->msgid==MAVLINK_MSG_ID_TERRAIN_REPORT) {
         mavlink_msg_terrain_report_decode(m,&v.terrain); v.terrain_ms=monotonic_ms();
+    } else if(m->msgid==MAVLINK_MSG_ID_COMMAND_ACK) {
+        mavlink_command_ack_t a; mavlink_msg_command_ack_decode(m,&a);
+        if(a.command!=MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE || !survey_running(s) ||
+           a.target_system!=s->system_id || a.target_component!=s->gimbal_component_id) return;
+        // ArduPilot denies a renewal once the pilot or GCS has taken control
+        if(a.result==MAV_RESULT_DENIED) survey_pause(s,"survey paused: gimbal takeover");
+        else if(a.result==MAV_RESULT_TEMPORARILY_REJECTED && !v.owned) v.rejected_ms=now;
     } else if(m->msgid==MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS) {
         mavlink_gimbal_manager_status_t g; mavlink_msg_gimbal_manager_status_decode(m,&g);
         if(g.gimbal_device_id!=s->gimbal_component_id) return;
         bool ours=g.primary_control_sysid==s->system_id && g.primary_control_compid==s->gimbal_component_id;
         if(survey_running(s) && v.owned && !ours) survey_pause(s,"survey paused: gimbal takeover");
-        if(ours && survey_running(s)) { v.owned=true; v.manager_ms=monotonic_ms(); }
+        if(ours && survey_running(s)) {
+            if(!v.owned) survey_clear_external(s);
+            v.owned=true; v.manager_ms=monotonic_ms();
+        }
     }
 }
 
@@ -260,7 +280,11 @@ static void update_survey(ca_mavlink_server *s,uint64_t now)
     if(s->manual_control && *s->manual_control) { survey_pause(s,"survey paused: manual control"); return; }
     if(v.owned && now-v.manager_ms>3000) { survey_pause(s,"survey paused: ownership timeout"); return; }
     if(!v.claim_ms || now-v.claim_ms>=1000) { survey_claim(s,false); v.claim_ms=now; }
-    if(!v.owned) { v.state="waiting for gimbal ownership"; return; }
+    if(!v.owned) {
+        v.state=v.rejected_ms && now-v.rejected_ms<2000 ?
+            "waiting for gimbal ownership: mount retracted or not ready" : "waiting for gimbal ownership";
+        return;
+    }
     ca_survey_pose pose{};
     float yaw=0,yaw_rate=0;
     const auto &cfg=s->settings.survey;

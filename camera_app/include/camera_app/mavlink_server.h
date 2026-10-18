@@ -32,6 +32,8 @@ int ca_mavlink_server_fd(const struct ca_mavlink_server *server);
 int ca_mavlink_server_handle(struct ca_mavlink_server *server);
 void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server);
 bool ca_mavlink_server_survey_mode(const struct ca_mavlink_server *server);
+/* true while a survey holds the gimbal; external pointing is ignored then */
+bool ca_mavlink_server_survey_owns_gimbal(const struct ca_mavlink_server *server);
 void ca_mavlink_server_feed_mcu(struct ca_mavlink_server *server,
                                 const uint8_t *data, size_t length);
 void ca_mavlink_server_periodic(struct ca_mavlink_server *server);

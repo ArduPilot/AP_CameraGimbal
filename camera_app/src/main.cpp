@@ -246,7 +246,7 @@ static int handle_siyi_request(void *opaque, const uint8_t *raw, size_t length)
         return -1;
     }
     if (!ca_siyi_opcode_known(packet.opcode)) log_unknown_siyi(&packet);
-    const bool survey = ca_mavlink_server_survey_mode(context.mavlink);
+    const bool survey = ca_mavlink_server_survey_owns_gimbal(context.mavlink);
     if (ca_backend_manual_blocked(&survey, nullptr, packet.opcode,
                                   packet.payload, packet.payload_length)) return 0;
     if (packet.opcode == 0x07 || packet.opcode == 0x08 || packet.opcode == 0x0e ||

@@ -1653,7 +1653,7 @@ static uint8_t handle_camera_command(struct ca_mavlink_server *server,
 {
     switch (command) {
     case MAV_CMD_CAMERA_TRACK_RECTANGLE: {
-        if(ca_mavlink_server_survey_mode(server)) return MAV_RESULT_TEMPORARILY_REJECTED;
+        if(ca_mavlink_server_survey_owns_gimbal(server)) return MAV_RESULT_TEMPORARILY_REJECTED;
         if(!ca_media_tracking_available(server->media)) return MAV_RESULT_UNSUPPORTED;
         if(server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
         const ca_tracking_rect rect={params[0],params[1],params[2],params[3]};
@@ -2066,7 +2066,7 @@ bool ca_mavlink_server_survey_mode(const struct ca_mavlink_server *server)
 void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server)
 {
     /* Preserve the ROI for release, but discard its controller history. */
-    if (!server || ca_mavlink_server_survey_mode(server)) return;
+    if (!server || ca_mavlink_server_survey_owns_gimbal(server)) return;
     survey_pause(server,"survey paused: manual gimbal control");
     ca_media_tracking_stop(server->media);
     stop_tracking_rate(server);
@@ -2100,7 +2100,7 @@ static uint8_t handle_command_int(struct ca_mavlink_server *server,
     }
     uint16_t command = request.command;
     uint8_t result = MAV_RESULT_UNSUPPORTED;
-    if (ca_mavlink_server_survey_mode(server) &&
+    if (ca_mavlink_server_survey_owns_gimbal(server) &&
         (command == MAV_CMD_DO_SET_ROI_LOCATION || command == MAV_CMD_DO_SET_ROI_NONE)) {
         return send_ack(server,route,server->gimbal_component_id,command,MAV_RESULT_TEMPORARILY_REJECTED,message);
     }
@@ -2160,7 +2160,7 @@ static uint8_t handle_gimbal_set_attitude(struct ca_mavlink_server *server,
 #endif
     if (!target_matches(server, request.target_system, request.target_component,
                         server->gimbal_component_id)) return 255;
-    if (ca_mavlink_server_survey_mode(server)) return MAV_RESULT_TEMPORARILY_REJECTED;
+    if (ca_mavlink_server_survey_owns_gimbal(server)) return MAV_RESULT_TEMPORARILY_REJECTED;
     if (server->manual_control && *server->manual_control) return MAV_RESULT_TEMPORARILY_REJECTED;
     ca_media_tracking_stop(server->media);
     clear_target_location(server);
