@@ -2072,11 +2072,6 @@ static void handle_global_position_int(
     }
 }
 
-bool ca_mavlink_server_survey_mode(const struct ca_mavlink_server *server)
-{
-    return server && server->camera_mode == CAMERA_MODE_IMAGE_SURVEY;
-}
-
 void ca_mavlink_server_suspend_gimbal(struct ca_mavlink_server *server)
 {
     /* Preserve the ROI for release, but discard its controller history. */
