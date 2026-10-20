@@ -137,7 +137,7 @@ inline bool maintain_trial(const std::string &root, const std::string &runtime_r
 {
     Trial t; if (!read_trial(root, t, error)) return false; if (!t.pending()) return true;
     std::string active; if (!link_slot(root, "active", active, error)) return false;
-    if (active != t.candidate && !(t.state == "recovering" && active == t.previous)) {
+    if (active != t.candidate && !((t.state == "recovering" || t.state == "starting") && active == t.previous)) {
         t.state = "abandoned"; return write_trial(root, t, error);
     }
     std::string executable; pid_t listener = web_listener(root, port, &executable);
@@ -155,7 +155,7 @@ inline bool maintain_trial(const std::string &root, const std::string &runtime_r
     if (healthy && t.state == "ready" && !boot.empty() && t.boot == boot) {
         t.state = "confirmed"; return write_trial(root, t, error);
     }
-    if (t.state == "recovering" || (!boot.empty() && t.boot != boot) || trial_now() >= t.deadline || (!healthy && launch && t.attempts >= 3)) {
+    if (t.state == "recovering" || (t.state == "starting" && active == t.previous) || (!boot.empty() && t.boot != boot) || trial_now() >= t.deadline || (!healthy && launch && t.attempts >= 3)) {
         t.state = "recovering";
         if (!write_trial(root, t, error)) return false;
         if (active == t.candidate && !activate_bundle(root, t.previous.c_str(), runtime_root, error)) return false;
@@ -164,6 +164,7 @@ inline bool maintain_trial(const std::string &root, const std::string &runtime_r
             std::string checked;
             if (managed_web(listener, root, port, checked) && checked == executable) kill(listener, SIGTERM);
         }
+        if (!restore_trial_previous(root, t, error)) return false;
         t.state = "rolled-back"; return write_trial(root, t, error);
     }
     if (t.state == "ready" && listener && executable != expected+"/zt30-web") {

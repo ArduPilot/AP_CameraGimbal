@@ -34,16 +34,23 @@ inline bool switch_application(const std::string &root, const std::string &runti
         !verify_bundle_slot(root, result.previous.c_str(), runtime_root, error) ||
         !verify_bundle_slot(root, id.c_str(), runtime_root, error)) return false;
     if (id == result.previous) return fail(error, "This application bundle is already selected");
-    if (!replace_link(root, "previous", "slots/"+result.previous, error)) return false;
     // activate may publish before a directory fsync error. Inspect active and
     // recover explicitly; never assume a failed return means no publication.
     Trial trial;
+    struct stat previous_stat{};
+    if (!lstat((root+"/previous").c_str(), &previous_stat)) {
+        if (!link_slot(root, "previous", trial.rollback_previous, error)) return false;
+    } else if (errno != ENOENT) return fail(error, "Cannot inspect previous application selection");
+    trial.rollback_previous_saved = true;
     trial.previous = result.previous; trial.candidate = id; trial.boot = boot_identity();
     trial.state = "starting"; trial.deadline = trial_now()+180000;
     if (!token(trial.boot, 80) || !write_trial(root, trial, error)) return false;
     result.activation_attempted = true;
     bool restarted = false;
-    bool ok = activate_bundle(root, id.c_str(), runtime_root, error);
+    // The journal must precede either selection mutation so recovery retains
+    // the older manual-restore target even after a crash before activation.
+    bool ok = replace_link(root, "previous", "slots/"+result.previous, error) &&
+              activate_bundle(root, id.c_str(), runtime_root, error);
     if (ok) {
         restarted = true;
         ok = services.restart(services.context, id, error) && services.ready(services.context, id, result.thermal, error);
@@ -72,6 +79,9 @@ inline bool switch_application(const std::string &root, const std::string &runti
     if ((restarted && !services.restart(services.context, result.previous, recovery_error)) ||
         !services.ready(services.context, result.previous, thermal, recovery_error)) {
         error = cause+"; previous AP application did not recover: "+recovery_error; return false;
+    }
+    if (!restore_trial_previous(root, trial, recovery_error)) {
+        error = cause+"; AP application recovered but previous selection recovery failed: "+recovery_error; return false;
     }
     trial.state = "rolled-back";
     if (!write_trial(root, trial, recovery_error)) {
