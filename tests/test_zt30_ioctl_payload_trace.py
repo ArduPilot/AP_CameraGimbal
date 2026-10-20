@@ -3,7 +3,7 @@
 from pathlib import Path
 import os,re,runpy,secrets,shutil,struct,subprocess,unittest
 ROOT=Path(__file__).resolve().parents[1]
-ANALYSIS=ROOT.parent/'AP_CameraGimbal.port/analysis/ZT30'
+FIXTURES=ROOT/'tests/fixtures/zt30'
 def session():
  p=Path('/tmp/apcg-zt30.session.'+secrets.token_hex(3));p.mkdir();return p
 class PayloadTrace(unittest.TestCase):
@@ -27,8 +27,7 @@ class PayloadTrace(unittest.TestCase):
   files={p.name:p.read_bytes() for p in d.iterdir() if p.is_file()}
   return result,files
  def decoded(self,files):
-  if not ANALYSIS.exists():self.skipTest('external analysis decoder unavailable in CI')
-  m=runpy.run_path(str(ANALYSIS/'decode_ioctl_trace.py'));p=runpy.run_path(str(ANALYSIS/'decode_ioctl_payload.py'))
+  m=runpy.run_path(str(FIXTURES/'decode_ioctl_trace.py'));p=runpy.run_path(str(FIXTURES/'decode_ioctl_payload.py'))
   metadata=m['validate_counts'](m['decode'](files['ioctl.bin'],require_qualified_errno=True),files['ioctl-counts.bin'])
   return metadata,p['decode'](files['ioctl-payload.bin'],files['ioctl-payload-counts.bin'],metadata,fixture=True)
  def test_forwarding_threads_masks_raw_status_fork_and_totals(self):

@@ -21,7 +21,11 @@ ZT30_APP_SRC += src/streaming/raw_thermal_server.cpp src/backends/zt30/photo_own
 endif
 ZT30_APP_CPPFLAGS := $(CPPFLAGS) $(ZT30_APP_MODE) -D_FILE_OFFSET_BITS=64 \
  -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop -I$(RTSP_ROOT)/3rdpart
-ZT30_APP_XOP := $(filter-out $(RTSP_ROOT)/net/TaskScheduler.cpp $(RTSP_ROOT)/xop/RtspConnection.cpp $(RTSP_ROOT)/xop/RtpConnection.cpp,$(wildcard $(RTSP_ROOT)/net/*.cpp $(RTSP_ROOT)/xop/*.cpp))
+# Enumerate the pinned source tree, which exists before the private copy is
+# prepared. Looking in build/xop here silently drops every object on first make.
+ZT30_APP_XOP := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%, \
+ $(filter-out $(XOP_ENUM_ROOT)/net/TaskScheduler.cpp $(XOP_ENUM_ROOT)/xop/RtspConnection.cpp $(XOP_ENUM_ROOT)/xop/RtpConnection.cpp, \
+ $(wildcard $(XOP_ENUM_ROOT)/net/*.cpp $(XOP_ENUM_ROOT)/xop/*.cpp)))
 ZT30_APP_OBJECTS := $(patsubst %.cpp,$(ZT30_APP_DIR)/c/%.o,$(ZT30_APP_SRC)) \
  $(patsubst $(RTSP_ROOT)/%.cpp,$(ZT30_APP_DIR)/xop/%.o,$(ZT30_APP_XOP)) \
  $(ZT30_APP_DIR)/patched-rtsp.o $(ZT30_APP_DIR)/patched-rtp.o $(ZT30_APP_DIR)/patched-scheduler.o $(ZT30_APP_DIR)/tracking_dlib.o

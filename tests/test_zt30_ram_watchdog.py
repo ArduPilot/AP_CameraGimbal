@@ -7,6 +7,7 @@ host-test bypass. Fake processes never touch hardware or persistent camera data.
 import os
 from pathlib import Path
 import signal
+import shlex
 import subprocess
 import tempfile
 import time
@@ -37,9 +38,11 @@ class Watchdog(unittest.TestCase):
 #include <signal.h>
 int main(void) {
     char cwd[4096]; getcwd(cwd,sizeof(cwd));
-    FILE *f=fopen(getenv("CAPTURE"),"w");
+    // Publish the fixture atomically, including when a vendor PID is reused.
+    char temporary[4096];snprintf(temporary,sizeof(temporary),"%s.tmp",getenv("CAPTURE"));
+    FILE *f=fopen(temporary,"w");if(!f)return 2;
     fprintf(f,"%ld\\n%s\\n%s\\n",(long)getpid(),cwd,getenv("TEST_VALUE"));
-    fclose(f);
+    fclose(f);if(rename(temporary,getenv("CAPTURE")))return 3;
     if (getenv("IGNORE_TERM")) signal(SIGTERM,SIG_IGN);
     for (;;) pause();
 }
@@ -63,6 +66,11 @@ int main(void) {
         text = text.replace('[ ! -s "$session/owners.scan.errors" ] || return 1', ': # host fixture cannot inspect other users fd tables')
         text = text.replace('[ ! -s "$session/owners.maps.errors" ] || return 1', ': # host fixture cannot inspect other users maps')
         text = text.replace("awk '$2==\"/tmp\" && $3==\"tmpfs\" {found=1} END {exit !found}' /proc/mounts || exit 2", ': # fixture lives on the host /tmp filesystem')
+        # Keep the production prefix policy intact, but relocate both shell
+        # patterns with the host's configured temporary directory.
+        prefix = str(Path(tempfile.gettempdir()).resolve())
+        text = text.replace('/tmp/apcg-zt30.*', shlex.quote(prefix+'/apcg-zt30.')+'*')
+        text = text.replace('${session#/tmp/}', '${session#'+shlex.quote(prefix+'/')+'}')
         cls.script.write_text(text)
         cls.shell = ['/bin/sh']
         cls.helper_path = os.environ['PATH']

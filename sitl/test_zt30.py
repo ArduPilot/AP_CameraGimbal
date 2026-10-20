@@ -101,8 +101,9 @@ def run(build, orientation, no_version_reply=False):
 
                 xml=ET.parse(build.parent/'camera-definitions/zt30.xml') if (build.parent/'camera-definitions/zt30.xml').exists() else ET.parse(ROOT/'build/camera-definitions/zt30.xml')
                 parameters={p.get('name'):p for p in xml.findall('parameters/parameter')}
-                assert parameters['CAM_ZOOM'].get('max')=='180' and 'CAM_OPT_ZOOM' not in parameters
-                assert parameters['CAM_LENS'].get('default')=='1'
+                assert parameters['CAM_ZOOM'].get('max')=='180'
+                assert parameters['CAM_OPT_ZOOM'].get('max')=='30'
+                assert parameters['CAM_LENS'].get('default')=='0'
 
                 verify_rtsp_video(rtsp,'video1',(1280,720),'h264')
                 verify_rtsp_video(rtsp,'video2',(640,512),'h264')

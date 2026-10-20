@@ -10,6 +10,16 @@ import tempfile
 import time
 
 
+def check_video_size(target, thermal, width, height):
+    # Simple and terrain fixtures use 720p RGB. Thermal geometry belongs to
+    # each target: ZT30 retains its native 640x512 instead of MT11's 720p.
+    if thermal:
+        expected = (target['thermal_stream_width'], target['thermal_stream_height'])
+        assert (width, height) == expected, ((width, height), expected)
+    else:
+        assert width >= 1280 and height >= 720, (width, height)
+
+
 def main():
     import faulthandler
     faulthandler.dump_traceback_later(180, repeat=True)
@@ -193,7 +203,8 @@ def main():
                             if len(images) == 12:
                                 break
                         assert len(images) == 12
-                        assert images[0].width >= 1280 and images[0].height >= 720
+                        check_video_size(TARGETS[backend], stream == 'video2' and TARGETS[backend]['have_thermal'],
+                                         images[0].width, images[0].height)
                         images[-1].to_image().save(output / (backend + '-' + stream + '.png'))
                         print(f'{backend} {stream}: {images[0].width}x{images[0].height}, 12 decoded frames', flush=True)
                 with web_request(web_port, '/live/video1.mp4') as response:
@@ -218,7 +229,9 @@ def main():
             assert recordings, 'No recording created'
             for path in recordings:
                 with av.open(str(path)) as video:
-                    assert next(video.decode(video=0)).width >= 1280
+                    frame = next(video.decode(video=0))
+                    check_video_size(TARGETS[backend], path.name.startswith('SITL_1_') and TARGETS[backend]['have_thermal'],
+                                     frame.width, frame.height)
             saved = config.read_bytes()
             window.start_button.click()
             pump_until(lambda: window.phase in ('running', 'idle'), 60)
@@ -367,7 +380,8 @@ def main():
                                  options={'rtsp_transport': 'tcp'}, timeout=15) as video:
                         frames = 0
                         for frame in video.decode(video=0):
-                            assert frame.width >= 1280
+                            target = TARGETS[tuple(SITL_TARGETS)[index]]
+                            check_video_size(target, stream == 'video2' and target['have_thermal'], frame.width, frame.height)
                             frames += 1
                             if frames == 12:
                                 break

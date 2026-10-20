@@ -11,10 +11,11 @@ class Headers(unittest.TestCase):
    # Qualified constructor accepts exactly6 chars; Python's mktemp uses8.
    renamed=p.with_name("apcg-zt30.session."+secrets.token_hex(3));p.rename(renamed);p=renamed
    try:
+    host_fs=subprocess.check_output(['stat','-f','-c','%t',str(p)],text=True).strip()
     probe=p/'probe';real=p/'real.so';obs=p/'observer.so'
     subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror',str(ROOT/'tests/zt30_usb_header_fixture.c'),'-lpthread','-o',str(probe)],check=True)
     subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared',str(ROOT/'tests/zt30_usb_header_mock.c'),'-o',str(real)],check=True)
-    subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-fstack-usage','-shared','-DZT30_IOCTL_VENDOR_EXE="'+str(probe)+'"','-DZT30_USB_DEVICE="/dev/null"',str(ROOT/'tools/zt30_usb_header_trace.c'),'-ldl','-lpthread','-o',str(obs)],check=True)
+    subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-fstack-usage','-shared','-DTMPFS_MAGIC=0x'+host_fs,'-DZT30_IOCTL_VENDOR_EXE="'+str(probe)+'"','-DZT30_USB_DEVICE="/dev/null"',str(ROOT/'tools/zt30_usb_header_trace.c'),'-ldl','-lpthread','-o',str(obs)],check=True)
     if existing:(p/'usb-headers.bin').write_bytes(b'preserve')
     env=dict(os.environ,LD_PRELOAD=str(obs)+':'+str(real),APCG_USB_HEADER_TRACE=str(p/'usb_header.bin'))
     result=subprocess.run([str(probe) if not inactive else '/bin/true',mode],cwd=p,env=env,capture_output=True,text=True,timeout=8)
