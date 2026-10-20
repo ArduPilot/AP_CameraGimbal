@@ -15,7 +15,7 @@ public:
     ~RgbOwner() { close(); }
     RgbOwner(const RgbOwner&)=delete;
     RgbOwner &operator=(const RgbOwner&)=delete;
-    int open(bool wide=false,bool borrow_devices=false);
+    int open(bool wide=false,bool borrow_devices=false,unsigned scaler_mask=3);
     int load_iq(); // Only after external evidence proves frames are flowing.
     int close();
     const char *failed_call=nullptr;

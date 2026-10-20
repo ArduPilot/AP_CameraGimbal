@@ -335,7 +335,7 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
         if(n) break;
         image_slots(s,out); reply(s,0x92,out,2); return;
     case 0x93: {
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL_VIDEO
         if(n==2 && p[0]==3 && p[1]==0) {
             if(ca_media_set_side_by_side(s->media,true)<0) break;
             image_slots(s,out); reply(s,0x93,out,2); return;
@@ -358,7 +358,7 @@ static void camera_request(ca_unigcs *s,const ca_private_frame *f)
                              ca_media_get_thermal_gain(s->media,out))<0) break;
         reply(s,f->command,out,1); return;
     case 0xa5:
-        if(!APCAM_HAVE_THERMAL || n!=1 || p[0]>11 || p[0]==1) break;
+        if(!APCAM_HAVE_THERMAL_PALETTE || n!=1 || p[0]>11 || p[0]==1) break;
         if(!parameter(s,"THERMAL_PALETTE",p[0])) break;
         reply(s,0xa5,p,1); return;
     case 0xbd:

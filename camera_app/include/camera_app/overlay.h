@@ -19,6 +19,8 @@ struct ca_overlay_geometry {
  * sensor aspect, not the aspect of a stretched thermal video stream. */
 void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned height,
                          bool cross, bool thermal_box, float rgb_hfov);
+void ca_overlay_geometry_fov(struct ca_overlay_geometry *,unsigned width,unsigned height,
+                             bool cross,bool thermal_box,float rgb_hfov,float thermal_hfov,float thermal_aspect);
 void ca_overlay_tracking(struct ca_overlay_geometry *g, unsigned width, unsigned height,
                          const float rect[4]);
 struct ca_overlay_bitmap { unsigned x, y, width, height; uint16_t *pixels; };

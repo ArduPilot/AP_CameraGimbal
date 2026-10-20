@@ -284,8 +284,31 @@ int APC_Media::_restore_controls(const LiveControls *state)
 
 int APC_Media::configure(const struct ca_config *settings)
 {
-#if defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
-    (void)settings;errno=ENOTSUP;return -1; // before any reset/recreate or settings write
+#ifdef CAMERA_APP_ZT30_RAM
+    (void)settings;errno=ENOTSUP;return -1; // bounded qualification never reconfigures
+#elif defined(CAMERA_APP_ZT30_DEV)
+    if (!settings || !_backend) { errno=EINVAL;return -1; }
+    const auto &old=_config.settings;
+    // Native owners cannot be destroyed/recreated inside one SDK lifetime.
+    // Keep live image/raw controls independent from restart-only formats.
+    if (old.main_resolution!=settings->main_resolution || old.main_codec!=settings->main_codec ||
+        old.sub_resolution!=settings->sub_resolution || old.sub_codec!=settings->sub_codec ||
+        old.recording_resolution!=settings->recording_resolution) {
+        errno=ENOTSUP;return -1;
+    }
+    if (_backend->apply_overlay(settings)<0) { (void)_backend->apply_overlay(&old);return -1; }
+    if (!ca_config_image_equal(&old,settings) && _backend->apply_image(settings)<0) {
+        (void)_backend->apply_overlay(&old);return -1;
+    }
+    if (_backend->configure_raw_thermal(settings)<0) {
+        const int saved=errno;
+        if (!ca_config_image_equal(&old,settings)) (void)_backend->apply_image(&old);
+        (void)_backend->configure_raw_thermal(&old);
+        (void)_backend->apply_overlay(&old);
+        errno=saved;return -1;
+    }
+    _config.settings=*settings;
+    return 0;
 #else
     if (!settings) { errno = EINVAL; return -1; }
     const struct ca_config *old = &_config.settings;

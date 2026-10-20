@@ -65,7 +65,7 @@ int main(void)
     assert(ca_zoom_lens_hfov(31,1)==0);
     assert(camera.lens(0)->digital_zoom_max()==1);
     assert(camera.lens(1)->optical_zoom_max()==30 && camera.lens(1)->digital_zoom_max()==6);
-    assert(camera.lens(2)->get_FOV()==0);
+    near(camera.lens(2)->get_FOV(),24.2f); // Assumed MT11 thermal FOV.
     assert(!apcam_uses_zoom_lens(1) && !apcam_uses_zoom_lens(90));
     near(apcam_zoom_lens_optical(90),30);
 #elif APCAM_TARGET == APCAM_TARGET_Z1_MINI

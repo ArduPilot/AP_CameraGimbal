@@ -104,6 +104,9 @@ struct ca_backend {
     ca_zoom_set_fn zoom_set;
     ca_zoom_get_fn zoom_get;
     void *zoom_opaque;
+    ca_thermal_main_set_fn thermal_main_set;
+    ca_thermal_main_get_fn thermal_main_get;
+    void *thermal_main_opaque;
     ca_lens_set_fn lens_set;
     ca_lens_wide_fn lens_wide;
     void *lens_opaque;
@@ -706,6 +709,9 @@ int ca_backend_open(struct ca_backend **result,
     backend->zoom_set = config->zoom_set;
     backend->zoom_get = config->zoom_get;
     backend->zoom_opaque = config->zoom_opaque;
+    backend->thermal_main_set=config->thermal_main_set;
+    backend->thermal_main_get=config->thermal_main_get;
+    backend->thermal_main_opaque=config->thermal_main_opaque;
     backend->lens_set = config->lens_set;
     backend->lens_wide = config->lens_wide;
     backend->lens_opaque = config->lens_opaque;
@@ -933,6 +939,38 @@ int ca_backend_handle_siyi(struct ca_backend *backend,
     case 0x01:
         if (packet.payload_length) { errno=EINVAL;return -1; }
         break; // local AP software version plus actual cached MCU versions
+    case 0x10: case 0x11: {
+        if(!backend->thermal_main_set || !backend->thermal_main_get || !backend->lens_set || !backend->lens_wide) { errno=ENOTSUP;return -1; }
+        if(packet.opcode==0x10 && packet.payload_length) { errno=EINVAL;return -1; }
+        bool thermal=backend->thermal_main_get(backend->thermal_main_opaque);
+        bool wide=backend->lens_wide(backend->lens_opaque);
+        if(packet.opcode==0x11) {
+            if(packet.payload_length==2 && packet.payload[0]<=2 &&
+               packet.payload[1]==(packet.payload[0]==2?0:2)) {
+                const bool next_thermal=packet.payload[0]==2;
+                int result=backend->thermal_main_set(backend->thermal_main_opaque,next_thermal);
+                if(!result && !next_thermal)result=backend->lens_set(backend->lens_opaque,packet.payload[0]==1);
+                if(result) {
+                    (void)backend->thermal_main_set(backend->thermal_main_opaque,thermal);
+                    errno=EIO;return -1;
+                }
+            } else if(packet.payload_length==1 && (packet.payload[0]==3 || packet.payload[0]==5)) {
+                if(backend->thermal_main_set(backend->thermal_main_opaque,false))return -1;
+                if(backend->lens_set(backend->lens_opaque,packet.payload[0]==5)) {
+                    (void)backend->thermal_main_set(backend->thermal_main_opaque,thermal);
+                    return -1;
+                }
+                const uint8_t mode=packet.payload[0];emit_local(backend,packet.opcode,&mode,1);return 0;
+            } else { errno=EINVAL;return -1; }
+            thermal=backend->thermal_main_get(backend->thermal_main_opaque);
+            wide=backend->lens_wide(backend->lens_opaque);
+        }
+        const uint8_t slots[2]={uint8_t(thermal?2:wide?1:0),uint8_t(thermal?0:2)};
+        emit_local(backend,packet.opcode,slots,2);return 0;
+    }
+    case 0x1a: case 0x1b:
+        if(packet.payload_length!=(packet.opcode==0x1a?0U:1U)) { errno=EINVAL;return -1; }
+        break; // Qualified native thermal palette, handled locally below.
     case 0x0a:
         if (packet.payload_length || !ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
         break; // shared configuration getter, no camera action
@@ -1287,10 +1325,6 @@ int ca_backend_set_gimbal_angles(struct ca_backend *backend, float pitch_rad,
 #ifdef CAMERA_APP_ZT30_DEV
     if (!isfinite(pitch_rad) || !isfinite(yaw_rad)) { errno=EINVAL;return -1; }
     if (!ca_backend_has_gimbal(backend)) { errno=EAGAIN;return -1; }
-    // Keep initial bench angle tests near the current measured pose.
-    const float delta=5.1f*PI_F/180;
-    if (fabsf(pitch_rad-backend->attitude.pitch_rad)>delta ||
-        fabsf(remainderf(yaw_rad-backend->attitude.yaw_rad,2*PI_F))>delta) { errno=ERANGE;return -1; }
     if (backend->rate_stop_ms && dev_rates(backend,0,0)<0) return -1;
 #endif
     float angles[3] = {0, pitch_rad * (180.0f / PI_F), yaw_rad * (180.0f / PI_F)};

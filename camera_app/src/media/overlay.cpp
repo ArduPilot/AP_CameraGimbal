@@ -7,6 +7,17 @@
 void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned height,
                          bool cross, bool thermal_box, float rgb_hfov)
 {
+    ca_overlay_geometry_fov(g,width,height,cross,thermal_box,rgb_hfov,
+#if APCAM_HAVE_THERMAL
+                            APCAM_LENS3_FOV_H, float(APCAM_LENS3_WIDTH)/APCAM_LENS3_HEIGHT
+#else
+                            0, 1
+#endif
+    );
+}
+void ca_overlay_geometry_fov(struct ca_overlay_geometry *g,unsigned width,unsigned height,
+                             bool cross,bool thermal_box,float rgb_hfov,float thermal_hfov,float thermal_aspect)
+{
     memset(g, 0, sizeof(*g));
     g->scale = height / 720.0f;
     if (g->scale < 1) g->scale = 1;
@@ -22,12 +33,11 @@ void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned
                 g->lines[g->count++] = (struct ca_overlay_line){
                     cx + x*inner, cy + y*inner, cx + x*outer, cy + y*outer, 0, false};
     }
-#if APCAM_HAVE_THERMAL
     if (thermal_box && isfinite(rgb_hfov) && rgb_hfov > 0 && rgb_hfov < 180 &&
-        isfinite(APCAM_LENS3_FOV_H) && APCAM_LENS3_FOV_H > 0 && APCAM_LENS3_FOV_H < 180) {
+        isfinite(thermal_hfov) && thermal_hfov > 0 && thermal_hfov < 180 && thermal_aspect > 0) {
         const double rad = 0.01745329251994329577;
-        double half_w = width * .5 * tan(APCAM_LENS3_FOV_H * rad * .5) / tan(rgb_hfov * rad * .5);
-        double half_h = half_w * APCAM_LENS3_HEIGHT / APCAM_LENS3_WIDTH;
+        double half_w = width * .5 * tan(thermal_hfov * rad * .5) / tan(rgb_hfov * rad * .5);
+        double half_h = half_w / thermal_aspect;
         /* Once completely outside the view, there is no visible boundary.
          * Bound the coordinate conversion even for unreasonable calibration. */
         if (half_w > width && half_h > height) return;
@@ -38,9 +48,6 @@ void ca_overlay_geometry(struct ca_overlay_geometry *g, unsigned width, unsigned
         g->lines[g->count++] = (struct ca_overlay_line){x0,y0,x0,y1,3,true};
         g->lines[g->count++] = (struct ca_overlay_line){x1,y0,x1,y1,4,true};
     }
-#else
-    (void)thermal_box; (void)rgb_hfov;
-#endif
 }
 
 void ca_overlay_free(struct ca_overlay_bitmap out[CA_OVERLAY_REGIONS])

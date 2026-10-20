@@ -100,6 +100,7 @@ void ca_config_defaults(struct ca_config *config)
     strcpy(config->support.network_interface, "eth0");
     strcpy(config->network.interface, "eth0");
 #ifdef CAMERA_APP_ZT30_DEV
+    config->thermal_hfov_cd = (unsigned)(APCAM_LENS3_FOV_H*100+.5f);
     // Omitted keys use implemented native defaults. Explicit legacy values
     // remain parseable and are normalized separately at application startup.
     APC_ZT30_Config::effective(*config);

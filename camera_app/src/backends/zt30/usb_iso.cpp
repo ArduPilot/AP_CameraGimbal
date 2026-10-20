@@ -77,6 +77,7 @@ bool UsbIso::start() {
     usbdevfs_setinterface iface{};iface.interface=1;iface.altsetting=7;
     if(api_.ioctl(api_.opaque,fd_,USBDEVFS_SETINTERFACE,&iface)<0)return false;
     alt_=true;
+    last_reap_ns_=api_.now(api_.opaque);
     for(auto &e:entries_)if(!submit(e))return false;
     active_=true;return true;
 }
@@ -105,8 +106,15 @@ int UsbIso::step(Sink sink,void *opaque) {
     if(p->actual_length<0 || total!=uint32_t(p->actual_length)) { errno=EPROTO;return fail(); }
     const uint64_t now=api_.now(api_.opaque);
     if(!now) { errno=EIO;return fail(); }
+    ++stats_.completions;
+    if(!total)++stats_.empty_completions;
+    stats_.bytes+=total;
+    if(last_reap_ns_ && now>=last_reap_ns_ && now-last_reap_ns_>stats_.max_reap_gap_ns)
+        stats_.max_reap_gap_ns=now-last_reap_ns_;
+    last_reap_ns_=now;
     for(unsigned i=0;i<ThermalPackets;++i) {
         const auto &packet=p->iso_frame_desc[i];
+        if(packet.actual_length)++stats_.data_packets;
         int status=p->status ? p->status : static_cast<int32_t>(packet.status);
         if(status)++packet_errors_;
         if(packet.actual_length || status) {
@@ -140,11 +148,15 @@ bool UsbIso::finish() {
     else {
         if(alt_) {
             usbdevfs_setinterface iface{};iface.interface=1;iface.altsetting=0;
-            if(api_.ioctl(api_.opaque,fd_,USBDEVFS_SETINTERFACE,&iface)<0)cleanup_ok_=false;
+            if(api_.ioctl(api_.opaque,fd_,USBDEVFS_SETINTERFACE,&iface)<0) {
+                stats_.alt_zero=-errno;cleanup_ok_=false;
+            }
         }
         for(int i=1;i>=0;--i)if(claims_[i]) {
             unsigned number=unsigned(i);
-            if(api_.ioctl(api_.opaque,fd_,USBDEVFS_RELEASEINTERFACE,&number)<0)cleanup_ok_=false;
+            if(api_.ioctl(api_.opaque,fd_,USBDEVFS_RELEASEINTERFACE,&number)<0) {
+                (i?stats_.release_stream:stats_.release_control)=-errno;cleanup_ok_=false;
+            }
         }
     }
     // Linux usbfs release synchronously kills pending URBs. Storage remains alive

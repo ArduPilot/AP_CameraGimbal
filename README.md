@@ -129,6 +129,8 @@ libraries are pinned under `packaging/zt30/platform`; they are checked during
 the build and on the receiving camera, and are not included in the update.
 See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md) for installation
 requirements and recovery behavior.
+Native parameter behavior, FOV assumptions and hardware limits are described in
+[`packaging/zt30/NATIVE_SETTINGS.md`](packaging/zt30/NATIVE_SETTINGS.md).
 
 ## Adding camera support
 

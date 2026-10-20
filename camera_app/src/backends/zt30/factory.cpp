@@ -1,12 +1,18 @@
 /* Continuous native development backend. Shares the normal app, transport and
  * qualified RGB/encoder owners; no probe files, client gates or vendor fallback.
- * Current scope: one fixed 720p RGB source, no actuator/thermal/recording support.
+ * Configurable RGB and thermal streams, paired recordings and still capture;
+ * the browser retains a separate 720p H264 RGB preview.
  */
 #include "owned_media.h"
 #include "zoom_feedback.h"
 #include "thermal_file_test.h"
 #include "thermal_live.h"
 #include "photo_owner.h"
+#include "isp.h"
+#include "output.h"
+#include "recording.h"
+#include "overlay.h"
+#include "media_graph.h"
 #include "mi/native_sdk.h"
 #include "pts_clock.h"
 #include "camera_app/rtsp.h"
@@ -85,6 +91,14 @@ static bool vendor_stopped() {
 struct Context {
     NativeSdk sdk; // context destroyed only after MediaBackend joins/unwinds
     Api &api=sdk.api;EncoderApi &encoder=sdk.encoder;
+    ImageControls image{sdk.image};
+    Overlay overlay{sdk};
+    std::unique_ptr<VideoOutput> main_output,sub_output,record_output;
+    Recording recordings;
+    std::string record_root;
+    std::atomic<unsigned> thermal_hfov_cd{0};
+    bool external_main=false,external_sub=false;
+    std::mutex route_lock;bool thermal_primary=false,waiting_key[2]{true,true};
     PacketMemory memory{pointer_slot,copy_packet};
     std::unique_ptr<uint8_t[]> buffer{new(std::nothrow) uint8_t[4U*1024*1024]};
     ca_rtsp *rtsp=nullptr;
@@ -93,7 +107,9 @@ struct Context {
     std::unique_ptr<ThermalFileTest> thermal_test;
     std::unique_ptr<ThermalLive> thermal_live;
     std::unique_ptr<PhotoOwner> photos;
-    EncoderSource primary_source=EncoderSource::Zoom;
+    std::atomic<EncoderSource> primary_source{EncoderSource::Zoom};
+    EncoderSource original_source=EncoderSource::Zoom;
+    bool other_ports[5]{};
     ThermalStartBudget photo_budget;bool photo_opened=false;
     int owner_lock=-1;
     unsigned rtsp_port=8554;
@@ -138,7 +154,7 @@ struct Context {
         std::fclose(proc);return found;
     }
     static bool gate(void *opaque,bool after_iq) {
-        return gate_channel(opaque,after_iq,uint32_t(static_cast<Context*>(opaque)->primary_source));
+        return gate_channel(opaque,after_iq,uint32_t(static_cast<Context*>(opaque)->primary_source.load()));
     }
     static bool gate_channel(void *opaque,bool after_iq,unsigned channel) {
         (void)opaque;
@@ -168,9 +184,12 @@ struct Context {
         if(ca_live_video_server_configure(c.live,0,1280,720,30,true)) {
             ca_log("ZT30 web video configuration failed: errno=%d",errno);return false;
         }
-        if(ca_rtsp_open(&c.rtsp,c.rtsp_port,"video1",CA_VIDEO_H264,30)) {
+        if(ca_rtsp_open(&c.rtsp,c.rtsp_port,"video1",c.settings.main_codec,30)) {
             ca_log("ZT30 RTSP listener failed: port=%u errno=%d",c.rtsp_port,errno);return false;
         }
+        unsigned id=0;
+        if(ca_rtsp_add_video(c.rtsp,"video2",c.settings.sub_codec,15,&id) || id!=1 ||
+           ca_live_video_server_configure(c.live,1,640,512,15,true))return false;
         ca_rtsp_add_config_aliases(c.rtsp,&c.settings);
         return c.observe();
     }
@@ -185,9 +204,42 @@ struct Context {
         size_t offset=0,nal=0,length=0;bool key=false;
         while(ca_annexb_next(f.data,f.bytes,&offset,&nal,&length))
             if(length && (f.data[nal]&31)==5)key=true;
-        // No-viewer RTSP publication may return -1; it is not an encoder fault.
-        (void)ca_rtsp_push_video_timed(c.rtsp,0,f.data,f.bytes,key,0,mapped);
-        return !ca_live_video_server_publish(c.live,0,f.data,f.bytes,mapped,key,0);
+        // Browser preview stays 720p H264 independently from the RTSP format.
+        std::lock_guard<std::mutex> g(c.route_lock);
+        const unsigned stream=c.thermal_primary?1:0;
+        if(!(stream?c.external_sub:c.external_main))c.push(stream,f,mapped,key);
+        return !ca_live_video_server_publish(c.live,stream,f.data,f.bytes,mapped,key,0);
+    }
+    static bool main_frame(void *opaque,const EncodedFrame &frame,uint64_t pts,bool key) {
+        auto &c=*static_cast<Context*>(opaque);
+        std::lock_guard<std::mutex> g(c.route_lock);
+        if(!c.thermal_primary)c.push(0,frame,pts,key);
+        return true;
+    }
+    void push(unsigned stream,const EncodedFrame &f,uint64_t pts,bool key) {
+        if(waiting_key[stream] && !key)return;
+        waiting_key[stream]=false;
+        (void)ca_rtsp_push_video_timed(rtsp,stream,f.data,f.bytes,key,0,pts);
+    }
+    static bool sub_frame(void *opaque,const EncodedFrame &f,uint64_t pts,bool key) {
+        auto &c=*static_cast<Context*>(opaque);std::lock_guard<std::mutex> g(c.route_lock);
+        if(c.thermal_primary)c.push(1,f,pts,key);
+        return true;
+    }
+    static void thermal_video_frame(void *opaque,EncoderCodec codec,const EncodedFrame &f,uint64_t pts,bool key) {
+        auto &c=*static_cast<Context*>(opaque);std::lock_guard<std::mutex> g(c.route_lock);
+        const unsigned stream=c.thermal_primary?0:1;
+        if((codec==EncoderCodec::H265?CA_VIDEO_H265:CA_VIDEO_H264)==(stream?c.settings.sub_codec:c.settings.main_codec))c.push(stream,f,pts,key);
+        if(codec==EncoderCodec::H264)(void)ca_live_video_server_publish(c.live,stream,f.data,f.bytes,pts,key,0);
+    }
+    static bool recording_frame(void *opaque,const EncodedFrame &frame,uint64_t pts,bool key) {
+        auto &c=*static_cast<Context*>(opaque);
+        c.recordings.frame(0,frame,pts,key,zoom_feedback().hfov(c.primary_source==EncoderSource::Wide,monotonic_ns()/1000000));
+        return true;
+    }
+    static void thermal_recording_frame(void *opaque,const EncodedFrame &frame,uint64_t pts,bool key) {
+        auto &c=*static_cast<Context*>(opaque);
+        c.recordings.frame(1,frame,pts,key,c.thermal_hfov_cd.load()*.01f);
     }
     static bool drain(void*) { return true; }
 };
@@ -198,10 +250,70 @@ public:
     int shutdown() {
         if(context->thermal_test)context->thermal_test->join();
         if(context->thermal_live)context->thermal_live->join();
+        if(context->sub_output && context->sub_output->close())return EOWNERDEAD;
+        if(context->record_output && context->record_output->close())return EOWNERDEAD;
+        if(context->main_output && context->main_output->close())return EOWNERDEAD;
+        (void)context->recordings.close();
+        if(stop_video())return EOWNERDEAD;
+        if(context->overlay.close())return EOWNERDEAD;
+        for(unsigned port=1;port<5;port++)if(context->other_ports[port]) {
+            const unsigned ch=context->original_source==EncoderSource::Zoom?1:0;
+            if(context->sdk.api.scl_disable_port(0,ch,port))return EOWNERDEAD;
+            context->other_ports[port]=false;
+        }
         if(context->photos && context->photos->close())return EOWNERDEAD;
         if(context->photo_opened) { (void)context->photo_budget.reset();context->photo_opened=false; }
         return MediaBackend::shutdown();
     }
+    bool ready() const override {
+        return MediaBackend::ready() && (!context->main_output || context->main_output->healthy()) &&
+            (!context->sub_output || context->sub_output->healthy()) &&
+            (!context->record_output || context->record_output->healthy());
+    }
+    int set_lens(enum ca_media_lens value) override {
+        if(value!=CA_MEDIA_LENS_WIDE && value!=CA_MEDIA_LENS_ZOOM) { errno=EINVAL;return -1; }
+        if(set_thermal_main(false))return -1;
+        const auto selected=value==CA_MEDIA_LENS_WIDE?EncoderSource::Wide:EncoderSource::Zoom;
+        const auto before=context->primary_source.load();
+        if(selected==before)return 0;
+        if(!context->photo_opened) { errno=ENODATA;return -1; }
+        int rc=select_source(selected);
+        if(!rc && context->main_output)rc=context->main_output->select_source(selected);
+        if(!rc && context->sub_output)rc=context->sub_output->select_source(selected);
+        if(!rc && context->record_output)rc=context->record_output->select_source(selected);
+        if(!rc)rc=context->overlay.select_source(unsigned(selected));
+        if(rc) {
+            if(rc==EOWNERDEAD || select_source(before) ||
+               (context->main_output && context->main_output->select_source(before)) ||
+               (context->sub_output && context->sub_output->select_source(before)) ||
+               (context->record_output && context->record_output->select_source(before)) ||
+               context->overlay.select_source(unsigned(before)))_exit(28);
+            errno=EIO;return -1;
+        }
+        context->primary_source.store(selected);
+        ca_log("ZT30 RGB source selected: %s",value==CA_MEDIA_LENS_WIDE?"wide":"zoom");
+        return 0;
+    }
+    int set_thermal_main(bool thermal) override {
+        if(thermal && (!context->thermal_live || !context->thermal_live->ready())) { errno=ENODATA;return -1; }
+        std::lock_guard<std::mutex> g(context->route_lock);
+        if(thermal==context->thermal_primary)return 0;
+        for(unsigned stream=0;stream<2;stream++) {
+            const bool th=(stream==0)==thermal;
+            if(ca_live_video_server_configure(context->live,stream,th?640:1280,th?512:720,th?15:30,true))return -1;
+            (void)ca_rtsp_set_frame_rate(context->rtsp,stream,th?15:30);
+            context->waiting_key[stream]=true;
+        }
+        context->thermal_primary=thermal;
+        ca_log("ZT30 main source selected: %s",thermal?"thermal":"RGB");return 0;
+    }
+    bool thermal_main() const override { std::lock_guard<std::mutex> g(context->route_lock);return context->thermal_primary; }
+    int set_recording(bool active) override {
+        if(active && (!context->thermal_live || !context->thermal_live->ready())) { errno=ENODATA;return -1; }
+        return context->recordings.set(active);
+    }
+    bool recording() const override { return context->recordings.active(); }
+    const char *recording_path() const override { return context->recordings.path(); }
     bool photo_available() const override {
         // Both scopes include thermal; do not advertise working photos when
         // the required live source has failed or has never produced a frame.
@@ -214,6 +326,22 @@ public:
         if(!context->thermal_live->snapshot(frame,ThermalPixelFrameBytes,at))return -1;
         return context->photos->capture(context->capture_root.c_str(),scope,frame,ThermalPixelFrameBytes,at,context->raw_photo);
     }
+    float survey_hfov(unsigned lens) const override {
+        if(lens==0)return context->thermal_hfov_cd.load()*.01f;
+        if(lens==1)return zoom_feedback().hfov(true,monotonic_ns()/1000000);
+        if(lens==2)return zoom_feedback().hfov(false,monotonic_ns()/1000000);
+        return 0;
+    }
+    bool survey_available(unsigned lens) const override {
+        if(lens==0)return context->raw_stream && context->thermal_live && context->thermal_live->ready() && context->thermal_hfov_cd.load()>=100;
+        return lens>=1 && lens<=2 && context->photo_opened && context->photos && context->photos->available();
+    }
+    int capture_survey(const ca_survey_request &request,ca_survey_result &result,
+                       const std::atomic<uint64_t> &generation) override {
+        if(!survey_available(request.lens)) { errno=ENOTSUP;return -1; }
+        if(request.lens==0)return ca_thermal_stream_capture(context->raw_stream,context->capture_root.c_str(),request,result,generation);
+        return context->photos->capture_survey(context->capture_root.c_str(),request,result,generation);
+    }
     // SIYI/UniGCS use background module zoom even when wide is selected;
     // MAVLink selected-source geometry uses lens_zoom() and hfov().
     float zoom() const override { return zoom_feedback().get(monotonic_ns()/1000000); }
@@ -221,20 +349,47 @@ public:
         return value==CA_MEDIA_LENS_WIDE ? 1 : value==CA_MEDIA_LENS_ZOOM ? zoom() : NAN;
     }
     float hfov(bool thermal) const override {
-        return thermal ? 0 : zoom_feedback().hfov(lens()==CA_MEDIA_LENS_WIDE,monotonic_ns()/1000000);
+        return thermal ? context->thermal_hfov_cd.load()*.01f : zoom_feedback().hfov(lens()==CA_MEDIA_LENS_WIDE,monotonic_ns()/1000000);
     }
     unsigned frame_rate(bool thermal) const override {
         if(thermal)return context->thermal_live && context->thermal_live->ready()?15:0;
         return MediaBackend::frame_rate(false);
     }
+    int apply_overlay(const ca_config *settings) override {
+        if(!settings) { errno=EINVAL;return -1; }
+        if(context->overlay.apply(*settings))return -1;
+        if(context->thermal_live)context->thermal_live->overlay(settings->osd_cross,settings->osd_recording);
+        return 0;
+    }
+    int apply_image(const ca_config *settings) override {
+        return settings?context->image.apply(*settings):(errno=EINVAL,-1);
+    }
+    int exposure(unsigned lens,ca_exposure *sample) override {
+        return context->image.exposure(lens,sample);
+    }
+    int get_thermal_palette(uint8_t *value) override {
+        if(!context->thermal_live) { errno=ENODATA;return -1; }
+        return context->thermal_live->palette(value);
+    }
+    int set_thermal_palette(uint8_t value) override {
+        if(!context->thermal_live) { errno=ENODATA;return -1; }
+        return context->thermal_live->set_palette(value);
+    }
     int configure_raw_thermal(const ca_config *settings) override {
-        return ca_thermal_stream_configure(context->raw_stream,settings);
+        if(settings->thermal_hfov_cd && settings->thermal_hfov_cd<100) { errno=EINVAL;return -1; }
+        if(ca_thermal_stream_configure(context->raw_stream,settings))return -1;
+        context->thermal_hfov_cd.store(settings->thermal_hfov_cd);return 0;
     }
     int set_inverted(bool inverted) override { if(inverted) { errno=ENOTSUP;return -1; }return 0; }
     int start(EncoderSource source) {
         MediaHooks h{context.get(),nullptr,Context::gate,Context::open_sink,Context::vui,Context::frame,Context::drain};
-        context->primary_source=source;
-        const int rc=initialize(h,context->buffer.get(),4U*1024*1024,source,MediaRun::Continuous);
+        context->primary_source=source;context->original_source=source;
+        unsigned main_width,main_height;
+        ca_video_resolution_size(context->settings.main_resolution,&main_width,&main_height);
+        context->external_main=main_width!=1280 || main_height!=720 || context->settings.main_codec!=CA_VIDEO_H264;
+        ca_video_resolution_size(context->settings.sub_resolution,&main_width,&main_height);
+        context->external_sub=main_width!=1280 || main_height!=720 || context->settings.sub_codec!=CA_VIDEO_H264;
+        const int rc=initialize(h,context->buffer.get(),4U*1024*1024,source,MediaRun::Continuous,31);
         if(rc)return rc;
         if(ca_raw_thermal_open(&context->raw_photo,context->capture_root.c_str()))
             ca_log("ZT30 raw photo writer unavailable errno=%d",errno);
@@ -263,6 +418,51 @@ public:
                     context->photo_opened=true;
             }
         }
+        const unsigned image_channels=context->photo_opened?3U:(1U<<unsigned(source));
+        if(context->image.initialize(image_channels,context->settings)) {
+            ca_log("ZT30 initial image settings failed: errno=%d",errno);return EIO;
+        }
+        unsigned width,height;
+        ca_video_resolution_size(context->settings.main_resolution,&width,&height);
+        context->external_main=width!=1280 || height!=720 || context->settings.main_codec!=CA_VIDEO_H264;
+        if(context->external_main) {
+            context->main_output.reset(new(std::nothrow) VideoOutput(context->sdk,context->memory));
+            const auto codec=context->settings.main_codec==CA_VIDEO_H265?EncoderCodec::H265:EncoderCodec::H264;
+            if(!context->main_output || context->main_output->start(source,2,3,codec,width,height,1570000,Context::main_frame,context.get())) {
+                ca_log("ZT30 main format initialization failed");return EIO;
+            }
+        }
+        if(context->external_sub) {
+            ca_video_resolution_size(context->settings.sub_resolution,&width,&height);
+            context->sub_output.reset(new(std::nothrow) VideoOutput(context->sdk,context->memory));
+            const auto codec=context->settings.sub_codec==CA_VIDEO_H265?EncoderCodec::H265:EncoderCodec::H264;
+            if(!context->sub_output || context->sub_output->start(source,4,4,codec,width,height,1570000,Context::sub_frame,context.get()))return EIO;
+        }
+        ca_video_resolution_size(context->settings.recording_resolution,&width,&height);
+        context->recordings.configure(context->record_root.c_str(),width,height,context->raw_stream);
+        context->record_output.reset(new(std::nothrow) VideoOutput(context->sdk,context->memory));
+        if(!context->record_output || context->record_output->start(source,3,7,EncoderCodec::H264,width,height,12000000,Context::recording_frame,context.get())) {
+            ca_log("ZT30 recording encoder initialization failed");return EIO;
+        }
+        if(context->photo_opened) {
+            const unsigned other=source==EncoderSource::Zoom?1:0;
+            for(unsigned port=1;port<5;port++) {
+                unsigned w=1280,h=720;
+                if(port==2)ca_video_resolution_size(context->settings.main_resolution,&w,&h);
+                if(port==3)ca_video_resolution_size(context->settings.recording_resolution,&w,&h);
+                if(port==4)ca_video_resolution_size(context->settings.sub_resolution,&w,&h);
+                // An unused main-format port need not consume scaler bandwidth.
+                if(port==2 && !context->external_main)continue;
+                if(port==4 && !context->external_sub)continue;
+                auto attr=scl_port(uint16_t(w),uint16_t(h));
+                if(context->sdk.api.scl_set_port(0,other,port,&attr))return EIO;
+                context->other_ports[port]=true;
+                if(context->sdk.api.scl_enable_port(0,other,port))return EIO;
+                Port out{Scl,0,other,port};
+                if(context->sdk.api.sys_depth(0,&out,0,4))return EIO;
+            }
+        }
+        if(context->overlay.configure(unsigned(source),context->external_main,context->settings))return EIO;
         const char *test=std::getenv("CAMERA_APP_ZT30_THERMAL_TEST_INPUT");
         if(test && *test && context->sdk.resolve_input()) {
             context->thermal_test.reset(new(std::nothrow) ThermalFileTest(context->sdk,context->memory));
@@ -274,6 +474,13 @@ public:
         const char *off=std::getenv("CAMERA_APP_ZT30_THERMAL_OFF");
         if((!test || !*test) && (!off || std::strcmp(off,"1")) && context->sdk.resolve_input()) {
             context->thermal_live.reset(new(std::nothrow) ThermalLive(context->sdk,context->memory,context->rtsp,context->live,context->raw_server,context->raw_stream));
+            if(context->thermal_live) {
+                context->thermal_live->set_frame_callback(Context::thermal_recording_frame,context.get());
+                context->thermal_live->initial_palette(context->settings.thermal_palette);
+                context->thermal_live->set_video_callback(Context::thermal_video_frame,context.get(),
+                    context->settings.main_codec==CA_VIDEO_H265 || context->settings.sub_codec==CA_VIDEO_H265);
+                context->thermal_live->overlay(context->settings.osd_cross,context->settings.osd_recording);
+            }
             if(!context->thermal_live || !context->thermal_live->start(live && *live?live:nullptr)) {
                 ca_log("ZT30 live thermal refused; RGB continues");context->thermal_live.reset();
             }
@@ -284,10 +491,7 @@ public:
 }
 std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_config &config) {
     using namespace ca_zt30;
-    if(!config.backend || std::strcmp(config.backend,"zt30") ||
-       config.settings.main_resolution!=CA_VIDEO_720P || config.settings.main_codec!=CA_VIDEO_H264) {
-        ca_log("ZT30 development backend requires main stream 1280x720 H264");errno=ENOTSUP;return nullptr;
-    }
+    if(!config.backend || std::strcmp(config.backend,"zt30")) { errno=EINVAL;return nullptr; }
     if(!vendor_stopped()) { ca_log("ZT30 vendor application still owns media; refusing startup");errno=EBUSY;return nullptr; }
     const char *selected=std::getenv("CAMERA_APP_ZT30_SOURCE");
     if(selected && std::strcmp(selected,"zoom") && std::strcmp(selected,"wide")) { errno=EINVAL;return nullptr; }
@@ -296,12 +500,13 @@ std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_conf
     if(!c || !c->buffer) { errno=ENOMEM;return nullptr; }
     if(!c->lock_owner()) { ca_log("Another AP media owner is active or lock is invalid");errno=EBUSY;return nullptr; }
     if(!config.capture_root || !*config.capture_root) { errno=EINVAL;return nullptr; }
-    c->capture_root=config.capture_root;
-    c->settings=config.settings;c->rtsp_port=config.rtsp_port;
+    if(!config.record_root || !*config.record_root) { errno=EINVAL;return nullptr; }
+    c->capture_root=config.capture_root;c->record_root=config.record_root;
+    c->settings=config.settings;c->thermal_hfov_cd.store(config.settings.thermal_hfov_cd);c->rtsp_port=config.rtsp_port;
     const char *sdk=std::getenv("CAMERA_APP_ZT30_SDK");
     if(!sdk || !*sdk)sdk="/customer/camera-app/encoder-sdk.so";
     // Partial dlopen/init can retain SDK callbacks: terminate without dlclose.
-    if(!c->sdk.open(sdk) || !c->sdk.resolve_encoder() || !c->sdk.resolve_h264_getter() || !c->sdk.resolve_clock())_exit(4);
+    if(!c->sdk.open(sdk) || !c->sdk.resolve_encoder() || !c->sdk.resolve_h264_getter() || !c->sdk.resolve_clock() || !c->sdk.resolve_image() || !c->sdk.resolve_rgn())_exit(4);
     auto backend=std::unique_ptr<Backend>(new(std::nothrow) Backend(std::move(c)));
     if(!backend)_exit(20);
     if(backend->start(source)) {
@@ -309,6 +514,8 @@ std::unique_ptr<APC_Media_Backend> APC_Media_Backend::create(const ca_media_conf
         if(backend->shutdown())_exit(25);
         return nullptr;
     }
-    ca_log("ZT30 continuous RGB ready: source=%s 1280x720 H264; native gimbal and optional live thermal",source==EncoderSource::Wide?"wide":"zoom");
+    ca_log("ZT30 continuous RGB ready: source=%s main=%s/%s recording=%s; 720p H264 browser preview and optional live thermal",
+        source==EncoderSource::Wide?"wide":"zoom",ca_video_resolution_name(config.settings.main_resolution),
+        ca_video_codec_name(config.settings.main_codec),ca_video_resolution_name(config.settings.recording_resolution));
     return std::unique_ptr<APC_Media_Backend>(backend.release());
 }

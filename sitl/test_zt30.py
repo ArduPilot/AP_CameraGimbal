@@ -75,14 +75,14 @@ def run(build, orientation, no_version_reply=False):
                     drain(link)
                     link.mav.command_long_send(42,CAMERA,M.MAV_CMD_REQUEST_MESSAGE,0,
                         message_id,0,0,0,0,0,0)
-                def fov(expected):
+                def fov(expected,aspect=16/9):
                     request_message(M.MAVLINK_MSG_ID_CAMERA_FOV_STATUS)
                     message=receive(link,'CAMERA_FOV_STATUS')
                     if expected is None:
                         assert math.isnan(message.hfov) and math.isnan(message.vfov),message
                     else:
                         assert abs(message.hfov-expected)<.02,message
-                        vertical=math.degrees(2*math.atan(math.tan(math.radians(expected)/2)*9/16))
+                        vertical=math.degrees(2*math.atan(math.tan(math.radians(expected)/2)/aspect))
                         assert abs(message.vfov-vertical)<.02,message
                 def ext_set(name,value,accepted=True):
                     drain(link)
@@ -130,12 +130,13 @@ def run(build, orientation, no_version_reply=False):
                 ext_set('CAM_ZOOM',2,accepted=False)
                 request_message(M.MAVLINK_MSG_ID_CAMERA_SETTINGS)
                 settings=receive(link,'CAMERA_SETTINGS');assert math.isfinite(settings.zoomLevel) and settings.zoomLevel==0,settings
-                # Thermal remains selected, with uncalibrated geometry/tracking unavailable.
+                # Thermal remains selected and uses the assumed MT11 FOV independently of RGB zoom.
                 assert c.request(0x93,b'\x02\x00')==b'\x02\x00'
                 for value in (1,90,180):
-                    module_zoom(c,value);assert c.request(0x92)==b'\x02\x00';fov(None)
-                assert c.request(0x94)==bytes((12,0,1,0x7b))
-                assert c.request(0xaa,b'\x01'+struct.pack('<HHHH',200,200,700,700))==b'\x07'
+                    module_zoom(c,value);assert c.request(0x92)==b'\x02\x00';fov(24.2,640/512)
+                assert c.request(0x94)==bytes((12,0,1,0x7b,0,0,1,0x87))
+                assert c.request(0xaa,b'\x01'+struct.pack('<HHHH',200,200,400,400))==b'\x01'
+                assert c.request(0xaa,b'\x00'+bytes(8))==b'\x01'
                 ext_set('CAM_ZOOM',2,accepted=False)
                 # Composition must survive same-source module changes.
                 assert c.request(0x93,b'\x03\x00')==b'\x03\x02'
@@ -158,7 +159,7 @@ def run(build, orientation, no_version_reply=False):
                     assert public_request(public,4,0x18)==bytes((90,0))
                 fov(math.degrees(2*math.atan(math.tan(math.radians(2.14)/2)/3)))
                 assert camera.poll() is None
-                print(f'PASS ZT30 {orientation}: short/long UniGCS, module/lens zoom, scenes, FOV, MAVLink, RTSP and thermal tracking gate',flush=True)
+                print(f'PASS ZT30 {orientation}: short/long UniGCS, module/lens zoom, scenes, FOV, MAVLink, RTSP and assumed thermal geometry',flush=True)
             except Exception:
                 log.flush();print((root/'process.log').read_text()[-10000:],file=sys.stderr)
                 raise

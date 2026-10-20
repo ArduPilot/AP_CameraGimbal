@@ -17,7 +17,7 @@ ZT30_APP_SRC := $(filter-out $(CONTROL_DIR)/control.cpp,$(COMMON_SOURCES)) \
  src/backends/zt30/media_backend.cpp src/backends/zt30/rgb_owner.cpp src/backends/zt30/encoder_owner.cpp \
  src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp src/streaming/rtsp_xop.cpp
 ifeq ($(ZT30_DEV_BUILD),1)
-ZT30_APP_SRC += src/streaming/raw_thermal_server.cpp src/backends/zt30/photo_owner.cpp src/backends/zt30/input_buffer.cpp src/backends/zt30/input_mapping.cpp src/backends/zt30/thermal_encoder.cpp src/backends/zt30/thermal_live.cpp src/backends/zt30/thermal_pixels.cpp src/backends/zt30/usb_iso.cpp src/backends/zt30/uvc_frame.cpp
+ZT30_APP_SRC += src/streaming/raw_thermal_server.cpp src/backends/zt30/photo_owner.cpp src/backends/zt30/isp.cpp src/backends/zt30/output.cpp src/backends/zt30/recording.cpp src/backends/zt30/overlay.cpp src/backends/zt30/input_buffer.cpp src/backends/zt30/input_mapping.cpp src/backends/zt30/thermal_encoder.cpp src/backends/zt30/thermal_live.cpp src/backends/zt30/thermal_controls.cpp src/backends/zt30/thermal_pixels.cpp src/backends/zt30/usb_iso.cpp src/backends/zt30/uvc_frame.cpp
 endif
 ZT30_APP_CPPFLAGS := $(CPPFLAGS) $(ZT30_APP_MODE) -D_FILE_OFFSET_BITS=64 \
  -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop -I$(RTSP_ROOT)/3rdpart

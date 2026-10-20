@@ -2,6 +2,8 @@
 #include "api.h"
 #include "encoder_abi.h"
 #include "buffer_abi.h"
+#include "isp_abi.h"
+#include "rgn_abi.h"
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
@@ -14,6 +16,8 @@ public:
     Api api{};
     EncoderApi encoder{};
     InputBufferApi input{};
+    ImageApi image{};
+    RgnApi rgn{};
     int (*current_pts)(uint16_t,uint64_t*)=nullptr;
     NativeSdk()=default;
     NativeSdk(const NativeSdk&)=delete;
@@ -109,9 +113,35 @@ public:
     bool resolve_clock() {
         return handle && symbol(current_pts,"libmi_sys.so","MI_SYS_GetCurPts");
     }
+    bool resolve_image() {
+        if(!handle)return false;
+#define LOAD(field,name) if(!symbol(image.field,"libmi_isp.so",name))return false
+        LOAD(get_brightness,"MI_ISP_IQ_GetBrightness");LOAD(set_brightness,"MI_ISP_IQ_SetBrightness");
+        LOAD(get_contrast,"MI_ISP_IQ_GetContrast");LOAD(set_contrast,"MI_ISP_IQ_SetContrast");
+        LOAD(get_saturation,"MI_ISP_IQ_GetSaturation");LOAD(set_saturation,"MI_ISP_IQ_SetSaturation");
+        LOAD(get_wb,"MI_ISP_AWB_GetAttr");LOAD(set_wb,"MI_ISP_AWB_SetAttr");
+        LOAD(get_ev,"MI_ISP_AE_GetEVComp");LOAD(set_ev,"MI_ISP_AE_SetEVComp");
+        LOAD(get_mode,"MI_ISP_AE_GetExpoMode");LOAD(set_mode,"MI_ISP_AE_SetExpoMode");
+        LOAD(get_manual,"MI_ISP_AE_GetManualExpo");LOAD(set_manual,"MI_ISP_AE_SetManualExpo");
+        LOAD(get_limit,"MI_ISP_AE_GetExposureLimit");LOAD(set_limit,"MI_ISP_AE_SetExposureLimit");
+        LOAD(get_metering,"MI_ISP_AE_GetWinWgtType");LOAD(set_metering,"MI_ISP_AE_SetWinWgtType");
+        LOAD(query,"MI_ISP_AE_QueryExposureInfo");
+#undef LOAD
+        return true;
+    }
+    bool resolve_rgn() {
+        if(!handle)return false;
+#define LOAD(field,name) if(!symbol(rgn.field,"libmi_rgn.so",name))return false
+        LOAD(init,"MI_RGN_Init");LOAD(deinit,"MI_RGN_DeInit");
+        LOAD(create,"MI_RGN_Create");LOAD(destroy,"MI_RGN_Destroy");
+        LOAD(bitmap,"MI_RGN_SetBitMap");LOAD(attach,"MI_RGN_AttachToChn");
+        LOAD(detach,"MI_RGN_DetachFromChn");LOAD(display,"MI_RGN_SetDisplayAttr");
+#undef LOAD
+        return true;
+    }
     void close() {
         if(handle)dlclose(handle);
-        handle=nullptr;api={};encoder={};input={};current_pts=nullptr;
+        handle=nullptr;api={};encoder={};input={};image={};rgn={};current_pts=nullptr;
     }
 private:
     void *handle=nullptr;

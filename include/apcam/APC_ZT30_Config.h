@@ -1,25 +1,34 @@
 #pragma once
 #include "APC_Config.h"
 
-// The native pipeline currently owns fixed video channels. Preserve saved
-// legacy values, but do not accept changes to controls it cannot apply.
+// Preserve saved legacy settings while rejecting writes to controls the
+// native pipeline cannot apply.
 class APC_ZT30_Config {
 public:
     static bool editable(const APC_Config::Field &field)
     {
         const char *s = field.section, *k = field.key;
-        if (!strcmp(s, "general") || !strcmp(s, "logging") || !strcmp(s, "capture")) return true;
-        if (!strcmp(s, "stream.main") || !strcmp(s, "stream.sub")) return !strcmp(k, "alias");
-        if (!strcmp(s, "mavlink")) return strcmp(k, "position_targeting") && strcmp(k, "tracking_method");
-        if (!strcmp(s, "thermal")) return !strcmp(k, "stream_fps");
-        if (!strcmp(s, "network")) return !strcmp(k, "capture");
-        if (!strcmp(s, "support_proxy")) return strncmp(k, "network_", 8) != 0;
+        if (!strcmp(s, "general") || !strcmp(s, "logging") || !strcmp(s, "capture") ||
+            !strcmp(s, "image") || !strcmp(s,"survey")) return true;
+        if(!strcmp(s,"overlay"))return true;
+        if (!strcmp(s,"stream.main") || !strcmp(s,"recording")) return true;
+        if (!strcmp(s,"stream.sub")) return true;
+        if (!strcmp(s,"mavlink") || !strcmp(s,"network") || !strcmp(s,"support_proxy")) return true;
+        if (!strcmp(s,"thermal")) return !strcmp(k,"stream_fps") || !strcmp(k,"record_fps") || !strcmp(k,"palette") || !strcmp(k,"hfov_cd");
         return false;
     }
 
     static bool validate_change(const ca_config &before, const ca_config &after,
                                 char *error, size_t error_size)
     {
+        if(after.thermal_hfov_cd && after.thermal_hfov_cd<100) {
+            snprintf(error,error_size,"Thermal FOV must be 0 (geometry disabled) or at least 100 (1 degree)");
+            errno=EINVAL;return false;
+        }
+        if(after.osd_thermal_fov && after.thermal_hfov_cd<100) {
+            snprintf(error,error_size,"Set a thermal horizontal FOV before enabling its overlay");
+            errno=EINVAL;return false;
+        }
         ca_config supported;
         ca_config_defaults(&supported);
         effective(supported);
@@ -40,16 +49,8 @@ public:
     // the web editor must compare the original saved values, not clamped ones.
     static bool effective(ca_config &config)
     {
-        bool changed = config.main_resolution != CA_VIDEO_720P ||
-            config.sub_resolution != CA_VIDEO_720P || config.recording_resolution != CA_VIDEO_720P ||
-            config.main_codec != CA_VIDEO_H264 || config.sub_codec != CA_VIDEO_H264 ||
-            config.position_targeting || config.osd_recording || config.osd_cross ||
-            config.orientation != CA_MOUNT_AUTO || config.autorecord != CA_AUTORECORD_DISABLED;
-        config.main_resolution = config.sub_resolution = config.recording_resolution = CA_VIDEO_720P;
-        config.main_codec = config.sub_codec = CA_VIDEO_H264;
-        config.position_targeting = config.osd_recording = config.osd_cross = false;
+        bool changed = config.orientation != CA_MOUNT_AUTO;
         config.orientation = CA_MOUNT_AUTO;
-        config.autorecord = CA_AUTORECORD_DISABLED;
         return changed;
     }
 };

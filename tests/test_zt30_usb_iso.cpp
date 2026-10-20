@@ -80,6 +80,7 @@ struct Fake {
             case 6:u->iso_frame_desc[0].status=unsigned(-EPROTO);break;
             case 8:u->status=-ENODEV;break;
             case 9:u->status=-ESHUTDOWN;break;
+            case 10:u->actual_length=0;for(unsigned i=0;i<2;i++)u->iso_frame_desc[i].actual_length=0;break;
             }
             *static_cast<usbdevfs_urb**>(arg)=u;++f.steps;return 0;
         }
@@ -182,7 +183,13 @@ int main() {
     assembly();full_frame();unsigned cases=2;
     { Fake f;UsbIso t(41,f.api());assert(t.start());assert(t.negotiated()[8]==99);Seen s;
       for(unsigned i=0;i<25;++i)assert(t.step(Seen::sink,&s)==1);
-      assert(s.packets==50 && f.pending.size()==8);assert(t.finish());assert(f.closed && f.discarded==8);assert(t.finish());++cases; }
+      assert(s.packets==50 && f.pending.size()==8);
+      const auto &stats=t.statistics();assert(stats.completions==25 && !stats.empty_completions && stats.bytes==200 && stats.data_packets==50);
+      assert(t.finish());assert(!stats.alt_zero && !stats.release_control && !stats.release_stream);assert(f.closed && f.discarded==8);assert(t.finish());++cases; }
+    { Fake f;UsbIso t(41,f.api());assert(t.start());f.completion_mode=10;f.clock+=17000000;Seen seen;
+      assert(t.step(Seen::sink,&seen)==1 && !seen.packets);
+      const auto &stats=t.statistics();assert(stats.completions==1 && stats.empty_completions==1 && !stats.bytes && !stats.data_packets && stats.max_reap_gap_ns==17000000);
+      assert(t.finish());++cases; }
     for(unsigned fail=1;fail<=15;++fail) {
         Fake f;f.fail_at=fail;UsbIso t(41,f.api());assert(!t.start());assert(t.finish());assert(f.closed);++cases;
     }

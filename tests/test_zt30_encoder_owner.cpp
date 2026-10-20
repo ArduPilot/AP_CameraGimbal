@@ -9,28 +9,30 @@ static std::vector<std::string> calls;
 static std::set<std::string> resources;
 static unsigned failure;
 static bool thermal=false;
+static unsigned thermal_channel=2;
 static EncoderPacket *storage;
 static EncoderStream returned;
 static uint32_t query_count=2;
 static int scenario;
 static uint32_t expected_codec=3;
 static uint32_t expected_source=0;
+static uint32_t expected_channel=1,expected_port=1,expected_width=1280,expected_height=720,expected_bitrate=1570000;
 static H264Vui current_vui{};
 static unsigned vui_reads=0;
 static const uint8_t sample[]={9,8,7,6,5,4};
 static int event(const char *name) { calls.emplace_back(name);return failure==calls.size()?-99:0; }
-static void ids(uint32_t dev,uint32_t chn) { assert(dev==0 && chn==(thermal?2U:1U)); }
+static void ids(uint32_t dev,uint32_t chn) { assert(dev==0 && chn==(thermal?thermal_channel:expected_channel)); }
 static Api system_api() {
     Api s{};
     s.sys_bind=[](uint16_t chip,Port *src,Port *dst,uint32_t a,uint32_t b,uint32_t type,uint32_t p) {
-        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==1);
-        assert(dst->module==Venc && dst->device==0 && dst->channel==1 && dst->port==0);
+        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==expected_port);
+        assert(dst->module==Venc && dst->device==0 && dst->channel==expected_channel && dst->port==0);
         assert(a==30 && b==30 && type==1 && p==0);
         const int rc=event("bind");if(!rc)resources.insert("bind");return rc;
     };
     s.sys_unbind=[](uint16_t chip,Port *src,Port *dst) {
-        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==1);
-        assert(dst->module==Venc && dst->device==0 && dst->channel==1 && dst->port==0);
+        assert(chip==0 && src->module==Scl && src->device==0 && src->channel==expected_source && src->port==expected_port);
+        assert(dst->module==Venc && dst->device==0 && dst->channel==expected_channel && dst->port==0);
         const int rc=event("unbind");resources.erase("bind");return rc;
     };
     return s;
@@ -43,8 +45,8 @@ static EncoderApi encoder_api() {
     };
     a.destroy_device=[](uint32_t dev) { assert(dev==0);const int rc=event("destroy_device");resources.erase("device");return rc; };
     a.create_channel=[](uint32_t dev,uint32_t chn,H26xChannel *attr) {
-        ids(dev,chn);assert(attr->codec==expected_codec && attr->rate_mode==(expected_codec==2?1U:8U) && attr->profile==(expected_codec==2?1U:0U) && attr->width==(thermal?640U:1280U) && attr->height==(thermal?512U:720U) && attr->fps_num==(thermal?15U:30U) && attr->fps_den==1 && attr->bitrate==(thermal?1000000U:1570000U));
-        assert(attr->max_width==(thermal?640U:expected_codec==2?1280U:3840U) && attr->max_height==(thermal?512U:expected_codec==2?720U:2160U));
+        ids(dev,chn);assert(attr->codec==expected_codec && attr->rate_mode==(expected_codec==2?1U:8U) && attr->profile==(expected_codec==2?1U:0U) && attr->width==(thermal?640U:expected_width) && attr->height==(thermal?512U:expected_height) && attr->fps_num==(thermal?15U:30U) && attr->fps_den==1 && attr->bitrate==(thermal?1000000U:expected_bitrate));
+        assert(attr->max_width==(thermal?640U:expected_codec==2?expected_width:3840U) && attr->max_height==(thermal?512U:expected_codec==2?expected_height:2160U));
         assert(attr->reference_frames==(expected_codec==2?1U:0U));
         const int rc=event("create_channel");if(!rc)resources.insert("channel");return rc;
     };
@@ -204,7 +206,50 @@ static void exercise_read_only() {
     assert(missing.open(EncoderCodec::H264,H264Timing::ReadOnly)==-1 && calls.empty());
 }
 
+static void configurable_outputs() {
+    auto s=system_api();auto a=encoder_api();auto m=memory_api();
+    for(auto codec:{EncoderCodec::H264,EncoderCodec::H265})for(unsigned width:{1920U,2560U,3840U}) {
+        reset();expected_codec=uint32_t(codec);expected_channel=7;expected_port=3;
+        expected_width=width;expected_height=width*9/16;expected_bitrate=12000000;
+        EncoderOptions options;options.width=expected_width;options.height=expected_height;
+        options.bitrate=expected_bitrate;options.channel=expected_channel;options.source_port=expected_port;options.own_device=false;
+        EncoderOwner output(s,a,m);assert(output.open(codec,H264Timing::ReadOnly,EncoderSource::Zoom,options)==0);
+        assert(output.ready() && !resources.count("device"));assert(output.close()==0 && resources.empty());
+        for(const auto &call:calls)assert(call!="create_device" && call!="destroy_device");
+    }
+    expected_channel=expected_port=1;expected_width=1280;expected_height=720;expected_bitrate=1570000;
+}
+static int bound_source=-1;
+static bool fail_switch=false,fail_restore=false;
+static void source_switching() {
+    reset();expected_codec=2;expected_source=0;
+    auto sys=system_api();auto api=encoder_api();auto memory=memory_api();
+    sys.sys_bind=[](uint16_t chip,Port *source,Port *dest,uint32_t a,uint32_t b,uint32_t type,uint32_t flags) {
+        assert(!chip && source->module==Scl && source->channel<=1 && source->port==1 &&
+            dest->module==Venc && dest->channel==1 && a==30 && b==30 && type==FrameBind && !flags);
+        if((source->channel==1 && fail_switch) || (source->channel==0 && fail_restore))return -77;
+        bound_source=int(source->channel);resources.insert("bind");return 0;
+    };
+    sys.sys_unbind=[](uint16_t,Port *source,Port *) {
+        assert(bound_source<0 || int(source->channel)==bound_source);
+        bound_source=-1;resources.erase("bind");return 0;
+    };
+    EncoderOwner owner(sys,api,memory);
+    assert(owner.open(EncoderCodec::H264,H264Timing::ReadOnly)==0 && bound_source==0);
+    assert(owner.rebind(EncoderSource::Wide)==0 && bound_source==1);
+    assert(owner.rebind(EncoderSource::Wide)==0 && bound_source==1);
+    assert(owner.rebind(EncoderSource::Zoom)==0 && bound_source==0);
+    fail_switch=true;
+    assert(owner.rebind(EncoderSource::Wide)==-77 && bound_source==0 && owner.ready());
+    fail_restore=true;
+    assert(owner.rebind(EncoderSource::Wide)==EOWNERDEAD && bound_source==-1);
+    // Native caller terminates on ambiguous ownership; the fake can still unwind.
+    fail_switch=fail_restore=false;
+    assert(owner.close()==0 && resources.empty());
+}
 int main() {
+    source_switching();
+    configurable_outputs();
     exercise_read_only();
     exercise(EncoderCodec::H265);exercise(EncoderCodec::H264);
     reset();auto s=system_api();auto a=encoder_api();auto m=memory_api();
@@ -228,9 +273,12 @@ int main() {
     assert(bad_source.open(EncoderCodec::H265,H264Timing::ReadOnly,static_cast<EncoderSource>(99))==-1);
     assert(calls.empty() && resources.empty() && !bad_source.ready());
     thermal=true;expected_codec=2;
-    for(unsigned step=0;step<=3;step++) {
+    for(unsigned ch:{2U,6U,8U})for(unsigned step=0;step<=3;step++) {
+        thermal_channel=ch;
+        const auto codec=ch==8?EncoderCodec::H265:EncoderCodec::H264;
+        expected_codec=uint32_t(codec);
         reset();failure=step;EncoderOwner th(s,a,m);
-        assert(th.open_thermal()==(step?-99:0));
+        assert(th.open_thermal(ch,codec)==(step?-99:0));
         if(!step) {
             assert(th.ready());uint8_t data[64]{};EncodedFrame frame{};frame.data=data;frame.capacity=64;
             assert(th.copy_frame(frame)==1 && frame.bytes==9);
@@ -238,6 +286,7 @@ int main() {
         assert(th.close()==0 && resources.empty());
         for(const auto &call:calls)assert(call!="create_device" && call!="destroy_device" && call!="bind" && call!="unbind" && call!="vui_set");
     }
+    thermal_channel=2;expected_codec=2;
     for(unsigned step=1;step<=2;step++) {
         reset();EncoderOwner th(s,a,m);assert(th.open_thermal()==0);failure=calls.size()+step;
         assert(th.close()==-99 && resources.empty());

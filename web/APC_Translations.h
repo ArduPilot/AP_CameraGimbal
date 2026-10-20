@@ -21,6 +21,8 @@ static const struct {
 };
 
 enum string_id {
+    S_ZT30_THERMAL_HFOV,
+    S_ZT30_THERMAL_HFOV_HELP,
     S_ZT30_NATIVE_PARAMETERS,
     S_ZT30_FIXED_VIDEO,
     S_LANGUAGE_NAME,
@@ -1298,8 +1300,10 @@ static constexpr Translations translations = [] {
     result[S_E_MALFORMED] = {"Malformed HTTP request", "HTTP 请求格式错误", "不正な HTTP リクエストです"};
     result[S_E_LIVE_UNAVAILABLE] = {"Native live video is not available", "原生实时视频不可用", "ネイティブライブ映像を利用できません"};
     result[S_E_LIVE_H264] = {"This stream must be configured for H.264", "此视频流必须配置为 H.264", "このストリームは H.264 に設定する必要があります"};
-    result[S_ZT30_NATIVE_PARAMETERS] = {"Native ZT30 settings require an application restart. Recording, tracking and image controls are not yet available. Network addresses are managed by the host OS.", "原生 ZT30 设置需要重启应用程序。录像、跟踪和图像控制尚不可用。网络地址由主机操作系统管理。", "ネイティブ ZT30 の設定にはアプリの再起動が必要です。録画、追跡、画像調整はまだ利用できません。ネットワークアドレスはホスト OS が管理します。"};
-    result[S_ZT30_FIXED_VIDEO] = {"Fixed video: visible %u × %u H264; thermal %u × %u H264.", "固定视频格式：可见光 %u × %u H264；热成像 %u × %u H264。", "固定映像形式: 可視光 %u × %u H264、熱画像 %u × %u H264。"};
+    result[S_ZT30_THERMAL_HFOV] = {"Thermal horizontal FOV (0.01 degrees)", "热成像水平视场角（0.01度）", "熱画像の水平画角（0.01度）"};
+    result[S_ZT30_THERMAL_HFOV_HELP] = {"Default 2420 assumes the MT11 horizontal FOV of 24.2 degrees. Replace it with a measured ZT30 value when available. 0 disables thermal FOV geometry.", "默认2420假设与MT11相同，即24.2度。可替换为ZT30实测值；0表示禁用热成像视场几何。", "既定値2420はMT11と同じ24.2度と仮定します。ZT30の実測値が得られたら置き換えてください。0は熱画像の画角計算を無効にします。"};
+    result[S_ZT30_NATIVE_PARAMETERS] = {"Image controls apply to both RGB lenses without restarting. Overlays and survey settings also apply without restarting. Video formats and network addresses apply after restarting the application.", "图像控制无需重启即可应用于两个 RGB 镜头。叠加和测绘设置也无需重启。视频格式和网络地址在重启应用程序后生效。", "画像調整は再起動せずに両方の RGB レンズへ適用されます。オーバーレイと測量設定も再起動せずに適用されます。映像形式とネットワークアドレスはアプリの再起動後に適用されます。"};
+    result[S_ZT30_FIXED_VIDEO] = {"Browser preview: RGB %u × %u H264; thermal %u × %u H264. The RGB RTSP format is configured below.", "浏览器预览：RGB %u × %u H264；热成像 %u × %u H264。RGB RTSP 格式可在下方设置。", "ブラウザープレビュー: RGB %u × %u H264、熱画像 %u × %u H264。RGB RTSP 形式は以下で設定できます。"};
     result[S_JS_FW_CONFIRM_APP] = {"Install %s? The camera application and web interface will restart.", "安装 %s？相机应用程序和网页界面将重启。", "%s をインストールしますか？カメラアプリとウェブ画面が再起動します。"};
     result[S_APP_UPDATE_PENDING] = {"Checking the new application and web interface…", "正在检查新的应用程序和网页界面…", "新しいアプリとウェブ画面を確認しています…"};
     result[S_APP_UPDATE_FAILED] = {"The application update was rolled back. Check camera status.", "应用程序更新已回滚。请检查相机状态。", "アプリの更新を元に戻しました。カメラの状態を確認してください。"};
