@@ -25,6 +25,7 @@ class PackageTests(unittest.TestCase):
             with patch.object(package.subprocess,'run',side_effect=mkfs),patch('builtins.print'):
                 package.build(args)
             with tarfile.open(args.overlay_output) as archive:
+                self.assertTrue(all(member.uid==0 and member.gid==0 for member in archive))
                 for asset in (package.ROOT/'web/webroot').rglob('*'):
                     if asset.is_file():
                         path='camera-app/webroot/'+str(asset.relative_to(package.ROOT/'web/webroot'))

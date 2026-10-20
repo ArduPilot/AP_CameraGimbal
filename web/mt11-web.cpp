@@ -7414,7 +7414,8 @@ static void handle_request(int fd, const char *peer)
                    strcmp(request.path, "/language.js") == 0) {
             send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
-                   (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/network-capture-status") == 0)) {
+                   (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/upgrade-result") == 0 ||
+                    strcmp(request.path, "/network-capture-status") == 0)) {
             /* Reboot polling must reach its onload handler when the cookie
              * expires. A Basic challenge can instead block on a browser auth
              * dialog. No status/token is disclosed to this unauthenticated request. */
