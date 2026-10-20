@@ -24,7 +24,8 @@ class UartTrace(unittest.TestCase):
         self.addCleanup(os.close,self.master);self.addCleanup(os.close,self.slave)
         tty.setraw(self.slave)
         self.library=Path(self.temp.name)/'trace.so'
-        subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fPIC','-shared','-DZT30_TRACE_HOST_TEST','-DZT30_TRACE_PROGRAM="'+str(Path(self.temp.name)/'fixture')+'"','-DZT30_TRACE_UART="'+os.ttyname(self.slave)+'"',str(ROOT/'tools/zt30_uart_trace.c'),'-ldl','-lpthread','-o',str(self.library)],check=True)
+        host_fs=subprocess.check_output(['stat','-f','-c','%t',str(self.session)],text=True).strip()
+        subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fPIC','-shared','-DTMPFS_MAGIC=0x'+host_fs,'-DZT30_TRACE_HOST_TEST','-DZT30_TRACE_PROGRAM="'+str(Path(self.temp.name)/'fixture')+'"','-DZT30_TRACE_UART="'+os.ttyname(self.slave)+'"',str(ROOT/'tools/zt30_uart_trace.c'),'-ldl','-lpthread','-o',str(self.library)],check=True)
         self.program=Path(self.temp.name)/'fixture'
         source=Path(self.temp.name)/'fixture.c'
         source.write_text('''#include <errno.h>
@@ -46,6 +47,11 @@ int main(int argc, char **argv) {
    while(write(fd,buf,sizeof(buf))<0) { if(errno!=EAGAIN)return 4; usleep(100); }
   }
  } else {
+  if(strcmp(argv[2],"reuse")==0) {
+   int sink=open(argv[3],O_RDWR|O_CREAT|O_TRUNC,0600);
+   if(sink<0 || write(sink,"untouched",9)!=9 || dup2(sink,512)!=512)return 9;
+   close(sink);
+  }
   for(int i=0;i<20000;i++) {
    n=read(fd,buf,3);
    if(n>0) { if(n!=3 || memcmp(buf,"\\x01\\x00\\xfe",3))return 5;break; }
@@ -54,6 +60,7 @@ int main(int argc, char **argv) {
   }
   errno=0;
   if(read(-1,buf,1)!=-1 || errno!=EBADF)return 7;
+  if(strcmp(argv[2],"reuse")==0)return 0;
   int regular=open(argv[3],O_CREAT|O_WRONLY,0600);
   if(regular<0 || write(regular,"other",5)!=5)return 8;
   close(regular);
@@ -97,6 +104,13 @@ int main(int argc, char **argv) {
         self.assertLessEqual(len(raw),2*1024*1024)
         self.assertEqual(records[-1][0],'L')
         self.assertGreater(count,2*1024*1024)
+    def test_reused_output_cannot_modify_an_unrelated_file(self):
+        process=self.launch('reuse');self.addCleanup(lambda:process.poll() is None and process.kill())
+        self.assertTrue(select.select([self.master],[],[],3)[0]);os.read(self.master,4)
+        os.write(self.master,b'\x01\x00\xfe')
+        _,err=process.communicate(timeout=5)
+        self.assertEqual(process.returncode,0,err)
+        self.assertEqual((self.session/'other').read_bytes(),b'untouched')
     def test_existing_output_is_not_overwritten(self):
         self.trace.write_bytes(b'sentinel')
         process=self.launch();self.addCleanup(lambda:process.poll() is None and process.kill())

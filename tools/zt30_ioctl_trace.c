@@ -73,9 +73,8 @@ static __thread volatile sig_atomic_t payload_busy;
 #define COUNTS_FAILURE_MAGIC "FAILIOC1"
 #define FAILURE_MAGIC "FAILIOT1"
 #endif
-#if defined(ZT30_IOCTL_PAYLOAD_TRACE) || defined(ZT30_USB_TRACE)
+// All observers must survive caller closure/reuse of their diagnostic FDs.
 #define ZT30_PIN_TRACE_OUTPUT
-#endif
 #define LIMIT (2U*1024U*1024U)
 #ifndef TMPFS_MAGIC
 #define TMPFS_MAGIC 0x01021994
