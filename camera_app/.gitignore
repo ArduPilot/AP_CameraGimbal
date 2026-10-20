@@ -4,6 +4,7 @@ src/**/*.o
 src/**/*.d
 tests/camera-app-host
 tests/camera-app-a8-host
+tests/camera-app-rpi-host
 tests/test_mp4
 tests/test_mp4_sync
 tests/test_mp4_rollover

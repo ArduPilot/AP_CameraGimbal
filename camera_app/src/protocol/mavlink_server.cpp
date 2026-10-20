@@ -644,16 +644,6 @@ static bool route_local_ipv4(const struct ca_mavlink_server *server,
     int probe = -1;
     int fd;
 
-#if !APCAM_HAVE_NETWORK_CONFIG
-    // Companion computers usually reach the GCS through a local MAVLink
-    // router, so a loopback route says nothing about the GCS's network.
-    const char *configured = getenv("CAMERA_APP_VIDEO_ADDRESS");
-    struct in_addr parsed;
-    if (configured && inet_pton(AF_INET, configured, &parsed) == 1) {
-        snprintf(address, INET_ADDRSTRLEN, "%s", configured);
-        return true;
-    }
-#endif
     // Serial routes have no IP peer from which to infer a local address.
     if (route->kind == ROUTE_UART || route->kind == ROUTE_MCU) {
         return interface_ipv4(address);
@@ -1074,9 +1064,17 @@ static void send_stream_information(struct ca_mavlink_server *server,
         else info.flags &= ~VIDEO_STREAM_STATUS_FLAGS_RUNNING;
     } else {
         char host[INET_ADDRSTRLEN] = "0.0.0.0";
-        (void)route_local_ipv4(server, route, host);
-        length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u", host,
-                          server->rtsp_port, stream_id);
+#if !APCAM_HAVE_NETWORK_CONFIG
+        // A configured URI (validated when loaded) replaces the one built here.
+        if (stream_id == 1U && server->settings.video1_uri[0]) {
+            length = snprintf(uri, sizeof(uri), "%s", server->settings.video1_uri);
+        } else
+#endif
+        {
+            (void)route_local_ipv4(server, route, host);
+            length = snprintf(uri, sizeof(uri), "rtsp://%s:%u/video%u", host,
+                              server->rtsp_port, stream_id);
+        }
     }
     if (length > 0 && (size_t)length < sizeof(uri)) put_text(info.uri, sizeof(info.uri), uri);
     if (stream_id == CA_RAW_THERMAL_STREAM_ID) {
@@ -2521,6 +2519,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     }
     memcpy(next.timezone, desired.timezone, sizeof(next.timezone));
     next.network_capture = desired.network_capture;
+    memcpy(next.video1_uri, desired.video1_uri, sizeof(next.video1_uri));
     next.main_resolution = server->settings.main_resolution;
     next.sub_resolution = server->settings.sub_resolution;
     next.recording_resolution = server->settings.recording_resolution;

@@ -2,6 +2,7 @@
 #include "../src/backends/rpi_libcam/pipeline.h"
 #include "../src/backends/caddx/caddx.h"
 #include "camera_app/backend.h"
+#include "apcam/network.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -18,6 +19,32 @@ static void near(float actual, float expected) { assert(fabsf(actual - expected)
 static bool recording_get(void *opaque) { return *static_cast<bool *>(opaque); }
 
 static const float DEG = 3.14159265358979323846f / 180.0f;
+
+/* [network] video1_uri: what apcam_video_uri_valid() accepts and rejects. */
+static void video_uri_validation(void)
+{
+    const char *valid[] = {
+        "rtsp://10.0.0.5:8554/video1", "rtsps://pi.local/stream", "rtsp://pi-1.example.com",
+        "rtsp://192.168.1.2:1/a/b.264", "rtsp://host:65535/",
+    };
+    const char *invalid[] = {
+        "", "10.0.0.5", "http://10.0.0.5/video1", "RTSP://10.0.0.5/video1", "rtsp://",
+        "rtsp:///video1", "rtsp://:8554/video1", "rtsp://host:/video1", "rtsp://host:0/video1",
+        "rtsp://host:65536/video1", "rtsp://host:123456/video1", "rtsp://host:80x/video1",
+        "rtsp://user:pass@host/video1", "rtsp://host?x=1", "rtsp://host/has space",
+        "rtsp://host/\"quoted\"", "rtsp://host/caf\xc3\xa9", "rtsp://[::1]:8554/video1",
+    };
+    for (const char *uri : valid) assert(apcam_video_uri_valid(uri));
+    for (const char *uri : invalid) assert(!apcam_video_uri_valid(uri));
+    char longest[APCAM_VIDEO_URI_SIZE + 1];
+    memset(longest, 'a', sizeof(longest));
+    memcpy(longest, "rtsp://h/", 9);
+    longest[APCAM_VIDEO_URI_SIZE - 1] = '\0';
+    assert(apcam_video_uri_valid(longest));
+    longest[APCAM_VIDEO_URI_SIZE - 1] = 'a';
+    longest[APCAM_VIDEO_URI_SIZE] = '\0';
+    assert(!apcam_video_uri_valid(longest));
+}
 
 /* Reference packets from ArduPilot's AP_Mount_CADDX encoding (roll/pitch locked). */
 static void caddx_packets(void)
@@ -155,6 +182,35 @@ static void single_stream_support_proxy(void)
     }
 }
 
+/* [network] video1_uri: blank or an rtsp:// or rtsps:// URI. */
+static void video1_uri(void)
+{
+    static const struct { const char *ini; bool loads; const char *value; } cases[] = {
+        {"[network]\ncapture = false\n", true, ""},
+        {"[network]\nvideo1_uri = \"\"\n", true, ""},
+        {"[network]\nvideo1_uri = rtsp://10.0.2.100:8554/video1\n", true, "rtsp://10.0.2.100:8554/video1"},
+        {"[network]\nvideo1_uri = rtsps://pi.local/camera\n", true, "rtsps://pi.local/camera"},
+        {"[network]\nvideo1_uri = 10.0.2.100\n", false, NULL},
+        {"[network]\nvideo1_uri = http://10.0.2.100/video1\n", false, NULL},
+        {"[network]\nvideo1_uri = rtsp://user:pw@10.0.2.100/video1\n", false, NULL},
+        {"[network]\nvideo1_uri = rtsp://10.0.2.100:99999/video1\n", false, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[] = "/tmp/camera-video-uri-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        size_t length = strlen(cases[i].ini);
+        assert(write(fd, cases[i].ini, length) == (ssize_t)length);
+        close(fd);
+        struct ca_config config;
+        ca_config_defaults(&config);
+        char error[256] = "";
+        assert((ca_config_load(&config, path, error, sizeof(error)) == 0) == cases[i].loads);
+        if (cases[i].loads) assert(strcmp(config.video1_uri, cases[i].value) == 0);
+        unlink(path);
+    }
+}
+
 /* VIDEO_MAIN_KBPS and VIDEO_MAIN_FPS: defaults, range checks and the ini keys. */
 static void video_encoder_settings(void)
 {
@@ -232,6 +288,7 @@ int main(void)
     main_resolutions();
     single_stream_support_proxy();
     video_encoder_settings();
+    video1_uri();
     struct ca_config settings;
     ca_config_defaults(&settings);
     struct ca_rpi_image_controls c;
@@ -280,6 +337,7 @@ int main(void)
     assert(!ca_backend_recording(backend));
     ca_backend_periodic(backend);
     ca_backend_close(backend);
+    video_uri_validation();
     caddx_packets();
     caddx_udp();
     caddx_udp_unreachable();

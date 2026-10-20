@@ -381,6 +381,11 @@ private:
         {"network", "capture", Kind::Bool,
          offsetof(struct ca_config, network_capture),
          sizeof(((struct ca_config *)0)->network_capture), NULL, 0U, 0, 1, NULL},
+#if !APCAM_HAVE_NETWORK_CONFIG
+        {"network", "video1_uri", Kind::String,
+         offsetof(struct ca_config, video1_uri),
+         sizeof(((struct ca_config *)0)->video1_uri), NULL, 0U, 0, 159, NULL},
+#endif
 #if APCAM_HAVE_THERMAL || APCAM_HAVE_RAW_THERMAL
         {"thermal", "stream_fps", Kind::Uint, offsetof(struct ca_config, raw_stream_fps),
          sizeof(((struct ca_config *)0)->raw_stream_fps), NULL, 0U, 1, 25, "RAW_STREAM_FPS"},
