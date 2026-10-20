@@ -98,7 +98,7 @@ def main():
     parser.add_argument('--with-tool-build-deps', action='store_true',
                         help='also install prerequisites for rebuilding the prebuilt MT11 tools')
     parser.add_argument('--targets', nargs='+', choices=['mt11', 'a8', 'zr10', 'zt30', 'z1mini'],
-                        default=['mt11', 'a8', 'zr10', 'z1mini'])
+                        default=['mt11', 'a8', 'zr10', 'zt30', 'z1mini'])
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
         parser.error('Hardware toolchains require x86_64 Linux; see windows/ for Windows SITL')
