@@ -14,6 +14,8 @@
 /web/a8-web
 /web/build/
 /web/tests/a8-web-host
+/web/tests/rpi-web-host
+/web/tests/rpi-runtime/
 __pycache__/
 *.pyc
 *~
