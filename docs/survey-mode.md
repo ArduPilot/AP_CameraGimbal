@@ -82,9 +82,13 @@ the camera follows the flight controller's targets and other pointing again unti
 the survey is explicitly resumed. ArduPilot denies a renewal after such a
 takeover, which also pauses the survey, and refuses a claim while the mount is
 retracted; the survey status reports that while it waits. Pointing is also
-followed while a survey is paused for any other reason, and while it waits for
-ownership; a waiting survey keeps claiming the gimbal and takes it as soon as
-ArduPilot grants it, dropping any earlier ROI, rate or image tracking target.
+followed while a survey is paused for any other reason. While waiting for
+ownership, direct MAVLink attitude/rate commands are followed without cancelling
+the claim. A grant stops any earlier rate and clears ROI and image tracking
+before the survey waits for fresh terrain/telemetry and straight flight.
+SIYI/UniGCS motion, web PTZ, a new ROI LOCATION or starting image tracking pauses
+a waiting survey. It then stops claiming; a later grant does not resume it.
+Explicitly resume the survey to request ownership again.
 A camera that stops renewing its ownership releases the ArduPilot gimbal manager
 after three seconds, and the mount returns to its previous mode and target.
 
