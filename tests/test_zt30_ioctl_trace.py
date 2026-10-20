@@ -89,6 +89,10 @@ int ioctl(int fd,unsigned long command,...) {
         result=subprocess.run([str(app)],env={'LD_PRELOAD':str(lib)+':'+str(real),('APCG_USB_TRACE' if usb else 'APCG_IOCTL_TRACE'):str(output)},capture_output=True,text=True,timeout=10,cwd=root)
         if reuse or reuse_counts:self.assertEqual((root/'output-sink').read_bytes(),b'keep original sink')
         return result,output.read_bytes() if output.exists() else b'',count_file.read_bytes() if count_file.exists() else b''
+    def test_plain_tracer_pins_metadata_and_count_outputs(self):
+        for options in ({'reuse':True},{'reuse_counts':True}):
+            result,_,_=self.fixture(**options)
+            self.assertEqual(result.returncode,0,result.stderr)
     def test_return_errno_and_opaque_invalid_pointer(self):
         result,data,counts=self.fixture();self.assertEqual(result.returncode,0,result.stderr);self.assertIn('PASSTHROUGH PASS',result.stdout)
         self.assertEqual(data[:8],b'ZT30IOT0');self.assertEqual((len(data)-8)%64,0)

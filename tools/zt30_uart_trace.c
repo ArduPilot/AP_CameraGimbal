@@ -19,6 +19,11 @@
 #ifndef ZT30_TRACE_PROGRAM
 #define ZT30_TRACE_PROGRAM "/customer/siyi_app_359"
 #endif
+#ifndef TMPFS_MAGIC
+#define TMPFS_MAGIC 0x01021994
+#endif
+#include "zt30_trace_output.h"
+static struct zt30_trace_output trace_output={.fd=-1};
 #define TRACE_LIMIT (2U * 1024U * 1024U)
 struct record { uint64_t ns; uint32_t tid; int32_t fd; uint32_t length; uint8_t direction; uint8_t padding[3]; };
 _Static_assert(sizeof(struct record) == 24, "trace record ABI");
@@ -35,6 +40,7 @@ _Static_assert(__atomic_always_lock_free(4, 0), "lock-free record reservation");
  * aligns its 64-bit offset to an even register pair; syscall does not do that. */
 static ssize_t write_at(const void *data, size_t length, uint32_t offset)
 {
+    if (!zt30_trace_output_matches(&trace_output)) return -1;
 #ifdef __arm__
     return syscall(SYS_pwrite64, trace_fd, data, length, 0, offset, 0);
 #else
@@ -130,7 +136,7 @@ __attribute__((constructor)) static void start_trace(void)
 #endif
     if (stat(ZT30_TRACE_UART, &st) != 0 || !S_ISCHR(st.st_mode)) goto done;
     uart_device = st.st_rdev;
-    trace_fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    trace_fd = zt30_trace_output_open(&trace_output, path);
     if (trace_fd < 0) goto done;
     if (syscall(SYS_write, trace_fd, "ZT30URT1", 8) != 8) {
         syscall(SYS_close, trace_fd); trace_fd = -1; goto done;
