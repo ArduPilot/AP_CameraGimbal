@@ -4,14 +4,16 @@
 
 namespace apcam_zt30 {
 struct Trial {
-    std::string previous, candidate, boot, state;
+    std::string previous, candidate, boot, state, rollback_previous;
+    bool rollback_previous_saved = false; // absent in older trial journals
     uint64_t deadline = 0, attempts = 0;
     bool pending() const { return state == "starting" || state == "ready" || state == "recovering"; }
 };
 inline std::string trial_text(const Trial &t)
 {
     return "{\"previous\":\""+t.previous+"\",\"candidate\":\""+t.candidate+"\",\"boot\":\""+t.boot+
-        "\",\"deadline\":"+std::to_string(t.deadline)+",\"attempts\":"+std::to_string(t.attempts)+",\"state\":\""+t.state+"\"}";
+        "\",\"deadline\":"+std::to_string(t.deadline)+",\"attempts\":"+std::to_string(t.attempts)+",\"state\":\""+t.state+"\""+
+        (t.rollback_previous_saved ? ",\"rollback_previous\":\""+t.rollback_previous+"\"" : "")+"}";
 }
 inline bool read_trial(const std::string &root, Trial &t, std::string &error)
 {
@@ -25,9 +27,22 @@ inline bool read_trial(const std::string &root, Trial &t, std::string &error)
         j.take(",\"candidate\":") && j.string(t.candidate) && slot_id_valid(t.candidate.c_str()) && t.previous != t.candidate &&
         j.take(",\"boot\":") && j.string(t.boot) && token(t.boot, 80) && j.take(",\"deadline\":") &&
         j.number(t.deadline, UINT64_MAX/2) && t.deadline && j.take(",\"attempts\":") && j.number(t.attempts, 3) &&
-        j.take(",\"state\":") && j.string(t.state) && j.take("}") && j.done() &&
+        j.take(",\"state\":") && j.string(t.state);
+    // Backward compatible with journals written by the previous launcher.
+    t.rollback_previous_saved = ok && j.take(",\"rollback_previous\":");
+    if (t.rollback_previous_saved)
+        ok = j.string(t.rollback_previous) && (t.rollback_previous.empty() || slot_id_valid(t.rollback_previous.c_str()));
+    ok = ok && j.take("}") && j.done() &&
         (t.pending() || t.state == "confirmed" || t.state == "rolled-back" || t.state == "abandoned");
     return ok || fail(error, "Invalid application trial record");
+}
+inline bool restore_trial_previous(const std::string &root, const Trial &t, std::string &error)
+{
+    if (!t.rollback_previous_saved) return true;
+    if (!t.rollback_previous.empty()) return replace_link(root, "previous", "slots/"+t.rollback_previous, error);
+    if (unlink((root+"/previous").c_str()) && errno != ENOENT)
+        return fail(error, "Cannot restore absent previous application selection");
+    return sync_directory(root, error);
 }
 inline bool write_trial(const std::string &root, const Trial &t, std::string &error)
 {

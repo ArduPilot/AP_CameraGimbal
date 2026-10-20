@@ -110,6 +110,30 @@ int rename(const char *a,const char *b){
     def test_thermal_degradation_does_not_fail_rgb_upgrade(self):
         self.assertIn('thermal=0',self.update('thermal-degraded'))
         self.assertEqual(self.trial()['state'],'ready')
+    def test_failed_updates_preserve_the_older_manual_restore_target(self):
+        older='d'*64
+        for mode in ('start-fail','ready-fail','crash'):
+            with self.subTest(mode=mode):
+                previous=self.root/'previous'
+                if previous.is_symlink():previous.unlink()
+                previous.symlink_to('slots/'+older)
+                self.update(mode,77 if mode=='crash' else 1)
+                if mode=='crash':
+                    trial=self.trial();trial['deadline']=1;self.write_trial(trial);self.call('maintain')
+                self.assertEqual(os.readlink(previous),'slots/'+older)
+                self.active_old()
+                self.assertEqual(self.trial()['state'],'rolled-back')
+    def test_failed_update_preserves_an_absent_previous_selection(self):
+        self.update('ready-fail',1)
+        self.assertFalse((self.root/'previous').is_symlink())
+    def test_interrupted_before_activation_preserves_the_old_restore_target(self):
+        self.update('crash',77)
+        trial=self.trial();trial['rollback_previous']='e'*64
+        self.write_trial(trial)
+        self.call('activate',self.a)
+        self.call('maintain')
+        self.active_old();self.assertEqual(os.readlink(self.root/'previous'),'slots/'+'e'*64)
+        self.assertEqual(self.trial()['state'],'rolled-back')
     def test_malformed_trial_fails_closed(self):
         (self.root/'trial.json').write_bytes(b'{"state":"ready"}')
         self.update(code=1);self.active_old();self.call('maintain',ok=False)
