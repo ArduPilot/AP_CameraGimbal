@@ -24,7 +24,9 @@ class MediaBackend : public APC_Media_Backend {
 public:
     MediaBackend(Api &api,EncoderApi &enc,PacketMemory &memory):rgb(api),encoder(api,enc,memory) {}
     ~MediaBackend() override;
-    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom,MediaRun run=MediaRun::Qualification);
+    int initialize(const MediaHooks&,uint8_t *buffer,size_t capacity,EncoderSource source=EncoderSource::Zoom,MediaRun run=MediaRun::Qualification,unsigned scaler_mask=3);
+    int stop_video();
+    int select_source(EncoderSource selected);
     int shutdown(); // join first, then encoder/RGB; caller must not unload SDK on error
     bool finished() const { return done.load(); }
     int result() const { return worker_result.load(); }

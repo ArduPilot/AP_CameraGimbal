@@ -12,6 +12,7 @@ using namespace ca_zt30;
 static std::vector<std::string> calls;
 static std::set<std::string> resources;
 static unsigned fail_index;
+static unsigned expected_scaler_mask=3;
 static const RgbPath *expected;
 static bool wrong_resolution=false,cleanup_fault=false;
 static int event(const char *name) {
@@ -292,7 +293,7 @@ static Api fake_api() {
     a.scl_create_device=[](uint32_t p0,uint32_t* p1) {
         (void)p0;(void)p1;
         assert(p0==0);
-        assert(*p1==3);
+        assert(*p1==expected_scaler_mask);
         const int result=event("scl_create_device");
         if(!result)resources.insert("SCL_DEVICE");
         return result;
@@ -379,6 +380,9 @@ static void reset(bool wide,unsigned failure=0) {
 }
 int main() {
     auto api=fake_api();
+    reset(false);expected_scaler_mask=31;
+    { RgbOwner owner(api);assert(owner.open(false,false,31)==0 && owner.close()==0 && resources.empty()); }
+    expected_scaler_mask=3;
     unsigned startup_count=0;
     for(bool wide:{false,true}) {
         reset(wide);RgbOwner owner(api);

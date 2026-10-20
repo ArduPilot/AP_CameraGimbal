@@ -46,32 +46,42 @@ int main()
     ca_config loaded; ca_config_defaults(&loaded);
     assert(ca_config_load(&loaded, REPLACEMENT_CONFIG_PATH, error, sizeof(error)) == 0);
     assert(loaded.main_resolution == CA_VIDEO_2160P && loaded.main_codec == CA_VIDEO_H265);
+    assert(loaded.thermal_hfov_cd == 2420); // User-requested MT11 assumption.
+    loaded.orientation=CA_MOUNT_UPRIGHT;
     assert(APC_ZT30_Config::effective(loaded));
-    assert(loaded.main_resolution == CA_VIDEO_720P && loaded.main_codec == CA_VIDEO_H264);
+    assert(loaded.orientation==CA_MOUNT_AUTO && loaded.main_resolution == CA_VIDEO_2160P && loaded.main_codec == CA_VIDEO_H265);
     assert(contents(REPLACEMENT_CONFIG_PATH) == initial); // startup never rewrites INI
 
     for (const auto &p : replacement_parameters) {
         if (parameter_shown(&p)) assert(APC_Config::find(p.section, p.key));
-        if (!strcmp(p.form_name, "main_resolution") || !strcmp(p.form_name, "main_codec") ||
-            !strcmp(p.form_name, "autorecord") || !strcmp(p.form_name, "osd_cross") ||
-            !strcmp(p.form_name, "orientation") || !strcmp(p.form_name, "position_targeting") ||
-            !strcmp(p.form_name, "network_primary_address")) assert(!parameter_shown(&p));
+        if (!strcmp(p.form_name, "orientation")) assert(!parameter_shown(&p));
         if (!strcmp(p.form_name, "timezone") || !strcmp(p.form_name, "photo_scope") ||
-            !strcmp(p.form_name, "raw_stream_fps")) assert(parameter_shown(&p));
+            !strcmp(p.form_name,"raw_stream_fps") || !strcmp(p.form_name,"raw_record_fps") ||
+            !strcmp(p.section,"image") || !strcmp(p.section,"stream.main") || !strcmp(p.section,"stream.sub") ||
+            !strcmp(p.form_name,"thermal_palette") || !strcmp(p.form_name,"thermal_hfov_cd") ||
+            !strcmp(p.form_name,"osd_thermal_fov") ||
+            !strcmp(p.section,"recording") || !strcmp(p.section,"survey") ||
+            !strcmp(p.form_name,"position_targeting") || !strcmp(p.form_name,"tracking_method") ||
+            !strcmp(p.section,"network") || !strcmp(p.form_name,"osd_cross") || !strcmp(p.form_name,"osd_recording")) { if(!parameter_shown(&p)) fprintf(stderr,"Unexpectedly hidden: %s [%s] %s\n",p.form_name,p.section,p.key); assert(parameter_shown(&p)); }
     }
     for (const auto &p : replacement_parameters) {
-        if (strcmp(p.form_name, "main_codec")) continue;
+        if (strcmp(p.form_name,"orientation")) continue;
         APC_HTTPRequest request;
-        char body[] = "main_codec=h265";
+        char body[]="orientation=inverted";
         request.body = body; request.body_len = strlen(body);
         ini_update updates[2]; size_t count = 0;
         assert(!collect_described_parameters(&request, &p, 1, updates, 2, &count, error, sizeof(error)));
         assert(count == 0 && strstr(error, "not configurable"));
     }
-    denied(std::string(initial) + "[stream.sub]\ncodec=h265\n");
-    denied(std::string(initial) + "[recording]\nautorecord=true\n");
-    denied(std::string(initial) + "[network]\nprimary_address=192.168.1.99/24\n");
     denied(std::string(initial) + "[mount]\norientation=inverted\n");
+    std::string fov = initial;
+    fov += "hfov_cd=99\n"; denied(fov);
+    fov = initial; fov += "hfov_cd=0\n[overlay]\nthermal_fov=true\n"; denied(fov);
+    fov = initial; fov += "hfov_cd=2420\n[overlay]\nthermal_fov=true\n";
+    assert(save_config(REPLACEMENT_CONFIG_PATH, REPLACEMENT_CONFIG_BACKUP_PATH,
+                       fov.data(), fov.size(), error, sizeof(error)));
+    assert(save_config(REPLACEMENT_CONFIG_PATH, REPLACEMENT_CONFIG_BACKUP_PATH,
+                       initial, strlen(initial), error, sizeof(error)));
     denied(std::string(initial) + "[thermal]\nstream_fps=6\n"); // duplicate
     denied(std::string(initial) + "[mavlink]\nsystem_id=invalid\n");
     denied(std::string(initial) + "[image]\nbrightness=invalid\n");
@@ -87,8 +97,7 @@ int main()
 
     ca_config_defaults(&loaded);
     assert(ca_config_load(&loaded, REPLACEMENT_CONFIG_PATH, error, sizeof(error)) == 0);
-    for (const char *name : {"VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC", "REC_AUTOSTART",
-                             "OSD_CROSS", "MOUNT_ORIENT", "MAV_POS_TARGET"}) {
+    for (const char *name : {"MOUNT_ORIENT"}) {
         int index = ca_config_param_find(name); assert(index >= 0);
         auto previous = loaded;
         auto saved = contents(REPLACEMENT_CONFIG_PATH);
@@ -103,29 +112,34 @@ int main()
     int rate = ca_config_param_find("RAW_STREAM_FPS"); assert(rate >= 0);
     assert(ca_config_param_save(&loaded, REPLACEMENT_CONFIG_PATH, rate, 7) == 0);
     assert(loaded.raw_stream_fps == 7);
-    for (const char *name : {"OSD_CROSS", "TRACK_METHOD", "MAV_POS_TARGET", "REC_AUTOSTART",
-                            "VIDEO_MAIN_RES", "VIDEO_MAIN_CODEC"}) assert(ca_camera_param_find(name) < 0);
-    for (const char *name : {"PHOTO_SCOPE", "RAW_STREAM_FPS", "LOG_DISARMED"}) {
+    for (const char *name : {"PHOTO_SCOPE","RAW_STREAM_FPS","RAW_RECORD_FPS","LOG_DISARMED",
+                             "REC_AUTOSTART","REC_RESOLUTION","VIDEO_MAIN_RES","VIDEO_MAIN_CODEC",
+                             "VIDEO_SUB_RES","VIDEO_SUB_CODEC","THERMAL_HFOV_CD","OSD_THERMAL_FOV","MAV_POS_TARGET","TRACK_METHOD","OSD_CROSS","OSD_RECORD","SURV_LENS","SURV_PATTERN","SURV_OVERLAP"}) {
         int index = ca_camera_param_find(name); assert(index >= 0);
         ca_camera_parameter parameter;
         assert(ca_camera_param_info(index, &parameter));
         assert(parameter.config_index >= 0);
     }
     // Editing legacy values back to the supported mode must be possible.
+    for(const char *name:{"IMG_BRIGHTNESS","IMG_CONTRAST","IMG_SATURATION","IMG_EXPOSURE",
+                          "IMG_ISO","IMG_SHUTTER","IMG_METERING","IMG_WHITE_BAL"}) {
+        int index=ca_config_param_find(name);assert(index>=0);
+        assert(ca_camera_param_find(name)>=0);
+        assert(ca_config_param_assign(&loaded,index,1)==0);
+    }
     const char *clean = "[stream.main]\nresolution=1280x720\ncodec=h264\n";
     assert(save_config(REPLACEMENT_CONFIG_PATH, REPLACEMENT_CONFIG_BACKUP_PATH,
                        clean, strlen(clean), error, sizeof(error)));
     // Repair corrupt current configuration, including missing files.
     f = fopen(REPLACEMENT_CONFIG_PATH, "w"); assert(f);
     fputs("[stream.main]\ncodec=bogus\n", f); fclose(f);
-    denied("[stream.main]\ncodec=h265\n");
+    denied("[mount]\norientation=inverted\n");
     assert(save_config(REPLACEMENT_CONFIG_PATH, REPLACEMENT_CONFIG_BACKUP_PATH,
                        clean, strlen(clean), error, sizeof(error)));
     assert(unlink(REPLACEMENT_CONFIG_PATH) == 0);
     assert(save_config(REPLACEMENT_CONFIG_PATH, REPLACEMENT_CONFIG_BACKUP_PATH,
                        clean, strlen(clean), error, sizeof(error)));
-    // A proxy toggle must not materialize old proxy network settings on this
-    // platform, whose network addresses are OS-owned.
+    // Legacy proxy settings retain their normal migration behavior.
     const char *legacy = "[support_proxy]\nenabled=false\nhost=localhost\nnetwork_address=192.168.9.2/24\n";
     f = fopen(REPLACEMENT_CONFIG_PATH, "w"); assert(f); fputs(legacy, f); fclose(f);
     std::string enabled = legacy; enabled.replace(enabled.find("false"), 5, "true");

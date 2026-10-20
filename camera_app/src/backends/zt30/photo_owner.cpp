@@ -1,5 +1,6 @@
 #include "photo_owner.h"
 #include "camera_app/log.h"
+#include "pts_clock.h"
 #include <cerrno>
 #include <cstring>
 #include <new>
@@ -142,6 +143,7 @@ static int raw_sidecar(const char *path,const timespec &at) {
 }
 int PhotoOwner::capture(const char *root,ca_photo_scope scope,const uint8_t *frame,size_t frame_bytes,
                          const timespec &at,ca_raw_thermal *raw) {
+    std::lock_guard<std::mutex> guard(capture_lock);
     if(!available() || (!frame || frame_bytes!=ThermalPixelFrameBytes) || (scope!=CA_PHOTO_SCOPE_ALL && scope!=CA_PHOTO_SCOPE_THERMAL)) { errno=EINVAL;return -1; }
     if(thermal_uyvy_nv12(frame,frame_bytes,nv12.get(),640*512,640,nv12.get()+640*512,640*256,640)!=ThermalPixelResult::Ok ||
        thermal_be16(frame,frame_bytes,values.get(),640*512)!=ThermalPixelResult::Ok) { errno=EINVAL;return -1; }
@@ -162,6 +164,36 @@ int PhotoOwner::capture(const char *root,ca_photo_scope scope,const uint8_t *fra
     }
     ca_log("ZT30 raw thermal photo saved: %s",ca_raw_thermal_path(raw));
     return 0;
+}
+int PhotoOwner::capture_survey(const char *root,const ca_survey_request &request,ca_survey_result &result,
+                               const std::atomic<uint64_t> &generation) {
+    std::lock_guard<std::mutex> guard(capture_lock);
+    if(!available() || request.lens<1 || request.lens>2) { errno=ENOTSUP;return -1; }
+    if(generation.load()!=request.generation) { errno=ECANCELED;return -1; }
+    if(now()/1000000>request.deadline_ms) { errno=ETIMEDOUT;return -1; }
+    // Each request has its own clock mapping. The JPEG packet PTS identifies
+    // the sensor frame; receipt time must not qualify a stale queued picture.
+    PtsClock clock;PtsObservation sample;
+    if(!observe_pts_clock(clock,[this](uint64_t *pts){return s.current_pts(0,pts);},now,sample)) {
+        errno=EIO;return -1;
+    }
+    const bool wide_lens=request.lens==1;
+    if(!jpeg(wide_lens?wide:zoom,wide_lens?2560:3840,wide_lens?1440:2160))return -1;
+    uint64_t mapped=0;
+    if(!copied.packets || !clock.frame(copied.pts[0],now()/1000,mapped)) { errno=EBADMSG;return -1; }
+    result.frame_ms=mapped/1000;
+    if(result.frame_ms<=request.eligible_ms || result.frame_ms>request.deadline_ms ||
+       !ca_metadata_at(result.frame_ms,&result.pose)) { errno=ETIMEDOUT;return -1; }
+    if(generation.load()!=request.generation) { errno=ECANCELED;return -1; }
+    timespec wall{};clock_gettime(CLOCK_REALTIME,&wall);
+    const uint64_t received=now()/1000;
+    const uint64_t age_us=received>mapped?received-mapped:0;
+    const uint64_t unix_us=uint64_t(wall.tv_sec)*1000000+wall.tv_nsec/1000-age_us;
+    result.captured_at={time_t(unix_us/1000000),long(unix_us%1000000)*1000};
+    const int rc=ca_still_write_jpeg(root,wide_lens?'C':'Z',copied.data,copied.bytes,&result.captured_at,
+                                   result.path,sizeof(result.path),&result.pose);
+    if(!rc)ca_log("ZT30 survey JPEG saved: %s (%zu bytes)",result.path,copied.bytes);
+    return rc;
 }
 int PhotoOwner::close() {
     int error=0;

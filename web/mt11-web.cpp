@@ -684,6 +684,10 @@ static const struct parameter replacement_parameters[] = {
      PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
     {"tracking_method", "mavlink", "tracking_method", S_P_TRACK_METHOD, S_H_TRACK_METHOD,
      PARAM_ENUM, 0, 0, 0, tracking_options, 2},
+#ifdef CAMERA_APP_ZT30_DEV
+    {"thermal_hfov_cd", "thermal", "hfov_cd", S_ZT30_THERMAL_HFOV, S_ZT30_THERMAL_HFOV_HELP,
+     PARAM_INTEGER, 0, 17900, 1, NULL, 0},
+#endif
     {"thermal_palette", "thermal", "palette", S_P_THERMAL_PALETTE, S_H_THERMAL_PALETTE,
      PARAM_ENUM, 0, 0, 0, palette_options,
      sizeof(palette_options) / sizeof(palette_options[0])},
@@ -835,7 +839,11 @@ static const char *replacement_defaults[] = {
     APCAM_DEFAULT_TIMEZONE, APCAM_DEFAULT_PHOTO_SCOPE == 0 ? "thermal" : "all",
     APCAM_DEFAULT_ORIENTATION == 0 ? "auto" : APCAM_DEFAULT_ORIENTATION == 1 ? "upright" : "inverted",
     "none", APCAM_STRING_VALUE(APCAM_DEFAULT_SYSTEM_ID), "100", "14550", "14550",
-    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle", "white_hot",
+    APCAM_DEFAULT_POSITION_TARGETING ? "true" : "false", "false", "angle",
+#ifdef CAMERA_APP_ZT30_DEV
+    "2420",
+#endif
+    "white_hot",
 #if APCAM_HAVE_RAW_THERMAL
     "5", "5",
 #endif
@@ -2168,12 +2176,19 @@ static bool parameter_shown(const struct parameter *parameter)
     const auto *field = APC_Config::find(parameter->section, parameter->key);
     if (!field || !APC_ZT30_Config::editable(*field)) return false;
 #endif
+#ifndef CAMERA_APP_ZT30_DEV
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->form_name, "osd_thermal_fov")) return false;
+#endif
     if (!APCAM_HAVE_OVERLAY_RECORDING_SELECT && !strcmp(parameter->form_name, "osd_recording")) return false;
     if (!APCAM_HAVE_IMAGE_CONTROLS && !strcmp(parameter->section, "image")) return false;
     if (!APCAM_HAVE_EXTERNAL_UART && !strcmp(parameter->section, "uart")) return false;
     if (!APCAM_HAVE_THERMAL && !strcmp(parameter->section,"thermal") &&
-        !(APCAM_HAVE_RAW_THERMAL && !strcmp(parameter->key,"stream_fps"))) return false;
+        !(APCAM_HAVE_RAW_THERMAL && (!strcmp(parameter->key,"stream_fps") || !strcmp(parameter->key,"record_fps"))) &&
+        !(APCAM_HAVE_THERMAL_PALETTE && !strcmp(parameter->key,"palette"))
+#ifdef CAMERA_APP_ZT30_DEV
+        && strcmp(parameter->key,"hfov_cd")
+#endif
+        ) return false;
     if (!APCAM_HAVE_THERMAL_VIDEO && !strcmp(parameter->key,"photo_scope")) return false;
     return true;
 }

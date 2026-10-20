@@ -24,6 +24,11 @@ struct EncodedFrame {
     uint32_t sequence=0,packets=0;
     uint64_t pts[32]{};
 };
+struct EncoderOptions {
+    unsigned width=1280,height=720,bitrate=1570000;
+    unsigned channel=1,source_port=1;
+    bool own_device=true;
+};
 class EncoderOwner {
 public:
     EncoderOwner(Api &sys,EncoderApi &encoder,PacketMemory &memory):s(sys),a(encoder),m(memory) {}
@@ -31,9 +36,10 @@ public:
     EncoderOwner(const EncoderOwner&)=delete;
     EncoderOwner &operator=(const EncoderOwner&)=delete;
     int open(EncoderCodec codec=EncoderCodec::H265,H264Timing timing=H264Timing::ReadOnly,
-             EncoderSource source=EncoderSource::Zoom); // SCL0/channel0 or1/port1, 1280x720
+             EncoderSource source=EncoderSource::Zoom,const EncoderOptions &options=EncoderOptions());
     // Additional software-input channel; caller owns SYS and VENC device 0.
-    int open_thermal();
+    int rebind(EncoderSource); // Main thread; both source scalers must remain alive.
+    int open_thermal(unsigned channel=2,EncoderCodec codec=EncoderCodec::H264);
     // JPEG device8: created once; channels never destroyed/recreated per shot.
     // Normal RGB input is SCL0/source/port0. Thermal uses software input.
     int open_jpeg(EncoderSource source,uint32_t channel,unsigned width,unsigned height,

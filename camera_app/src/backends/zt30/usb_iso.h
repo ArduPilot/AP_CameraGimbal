@@ -35,6 +35,12 @@ public:
     bool finish();
     const uint8_t *get_max() const { return maximum_; }
     const uint8_t *negotiated() const { return negotiated_; }
+    struct Statistics {
+        uint64_t completions=0,empty_completions=0,bytes=0,data_packets=0,max_reap_gap_ns=0;
+        int alt_zero=0,release_control=0,release_stream=0;
+    };
+    // Read on the capture thread or after join; no payloads or per-packet logs.
+    const Statistics &statistics() const { return stats_; }
     uint64_t packet_errors() const { return packet_errors_; }
     bool close_fallback() const { return fallback_; }
 private:
@@ -53,7 +59,8 @@ private:
     UsbIsoApi api_;
     Entry entries_[ThermalUrbs];
     bool claims_[2]{},active_=false,alt_=false,started_=false,finished_=false,cleanup_ok_=true,fallback_=false;
-    uint64_t next_=1,reaped_=1,packet_errors_=0;
+    uint64_t next_=1,reaped_=1,packet_errors_=0,last_reap_ns_=0;
+    Statistics stats_;
     uint8_t maximum_[26]{},negotiated_[26]{};
 };
 }

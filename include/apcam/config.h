@@ -186,6 +186,9 @@ struct ca_config {
     enum ca_mount_orientation orientation;
     enum ca_uart_protocol uart_protocol;
     enum ca_thermal_palette thermal_palette;
+#ifdef CAMERA_APP_ZT30_DEV
+    unsigned thermal_hfov_cd; // 0: geometry disabled, otherwise horizontal FOV in 0.01 degrees.
+#endif
     enum ca_autorecord_mode autorecord;
     unsigned raw_stream_fps;
     unsigned raw_record_fps;

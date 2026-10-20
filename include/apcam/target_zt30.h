@@ -2,7 +2,7 @@
 #define APCAM_TARGET_ZT30_H
 
 /* Target properties shared by firmware, web UI and generated SITL data.
- * Native driver qualification is pending; this target initially supports SITL. */
+ * Native builds narrow unqualified capabilities below. */
 #define APCAM_NAME "zt30"
 #define APCAM_PRODUCT_NAME "ZT30"
 #define APCAM_MODEL_NAME "ZT30"
@@ -39,7 +39,7 @@
 #define APCAM_WEB_PORT 80
 #define APCAM_LENS1_TYPE APCAM_LENS_TYPE_RGB
 #define APCAM_LENS1_NAME "Wide RGB"
-/* ZT30 user manual v1.3, pp17-19. Thermal FOV is unmeasured.
+/* ZT30 user manual v1.3, pp17-19. RGB FOVs are nominal specifications.
  * Endpoint interpolation between nominal zoom factors is provisional. */
 #define APCAM_LENS1_FOV_H 84.5f
 #define APCAM_LENS1_FOV_H_TELE 0.0f
@@ -99,7 +99,8 @@
 #define APCAM_LENS2_HEIGHT 2160
 #define APCAM_LENS3_TYPE APCAM_LENS_TYPE_THERMAL
 #define APCAM_LENS3_NAME "Thermal"
-#define APCAM_LENS3_FOV_H 0.0f
+/* Assumed equal to MT11 at the user's request; not measured on ZT30. */
+#define APCAM_LENS3_FOV_H 24.2f
 #define APCAM_LENS3_DIGITAL_ZOOM_MAX 2.0f
 #define APCAM_LENS3_OPTICAL_ZOOM_MAX 1
 #define APCAM_LENS3_WIDTH 640
@@ -134,9 +135,12 @@
 #define APCAM_HAVE_THERMAL 0
 #ifdef CAMERA_APP_ZT30_DEV
 #define APCAM_HAVE_THERMAL_VIDEO 1
+#define APCAM_HAVE_THERMAL_PALETTE 1
 #endif
+#ifdef CAMERA_APP_ZT30_RAM
 #undef APCAM_STREAM1_LENS_MASK
 #define APCAM_STREAM1_LENS_MASK 2
+#endif
 #ifdef CAMERA_APP_ZT30_RAM
 #undef APCAM_HAVE_PHOTO
 #define APCAM_HAVE_PHOTO 0
@@ -149,12 +153,16 @@
 #define APCAM_HAVE_FOCUS 0
 #undef APCAM_HAVE_OPTICAL_ZOOM
 #define APCAM_HAVE_OPTICAL_ZOOM 0
+#ifdef CAMERA_APP_ZT30_RAM
 #undef APCAM_HAVE_IMAGE_CONTROLS
 #define APCAM_HAVE_IMAGE_CONTROLS 0
+#endif
 #undef APCAM_HAVE_LIDAR
 #define APCAM_HAVE_LIDAR 0
 #define APCAM_GIMBAL_OPTIONAL 1
+#ifdef CAMERA_APP_ZT30_RAM
 #define APCAM_HAVE_NETWORK_CONFIG 0
+#endif
 #endif
 
 /* Platform paths are consumed only by the web service. */

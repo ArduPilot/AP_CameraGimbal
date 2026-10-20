@@ -14,14 +14,16 @@ static const struct ca_config_option autofocus[] = {{"Idle", 0}, {"Autofocus", 1
 #if APCAM_HAVE_ZOOM_LENS
 static const struct ca_config_option lenses[] = {{"Wide RGB", 0}, {"Zoom RGB", 1}};
 #endif
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL_VIDEO
 static const struct ca_config_option sources[] = {{"RGB", 0}, {"Thermal", 1}};
+#endif
+#if APCAM_HAVE_THERMAL
 /* Values follow the thermal module protocol. */
 static const struct ca_config_option gains[] = {{"Low gain", 0}, {"High gain", 1}};
 #endif
 #if APCAM_HAVE_PHOTO
 static const ca_config_option modes[] = {{"Photo",0}, {"Video",1},
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
     {"Survey",2},
 #endif
 };
@@ -38,10 +40,9 @@ static const struct ca_camera_parameter parameters[] = {
 #endif
 #if APCAM_HAVE_ZOOM && !APCAM_ZOOM_NATIVE_RATE
     /* Native rate-only zoom has no trustworthy absolute position readback. */
-    {"CAM_ZOOM", !APCAM_ZOOM_SELECTS_LENS ? "Selected RGB lens zoom (x)" :
-     APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",
+    {"CAM_ZOOM", APCAM_HAVE_ZOOM_LENS ? "Wide digital zoom (x)" : "Zoom (x)",
      CA_CAMERA_ZOOM, 9, 1, 1, APCAM_ZOOM_CONTROL_MAX, NULL, 0, -1},
-#if APCAM_HAVE_ZOOM_LENS && APCAM_ZOOM_SELECTS_LENS
+#if APCAM_HAVE_ZOOM_LENS
     {"CAM_OPT_ZOOM", "Optical zoom (x)", CA_CAMERA_OPTICAL_ZOOM, 9,
      1, 1, APCAM_ZOOM_LENS_OPTICAL_MAX, NULL, 0, -1},
 #endif
@@ -50,20 +51,26 @@ static const struct ca_camera_parameter parameters[] = {
     OPTIONS("CAM_AUTOFOCUS", "Autofocus selected RGB lens", CA_CAMERA_AUTOFOCUS, 0, autofocus),
 #endif
 #if APCAM_HAVE_ZOOM_LENS
-    OPTIONS("CAM_LENS", "RGB lens", CA_CAMERA_LENS, APCAM_DEFAULT_RGB_LENS, lenses),
+    OPTIONS("CAM_LENS", "RGB lens", CA_CAMERA_LENS, 0, lenses),
+#endif
+#if APCAM_HAVE_THERMAL_VIDEO
+    OPTIONS("CAM_SOURCE", "Main video source", CA_CAMERA_SOURCE, 0, sources),
 #endif
 #if APCAM_HAVE_THERMAL
-    OPTIONS("CAM_SOURCE", "Main video source", CA_CAMERA_SOURCE, 0, sources),
     OPTIONS("CAM_THERM_GAIN", "Thermal gain", CA_CAMERA_GAIN, 1, gains),
+#endif
+#if APCAM_HAVE_THERMAL_PALETTE
     {"CAM_PALETTE", "Thermal palette", CA_CAMERA_PALETTE, 6, 0, 0, 0, NULL, 0, -1},
+#endif
+#ifdef CAMERA_APP_ZT30_DEV
+    CONFIG("THERMAL_HFOV_CD", "Thermal horizontal FOV (0.01 deg, default assumes MT11)"),
 #endif
 #if APCAM_HAVE_RAW_THERMAL
     CONFIG("RAW_STREAM_FPS", "Raw thermal streaming rate (fps)"),
 #endif
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || APCAM_HAVE_RAW_THERMAL
     CONFIG("RAW_RECORD_FPS", "Raw thermal recording rate (fps, 0 disables)"),
 #endif
-#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("VIDEO_MAIN_RES", "Main RGB stream resolution"),
     CONFIG("VIDEO_MAIN_CODEC", "Main RGB stream codec"),
 #if APCAM_HAVE_VIDEO_BITRATE
@@ -77,7 +84,6 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("REC_RESOLUTION", "Recording resolution"),
 #endif
     CONFIG("REC_AUTOSTART", "Automatic recording"),
-#endif
 #if APCAM_HAVE_THERMAL_VIDEO
     CONFIG("PHOTO_SCOPE", "Photo capture lenses"),
 #endif
@@ -94,19 +100,17 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("IMG_METERING", "Exposure metering"),
     CONFIG("IMG_WHITE_BAL", "White balance"),
 #endif
-#ifndef CAMERA_APP_ZT30_DEV
     CONFIG("OSD_CROSS", "Targeting cross"),
 #if APCAM_HAVE_OVERLAY_RECORDING_SELECT
     CONFIG("OSD_RECORD", "Overlays in recordings"),
 #endif
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
     CONFIG("OSD_THERMAL_FOV", "Thermal field of view in RGB (nominal alignment)"),
 #endif
     CONFIG("MAV_POS_TARGET", "Position targeting"),
     CONFIG("TRACK_METHOD", "Location tracking control method"),
-#endif
     CONFIG("LOG_DISARMED", "Log when disarmed"),
-#if APCAM_HAVE_PHOTO && APCAM_HAVE_THERMAL
+#if APCAM_HAVE_PHOTO && (APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV))
     CONFIG("SURV_LENS", "Survey camera"),
     CONFIG("SURV_PATTERN", "Survey pattern"),
     CONFIG("SURV_OVERLAP", "Overlap (%)"),
@@ -213,11 +217,7 @@ char *ca_camera_definition(size_t *length)
                 fputs("        <option name=\"", out);
                 xml_text(out, p.options[j].name);
                 fprintf(out, "\" value=\"%d\"", p.options[j].value);
-                if (!APCAM_ZOOM_SELECTS_LENS &&
-                    ((p.operation == CA_CAMERA_LENS && p.options[j].value == 0) ||
-                     (p.operation == CA_CAMERA_SOURCE && p.options[j].value == 1))) {
-                    fputs("><exclusions><exclude>CAM_ZOOM</exclude></exclusions></option>\n", out);
-                } else if (p.operation == CA_CAMERA_LENS && APCAM_ZOOM_SELECTS_LENS) {
+                if (p.operation == CA_CAMERA_LENS) {
                     fprintf(out, "><exclusions><exclude>%s</exclude></exclusions></option>\n",
                             p.options[j].value == 0 ? "CAM_OPT_ZOOM" : "CAM_ZOOM");
                 } else fputs("/>\n", out);
@@ -227,11 +227,9 @@ char *ca_camera_definition(size_t *length)
         if (p.operation == CA_CAMERA_AUTOFOCUS) {
             fputs("      <updates><update>CAM_AUTOFOCUS</update></updates>\n", out);
         } else if (p.operation == CA_CAMERA_LENS) {
-            fputs(APCAM_ZOOM_SELECTS_LENS ? "      <updates><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n" :
-                  "      <updates><update>CAM_ZOOM</update></updates>\n", out);
+            fputs("      <updates><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n", out);
         } else if (p.operation == CA_CAMERA_SOURCE && APCAM_HAVE_ZOOM_LENS) {
-            fputs(APCAM_ZOOM_SELECTS_LENS ? "      <updates><update>CAM_LENS</update><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n" :
-                  "      <updates><update>CAM_LENS</update><update>CAM_ZOOM</update></updates>\n", out);
+            fputs("      <updates><update>CAM_LENS</update><update>CAM_ZOOM</update><update>CAM_OPT_ZOOM</update></updates>\n", out);
         }
         fputs("    </parameter>\n", out);
     }

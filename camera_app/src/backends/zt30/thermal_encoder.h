@@ -12,7 +12,7 @@ public:
     bool probe_input_discarded(); // validates the new JPEG lease without pixel writes
     int start_once() { return output.start_once(); }
     int stop_once() { return output.stop_once(); }
-    int open() { return output.open_thermal(); }
+    int open(EncoderCodec codec=EncoderCodec::H264) { return output.open_thermal(input_port.words[2],codec); }
     InputBufferResult submit(const uint8_t*,size_t,uint64_t pts);
     int pending_packs(uint32_t &packs) { return output.pending_packs(packs); }
     int copy_frame(EncodedFrame &frame) { return output.copy_frame(frame); }

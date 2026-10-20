@@ -24,7 +24,16 @@ static void private_emit(void*,const ca_private_frame *p) {
     assert(p->sequence==97 && p->control==10 && p->source==0x2e && p->destination==0x2c);
     assert(p->payload_length==1 && p->payload[0]==1);private_replies++;
 }
-static void emit(void*,const uint8_t*,size_t) {}
+static std::vector<uint8_t> emitted;
+static void emit(void*,const uint8_t *data,size_t n) { emitted.assign(data,data+n); }
+static void expect_local(uint8_t opcode,std::initializer_list<uint8_t> values) {
+    ca_siyi_packet packet{};size_t consumed=0;
+    assert(ca_siyi_parse_one(emitted.data(),emitted.size(),&packet,&consumed)==1);
+    assert(consumed==emitted.size() && packet.opcode==opcode && packet.payload_length==values.size());
+    assert(std::equal(values.begin(),values.end(),packet.payload));emitted.clear();
+}
+static bool camera_thermal=false,camera_wide=true,lens_fail=false;
+static uint8_t camera_palette=0;
 static int mounting(void*,bool inverted) { return inverted?-1:0; }
 static std::vector<uint8_t> take(int fd) {
     uint8_t wire[512];ssize_t n=recv(fd,wire,sizeof(wire),0);assert(n>=13);
@@ -69,8 +78,8 @@ int main() {
     assert(zoom.get(3500)==30 && !std::isfinite(zoom.get(3501)) && zoom.hfov(false,3501)==0);
     assert(!std::isfinite(zoom.get(999)));zoom.reset();assert(!std::isfinite(zoom.get(1000)));
 
-    static_assert(APCAM_NUM_STREAMS==2 && APCAM_HAVE_THERMAL_VIDEO);
-    static_assert(APCAM_HAVE_PHOTO && !APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && !APCAM_HAVE_OPTICAL_ZOOM && !APCAM_HAVE_IMAGE_CONTROLS);
+    static_assert(APCAM_NUM_STREAMS==2 && APCAM_HAVE_THERMAL_VIDEO && APCAM_STREAM1_LENS_MASK==3);
+    static_assert(APCAM_HAVE_PHOTO && !APCAM_HAVE_ZOOM && !APCAM_HAVE_FOCUS && !APCAM_HAVE_THERMAL && !APCAM_HAVE_LIDAR && !APCAM_HAVE_OPTICAL_ZOOM && APCAM_HAVE_IMAGE_CONTROLS);
     for (unsigned i=0;i<9;i++) {
         assert(apcam_feedback[0].matrix[i]==(i==8?-1:i%4==0?1:0));
         assert(apcam_angle_command[0].matrix[i]==(i==8?-1:i%4==0?1:0));
@@ -101,6 +110,38 @@ int main() {
         reply(b,fds[1],sub,&incoming_lens,1);
         assert(empty(fds[1]) && !std::isfinite(ca_zt30::zoom_feedback().get(monotonic_ms())));
     }
+
+    // Source/palette commands are camera-local, including rollback on lens failure.
+    assert(command(b,0x10)<0 && empty(fds[1]));
+    b->thermal_main_get=[](void*){return camera_thermal;};
+    b->thermal_main_set=[](void*,bool value){camera_thermal=value;return 0;};
+    b->lens_wide=[](void*){return camera_wide;};
+    b->lens_set=[](void*,bool value){if(lens_fail)return -1;camera_wide=value;return 0;};
+    assert(command(b,0x10)==0);expect_local(0x10,{1,2});
+    for(const auto &selection:{std::array<uint8_t,2>{2,0},{0,2},{1,2}}) {
+        assert(command(b,0x11,selection.data(),2)==0);expect_local(0x11,{selection[0],selection[1]});
+        assert(command(b,0x10)==0);expect_local(0x10,{selection[0],selection[1]});
+    }
+    const uint8_t thermal_source[2]={2,0};
+    assert(command(b,0x11,thermal_source,2)==0);expect_local(0x11,{2,0});
+    lens_fail=true;uint8_t zoom_mode=3;
+    assert(command(b,0x11,&zoom_mode,1)<0 && camera_thermal && camera_wide);
+    const uint8_t zoom_source[2]={0,2};
+    assert(command(b,0x11,zoom_source,2)<0 && camera_thermal && camera_wide);
+    lens_fail=false;
+    for(uint8_t mode:{3,5}) {
+        assert(command(b,0x11,&mode,1)==0);expect_local(0x11,{mode});
+        assert(!camera_thermal && camera_wide==(mode==5));
+    }
+    for(const auto &bad:{std::vector<uint8_t>{},{0},{2},{0,0},{2,2},{3,0},{0,2,0}})
+        assert(command(b,0x11,bad.data(),bad.size())<0);
+    b->thermal_palette_get=[](void*,uint8_t *value){*value=camera_palette;return 0;};
+    b->thermal_palette_set=[](void*,uint8_t value){if(value>11)return -1;camera_palette=value;return 0;};
+    assert(command(b,0x1a)==0);expect_local(0x1a,{0});
+    uint8_t palette=4;assert(command(b,0x1b,&palette,1)==0);expect_local(0x1b,{4});
+    assert(command(b,0x1a)==0);expect_local(0x1a,{4});
+    palette=255;assert(command(b,0x1b,&palette,1)<0 && camera_palette==4);
+    assert(command(b,0x1b)<0 && command(b,0x1a,&palette,1)<0 && empty(fds[1]));
 
     assert(!ca_backend_has_gimbal(b));ca_gimbal_attitude a{};assert(!ca_backend_gimbal_attitude(b,&a));
     assert(ca_backend_set_gimbal_rates(b,0,.1f)<0 && empty(fds[1]));
@@ -133,7 +174,14 @@ int main() {
     {auto v=take(fds[1]);assert(sdk(v).opcode==0x18);}assert(empty(fds[1]));
 
     uint8_t follow=4;assert(command(b,0x0c,&follow,1)==0);{auto v=take(fds[1]);assert(v[10]==0x15 && v[11]==1);}
-    assert(ca_backend_set_gimbal_angles(b,1.0f,0)<0 && errno==ERANGE && empty(fds[1]));
+    // Absolute targets use the declared physical envelope, independent of the
+    // current pose. A distant target must not silently disable ROI/survey.
+    assert(ca_backend_set_gimbal_angles(b,-1.0f,0)==0);
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==0x0e &&
+        (int16_t)(p.payload[2]|(uint16_t(p.payload[3])<<8))==-573);}
+    assert(ca_backend_set_gimbal_angles(b,1.0f,0)==0);
+    {auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==0x0e &&
+        (int16_t)(p.payload[2]|(uint16_t(p.payload[3])<<8))==250);}
     assert(ca_backend_set_gimbal_angles(b,NAN,0)<0 && empty(fds[1]));
     assert(ca_backend_set_gimbal_angles(b,0,.01f)==0);{auto v=take(fds[1]);auto p=sdk(v);assert(p.opcode==0x0e && (int16_t)(p.payload[0]|(uint16_t(p.payload[1])<<8))==-6);}
     attitude(b,fds[1],0,-10,-20);assert(ca_backend_gimbal_attitude(b,&a));

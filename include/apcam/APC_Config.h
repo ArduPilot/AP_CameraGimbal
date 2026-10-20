@@ -173,7 +173,7 @@ private:
     };
 
     inline static constexpr ca_config_option survey_lenses[] = {
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
         {"thermal", 0},
 #endif
         {"wide", 1},
@@ -183,6 +183,9 @@ private:
     };
 
     inline static constexpr Field _fields[] = {
+#ifdef CAMERA_APP_ZT30_DEV
+        {"thermal", "hfov_cd", Kind::Uint, offsetof(ca_config, thermal_hfov_cd), sizeof(unsigned), NULL, 0, 0, 17900, "THERMAL_HFOV_CD"},
+#endif
         {"survey", "pattern", Kind::Enum, offsetof(ca_config, survey.pattern), sizeof(unsigned),
          survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0]), 0, 0, "SURV_PATTERN"},
         {"survey", "lens", Kind::Enum, offsetof(ca_config, survey.lens), sizeof(unsigned),
@@ -267,7 +270,7 @@ private:
         {"overlay", "recording", Kind::Bool, offsetof(struct ca_config, osd_recording),
          sizeof(((struct ca_config *)0)->osd_recording), NULL, 0U, 0, 0, "OSD_RECORD"},
 #endif
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || defined(CAMERA_APP_ZT30_DEV)
         {"overlay", "thermal_fov", Kind::Bool, offsetof(struct ca_config, osd_thermal_fov),
          sizeof(((struct ca_config *)0)->osd_thermal_fov), NULL, 0U, 0, 0, "OSD_THERMAL_FOV"},
 #endif
@@ -382,7 +385,7 @@ private:
         {"thermal", "stream_fps", Kind::Uint, offsetof(struct ca_config, raw_stream_fps),
          sizeof(((struct ca_config *)0)->raw_stream_fps), NULL, 0U, 1, 25, "RAW_STREAM_FPS"},
 #endif
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL || APCAM_HAVE_RAW_THERMAL
         {"thermal", "record_fps", Kind::Uint, offsetof(struct ca_config, raw_record_fps),
          sizeof(((struct ca_config *)0)->raw_record_fps), NULL, 0U, 0, 25, "RAW_RECORD_FPS"},
 #endif

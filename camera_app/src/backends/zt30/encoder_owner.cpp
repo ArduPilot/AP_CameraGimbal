@@ -1,6 +1,7 @@
 #include "encoder_owner.h"
 #include "media_graph.h"
 #include <cstring>
+#include <cerrno>
 namespace ca_zt30 {
 bool EncoderOwner::check(int result,const char *call) {
     if(!result)return true;
@@ -12,8 +13,10 @@ void EncoderOwner::cleanup(int result,const char *call,int &first) {
     if(result && !first)first=result;
     (void)check(result,call);
 }
-int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source) {
-    if(used)return -1;
+int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source,const EncoderOptions &options) {
+    if(used || options.width<16 || options.width>3840 || options.height<16 || options.height>2160 ||
+       (options.width&1) || (options.height&1) || !options.bitrate ||
+       (options.channel!=1 && options.channel!=3 && options.channel!=4 && options.channel!=7) || options.source_port>4)return -1;
     used=true;
     if(source!=EncoderSource::Zoom && source!=EncoderSource::Wide) {
         check(-1,"unsupported encoder source");return -1;
@@ -30,14 +33,16 @@ int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source
         check(-1,"H264 VUI functions unavailable");return -1;
     }
 #define CALL(expr) do { if(!check((expr),#expr)) { close();return raw_status; } } while(0)
+    channel_id=options.channel;source_port=options.source_port;
     EncoderDevice dev{3840,2160};
-    CALL(a.create_device(0,&dev));device=true;
-    auto attr=codec==EncoderCodec::H264 ? h264_channel(1280,720,1570000) : h265_channel(1280,720,1570000);
-    CALL(a.create_channel(0,1,&attr));channel=true;
+    if(options.own_device) { CALL(a.create_device(0,&dev));device=true; }
+    auto attr=codec==EncoderCodec::H264 ? h264_channel(options.width,options.height,options.bitrate) :
+                                       h265_channel(options.width,options.height,options.bitrate);
+    CALL(a.create_channel(0,channel_id,&attr));channel=true;
     const uint32_t normal_input=0;
-    CALL(a.set_input_source(0,1,&normal_input));
+    CALL(a.set_input_source(0,channel_id,&normal_input));
     if(codec==EncoderCodec::H264) {
-        CALL(a.get_h264_vui(0,1,&initial_vui));got_default_vui=true;
+        CALL(a.get_h264_vui(0,channel_id,&initial_vui));got_default_vui=true;
         if(timing==H264Timing::Fixed30) {
             if(!baseline_h264_vui(initial_vui)) {
                 check(-1,"H264 default VUI differs from baseline SPS");close();return raw_status;
@@ -45,8 +50,8 @@ int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source
             auto requested=initial_vui;
             requested.timing_present=1;requested.fixed_rate=1;
             requested.units=1;requested.time_scale=60; // 30fps, two ticks per frame
-            CALL(a.set_h264_vui(0,1,&requested));
-            CALL(a.get_h264_vui(0,1,&verified_vui));
+            CALL(a.set_h264_vui(0,channel_id,&requested));
+            CALL(a.get_h264_vui(0,channel_id,&verified_vui));
             // Check all consumed non-timing fields; ignore padding10/11/27.
             const auto *actual=reinterpret_cast<const uint8_t*>(&verified_vui);
             const auto *expected=reinterpret_cast<const uint8_t*>(&requested);
@@ -58,20 +63,36 @@ int EncoderOwner::open(EncoderCodec codec,H264Timing timing,EncoderSource source
         }
     } // Fixed30 only; ReadOnly preserves automatic timing.
     started=true; // Stop even a partially successful activation.
-    CALL(a.start(0,1));
-    Port input{Scl,0,source_channel,1},destination{Venc,0,1,0};
+    CALL(a.start(0,channel_id));
+    Port input{Scl,0,source_channel,source_port},destination{Venc,0,channel_id,0};
     CALL(s.sys_bind(0,&input,&destination,30,30,FrameBind,0));bound=true;
 #undef CALL
     return 0;
 }
-int EncoderOwner::open_thermal() {
-    if(used)return -1;
-    used=true;software=true;h264=true;channel_id=2;
+int EncoderOwner::rebind(EncoderSource selected) {
+    const unsigned next=unsigned(selected);
+    if(next>1 || !bound || software || !channel || !started)return EINVAL;
+    if(next==source_channel)return 0;
+    Port before{Scl,0,source_channel,source_port},after{Scl,0,next,source_port},dest{Venc,device_id,channel_id,0};
+    int rc=s.sys_unbind(0,&before,&dest);if(rc)return rc;
+    rc=s.sys_bind(0,&after,&dest,30,30,FrameBind,0);
+    if(rc) {
+        // The old route must be restored before returning a recoverable error.
+        if(s.sys_bind(0,&before,&dest,30,30,FrameBind,0))return EOWNERDEAD;
+        return rc;
+    }
+    source_channel=next;
+    return 0;
+}
+int EncoderOwner::open_thermal(unsigned selected,EncoderCodec codec) {
+    if(used || (selected!=2 && selected!=6 && selected!=8) ||
+       (codec!=EncoderCodec::H264 && codec!=EncoderCodec::H265))return -1;
+    used=true;software=true;h264=codec==EncoderCodec::H264;channel_id=selected;
     if(!a.create_channel || !a.destroy_channel || !a.set_input_source || !a.start ||
        !a.stop || !a.query || !a.get_stream || !a.release_stream ||
        !m.pointer_slot || !m.copy) { check(-1,"thermal API unavailable");return -1; }
-    auto attr=h264_channel(640,512,1000000);
-    attr.fps_num=15;attr.gop=30;
+    auto attr=h264?h264_channel(640,512,1000000):h265_channel(640,512,1000000);
+    attr.max_width=640;attr.max_height=512;attr.fps_num=15;attr.gop=30;
     if(!check(a.create_channel(0,channel_id,&attr),"thermal CreateChn"))return raw_status;
     channel=true;
     const uint32_t source=0;

@@ -18,7 +18,7 @@ int MediaBackend::init_failed(int code) {
     worker_result.store(code);done.store(true);active.store(false);
     (void)shutdown();errno=EIO;return -1;
 }
-int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity,EncoderSource selected,MediaRun policy) {
+int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity,EncoderSource selected,MediaRun policy,unsigned scaler_mask) {
     if(used) { errno=EALREADY;return -1; }
     used=true;
     if((policy!=MediaRun::Qualification && policy!=MediaRun::Continuous) ||
@@ -28,7 +28,7 @@ int MediaBackend::initialize(const MediaHooks &h,uint8_t *buffer,size_t capacity
     }
     source=selected;run=policy;hooks=h;copied.data=buffer;copied.capacity=capacity;
     const bool wide=source==EncoderSource::Wide;
-    if(rgb.open(wide)) { unsafe_sdk_failure=true;return init_failed(5); }
+    if(rgb.open(wide,false,scaler_mask)) { unsafe_sdk_failure=true;return init_failed(5); }
     if(stopping() || !hooks.gate(hooks.opaque,false))return init_failed(6);
     if(wide)std::printf("IQ_LOAD sensor=1 isp=1 path=%s key=1234\n",WidePath.iq_file);
     const uint64_t iq_begin=now();const int iq=rgb.load_iq();
@@ -77,7 +77,17 @@ void MediaBackend::consume() {
     if(code) { failure_call.store(encoder.failed_call?encoder.failed_call:"media sink/deadline");failure_status.store(encoder.failed_call?encoder.raw_status:-1); }
     worker_result.store(code);active.store(false);done.store(true);
 }
+int MediaBackend::select_source(EncoderSource selected) {
+    const int rc=encoder.rebind(selected);
+    if(!rc)source=selected;
+    return rc;
+}
 int MediaBackend::shutdown() {
+    const int stopped=stop_video();if(stopped)return stopped;
+    const int raw=rgb.close();if(raw && !close_error)close_error=raw;
+    return close_error;
+}
+int MediaBackend::stop_video() {
     active.store(false);local_stop.store(true);
     // Failed RGB/IQ/encoder initialization can leave SDK callbacks or mutexes
     // alive after attempted unwind. Recovery belongs to the independent
@@ -89,7 +99,6 @@ int MediaBackend::shutdown() {
         thread_started=false;
     }
     const int enc=encoder.close();if(enc && !close_error)close_error=enc;
-    const int raw=rgb.close();if(raw && !close_error)close_error=raw;
     return close_error;
 }
 } // namespace ca_zt30

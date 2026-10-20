@@ -728,10 +728,14 @@ static void send_camera_information(struct ca_mavlink_server *server,
                     CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE);
 #endif
 #ifdef CAMERA_APP_ZT30_DEV
-    // Native recording and lens controls remain unavailable; photographs
-    // use the qualified local JPEG/raw paths.
+    // Native video recording and photos use independently owned encoders.
+    // Optical setters remain separate from the qualified stream controls.
     info.flags = CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM | CAMERA_CAP_FLAGS_CAPTURE_IMAGE |
-                 CAMERA_CAP_FLAGS_HAS_MODES | CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE;
+                 CAMERA_CAP_FLAGS_CAPTURE_VIDEO | CAMERA_CAP_FLAGS_HAS_MODES |
+                 CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE |
+                 CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE;
+    if(ca_media_survey_available(server->media,server->settings.survey.lens))
+        info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
     // Optional gimbal identity above is based on actual fresh MCU feedback.
 #endif
     if(!ca_media_photo_available(server->media))
@@ -1003,7 +1007,7 @@ static void send_camera_fov(struct ca_mavlink_server *server, const struct route
     const bool thermal = ca_media_thermal_main(server->media);
     unsigned width, height;
     ca_video_resolution_size(server->settings.main_resolution, &width, &height);
-#if APCAM_HAVE_THERMAL
+#if APCAM_HAVE_THERMAL_VIDEO
     // Use the native thermal sensor aspect, before encoder stretching/padding.
     if (thermal) { width = APCAM_LENS3_WIDTH; height = APCAM_LENS3_HEIGHT; }
 #endif
@@ -2303,8 +2307,12 @@ static void parameter_status(struct ca_mavlink_server *server, const char *text)
 static bool live_config_parameter(size_t index)
 {
 #ifdef CAMERA_APP_ZT30_DEV
-    (void)index;
-    return false; // Native configuration is explicitly restart-only for now.
+    const char *name=ca_config_param_name(index);
+    return name && (!strncmp(name,"IMG_",4) || !strcmp(name,"PHOTO_SCOPE") ||
+                    !strcmp(name,"RAW_STREAM_FPS") || !strcmp(name,"RAW_RECORD_FPS") ||
+                    !strcmp(name,"LOG_DISARMED") || !strcmp(name,"REC_AUTOSTART") ||
+                    !strncmp(name,"SURV_",5) || !strcmp(name,"OSD_CROSS") || !strcmp(name,"OSD_RECORD") ||
+                    !strcmp(name,"MAV_POS_TARGET") || !strcmp(name,"TRACK_METHOD") || !strcmp(name,"THERMAL_PALETTE") || !strcmp(name,"THERMAL_HFOV_CD") || !strcmp(name,"OSD_THERMAL_FOV"));
 #else
     const char *name = ca_config_param_name(index);
     if (strcmp(name, "PHOTO_SCOPE") == 0) return true;
@@ -2334,14 +2342,14 @@ static int apply_runtime_config(struct ca_mavlink_server *server, const struct c
             (next->autorecord == CA_AUTORECORD_WHILE_ARMED &&
              server->have_vehicle_armed && server->vehicle_armed);
     }
-    if ((next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL &&
+    if ((next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL_PALETTE &&
          ca_media_set_thermal_palette(server->media, next->thermal_palette) < 0) ||
         (record != was_recording && ca_media_set_recording(server->media, record) < 0) ||
         (strcmp(next->timezone, previous.timezone) != 0 && APC_Timezone::apply(next->timezone) < 0)) {
         int saved_errno = errno;
         if (ca_media_recording(server->media) != was_recording)
             (void)ca_media_set_recording(server->media, was_recording);
-        if (next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL)
+        if (next->thermal_palette != previous.thermal_palette && APCAM_HAVE_THERMAL_PALETTE)
             (void)ca_media_set_thermal_palette(server->media, previous.thermal_palette);
         if (ca_media_configure(server->media, &previous) < 0)
             ca_log("configuration runtime rollback failed");
@@ -2463,11 +2471,24 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
         return;
     }
 #ifdef CAMERA_APP_ZT30_DEV
-    // Publish the normal PID/hash acknowledgement for web restart, but never
-    // call the unqualified live media/configuration path. This is a notice,
-    // not a claim that clamped or unsupported settings have been applied.
-    config_status(server, hash, "restart",
-        "Development build reads settings at startup; later saves require restart. Video remains fixed at 1280x720 H264; unsupported features remain disabled.");
+    APC_ZT30_Config::effective(desired);
+    server->parameters=desired;
+    struct ca_config next=server->settings;
+    for(size_t i=0;i<ca_config_param_count();i++)if(live_config_parameter(i))
+        (void)ca_config_param_assign(&next,i,float(ca_config_param_get(&desired,i)));
+    memcpy(next.timezone,desired.timezone,sizeof(next.timezone));
+    if(apply_runtime_config(server,&next)<0) {
+        snprintf(error,sizeof(error),"Could not apply saved settings: %s",strerror(errno));
+        config_status(server,hash,"error",error);return;
+    }
+    bool restart=false;
+    for(size_t i=0;i<APC_Config::count();i++) {
+        const auto &f=APC_Config::fields()[i];
+        if(memcmp((const char*)&desired+f.offset,(const char*)&server->settings+f.offset,f.size))restart=true;
+    }
+    config_status(server,hash,restart?"restart":"applied",restart?
+        "Live image settings applied. Restart to apply other saved settings.":
+        "All saved settings applied without restarting the camera app.");
     return;
 #else
     for (size_t i=0;i<ca_config_param_count();i++) {
@@ -2734,6 +2755,8 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
     case CA_CAMERA_MODE: return set_camera_mode(server,(unsigned)value)==MAV_RESULT_ACCEPTED ? 0 : -1;
     case CA_CAMERA_CONFIG:
 #ifdef CAMERA_APP_ZT30_DEV
+        if(live_config_parameter((size_t)p->config_index))
+            return apply_camera_config(server,(size_t)p->config_index,value);
         if (ca_config_param_save(&server->parameters, server->config_path,
                                  (size_t)p->config_index, value) < 0) return -1;
         parameter_status(server, "Parameter saved; restart required");

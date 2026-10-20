@@ -787,7 +787,7 @@ build/zt30/encoder-probe: tools/zt30_rgb_probe.cpp camera_app/src/backends/zt30/
 build/zt30/encoder-sdk.so: tools/zt30_rgb_sdk.c $(ZT30_SDK_LIBRARIES)
 	@test -n '$(ZT30_SDK_LIBDIR)' || { echo 'ZT30_SDK_LIBDIR must point to the captured ZT30 /config/lib' >&2; exit 1; }
 	@mkdir -p $(@D)
-	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_sensor -lmi_vif -lispalgo -lcus3a -lmi_isp -lmi_scl -lmi_venc -lm -lpthread -Wl,--as-needed -o $@
+	$(ZT30_CROSS_COMPILE)gcc -std=c99 -O2 -Wall -Wextra -Werror -fPIC -shared $< -L'$(ZT30_SDK_LIBDIR)' -Wl,--no-as-needed -lcam_os_wrapper -lmi_sys -lmi_sensor -lmi_vif -lispalgo -lcus3a -lmi_isp -lmi_scl -lmi_venc -lmi_rgn -lm -lpthread -Wl,--as-needed -o $@
 	python3 tools/check_zt30_elf.py $@ --shared-library --readelf $(ZT30_CROSS_COMPILE)readelf
 
 .PHONY: zt30_pts_clock-test
@@ -977,3 +977,27 @@ zt30_update-test:
 	python3 tests/test_live_video_probe.py
 	python3 web/tests/test_zt30_upgrade.py
 	python3 web/tests/test_zt30_upgrade_browser.py
+
+.PHONY: zt30_image-test
+zt30_image-test:
+	mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -I. -Icamera_app/include -Iinclude tests/test_zt30_image.cpp camera_app/src/backends/zt30/isp.cpp camera_app/src/log.cpp -lpthread -o build/tests/zt30-image-test
+	build/tests/zt30-image-test
+
+.PHONY: zt30_recording-test
+zt30_recording-test:
+	mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -I. -Icamera_app/include -Iinclude tests/test_zt30_recording.cpp camera_app/src/backends/zt30/recording.cpp camera_app/src/log.cpp -lpthread -o build/tests/zt30-recording-test
+	python3 -c 'import subprocess,tempfile; t=tempfile.TemporaryDirectory(); subprocess.run(["build/tests/zt30-recording-test",t.name],check=True)'
+
+.PHONY: zt30_thermal_controls-test
+zt30_thermal_controls-test:
+	@mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -I. tests/test_zt30_thermal_controls.cpp camera_app/src/backends/zt30/thermal_controls.cpp -lpthread -o build/tests/zt30-thermal-controls-test
+	build/tests/zt30-thermal-controls-test
+
+.PHONY: zt30_overlay-test
+zt30_overlay-test:
+	@mkdir -p build/tests
+	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -no-pie -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -I. -Iinclude -Icamera_app/include tests/test_zt30_overlay.cpp camera_app/src/backends/zt30/overlay.cpp camera_app/src/media/overlay.cpp camera_app/src/log.cpp -ldl -lpthread -o build/tests/zt30-overlay-test
+	build/tests/zt30-overlay-test

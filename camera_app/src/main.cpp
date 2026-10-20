@@ -450,7 +450,7 @@ int APC_CameraApp::run(int argc, char **argv)
         .settings = app_config,
     };
     char network_error[256] = "";
-#if defined(CAMERA_APP_SITL) || defined(CAMERA_APP_ZT30_RAM) || defined(CAMERA_APP_ZT30_DEV)
+#if defined(CAMERA_APP_SITL) || defined(CAMERA_APP_ZT30_RAM)
     if (app_config.network.primary_address[0] || app_config.network.secondary_address[0] || app_config.network.gateway[0])
         ca_log("network configuration skipped in SITL (uses host networking)");
 #elif !APCAM_HAVE_NETWORK_CONFIG
