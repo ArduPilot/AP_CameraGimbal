@@ -1,5 +1,6 @@
 #include "../camera_app/src/backends/zt30/pts_clock.h"
 #include <cassert>
+#include <initializer_list>
 using ca_zt30::PtsClock;
 int main() {
     const uint64_t seed=UINT64_C(0xe1237890f7e21ce3), ns=UINT64_C(2000000000000);
@@ -40,6 +41,26 @@ int main() {
     PtsClock drift;assert(drift.observe(seed,ns,ns));
     assert(drift.observe(seed+1001000,ns+1000000000,ns+1000000000));
     assert(!drift.observe(seed+2010000,ns+2000000000,ns+2000000000));
+    // Eight hours at 30fps, with independent clocks at either drift limit.
+    // The original fixed offset falsely rejected even +10ppm after ~200s.
+    for (int ppm : {-1000,-100,-10,0,10,100,1000}) {
+        PtsClock running;
+        assert(running.observe(seed,ns,ns));
+        uint64_t previous=0;
+        for(uint64_t n=1;n<=8U*60*60*30;n++) {
+            const uint64_t elapsed=n*1000000/30;
+            const int64_t correction=int64_t(elapsed)*ppm/1000000;
+            const uint64_t pts=seed+elapsed+correction;
+            const uint64_t now=ns+elapsed*1000;
+            assert(running.observe(pts,now,now+100000));
+            assert(running.frame(pts-1000,now/1000+5000,out));
+            assert(out>previous);previous=out;
+        }
+        // Even after eight hours, an abrupt 10ms clock step must fail.
+        const uint64_t elapsed=8ULL*60*60*1000000+1000000;
+        const uint64_t pts=seed+elapsed+int64_t(elapsed)*ppm/1000000+10000;
+        assert(!running.observe(pts,ns+elapsed*1000,ns+elapsed*1000));
+    }
     // A scheduling overrun must not poison the clock before a precise retry.
     ca_zt30::PtsObservation observation;
     unsigned reads=0,ticks=0;
