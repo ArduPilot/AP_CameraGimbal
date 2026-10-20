@@ -1,4 +1,4 @@
-# Lossless MT11 thermal stream (experimental v1)
+# Lossless thermal stream (experimental v1)
 
 MT11 and SITL-MT11 expose `http://CAMERA:8556/thermal.mkv` in addition to the
 existing display streams. This carries **640x512 gray16le FFV1 level 3** video
@@ -6,7 +6,15 @@ in streaming Matroska, with slice CRCs and independently decodable frames.
 There is no palette, resizing, rotation, overlay or sample truncation in the
 radiometric path. The complete USB radiometric word is retained: unsigned
 16-bit Kelvin multiplied by 64 (`Celsius = sample / 64 - 273.15`). This describes
-the sensor's output format; it does not assert its internal ADC precision.
+the MT11 sensor's output format; it does not assert its internal ADC precision.
+
+Native ZT30 also exposes this transport, preserving its 16-bit raw counts.
+Its temperature conversion is not calibrated: `temperature_calibration` is
+`unverified_sensor_counts`, and `temperature_scale_k`, `temperature_offset_k`, `minimum_c`
+and `maximum_c` are JSON `null`. Never apply MT11's Kelvin conversion to these
+counts. Calibrated MT11 frames report `temperature_calibration: "sensor_kelvin_64"`.
+These optional/nullable fields extend `apcg.thermal.v1`; consumers must accept
+unknown calibration and null numeric values before displaying temperatures.
 
 `VIDEO_STREAM_INFORMATION` advertises stream **3**, named **Raw Thermal
 (16-bit)**, thermal flag, encoding UNKNOWN (FFV1 identified inside Matroska),
@@ -52,9 +60,10 @@ The `apcg.thermal.v1` JSON contains:
 | `simulation_source` | `terrain` or `test_pattern` in SITL; empty on hardware |
 | `timestamp_source`, `simulated` | `usb_receive` on hardware; `simulation`, true in SITL |
 | `width`, `height`, `pixel_format`, `bits_per_sample` | 640, 512, gray16le, 16 |
-| `temperature_scale_k`, `temperature_offset_k` | Kelvin = raw * scale + offset; currently 1/64, 0 |
+| `temperature_calibration` | `sensor_kelvin_64` for calibrated MT11; `unverified_sensor_counts` for uncalibrated sources |
+| `temperature_scale_k`, `temperature_offset_k` | Kelvin = raw * scale + offset; 1/64, 0 for MT11, otherwise null |
 | `gain` | MT11 gain value (0 low, 1 high); -1 until known |
-| `minimum_raw`, `maximum_raw`, `minimum_c`, `maximum_c` | Actual extrema of this frame |
+| `minimum_raw`, `maximum_raw`, `minimum_c`, `maximum_c` | Actual raw extrema; Celsius extrema are null without temperature calibration |
 | `rotation_deg` | Rotation to upright display, 0 or 180; native pixels remain untouched |
 | `hfov_deg`, `calibration` | Native thermal nominal horizontal FOV and `nominal_pinhole`; unknown geometry is `null` with calibration `unknown` |
 | `altitude_datum`, `gimbal_frame` | AMSL; `roll_pitch_level_yaw_vehicle` |

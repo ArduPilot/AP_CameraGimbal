@@ -191,6 +191,9 @@ struct Context {
         if(ca_rtsp_add_video(c.rtsp,"video2",c.settings.sub_codec,15,&id) || id!=1 ||
            ca_live_video_server_configure(c.live,1,640,512,15,true))return false;
         ca_rtsp_add_config_aliases(c.rtsp,&c.settings);
+        if(ca_rtsp_support_proxy(c.rtsp,&c.settings.support)) {
+            ca_log("ZT30 video SupportProxy configuration failed: errno=%d",errno);return false;
+        }
         return c.observe();
     }
     static bool frame(void *opaque,const EncodedFrame &f,uint64_t,uint64_t after) {

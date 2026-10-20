@@ -738,9 +738,8 @@ static void send_camera_information(struct ca_mavlink_server *server,
         info.flags |= CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE;
     // Optional gimbal identity above is based on actual fresh MCU feedback.
 #endif
-    if(!ca_media_photo_available(server->media))
-        info.flags &= ~(CAMERA_CAP_FLAGS_CAPTURE_IMAGE | CAMERA_CAP_FLAGS_HAS_MODES |
-                        CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE);
+    // Capabilities are static: autopilots may cache the first reply before
+    // thermal startup completes. Individual capture requests enforce freshness.
     snprintf(info.cam_definition_uri, sizeof(info.cam_definition_uri),
              "mftp://[;comp=%u]" CA_CAMERA_DEFINITION_PATH, server->camera_component_id);
     unsigned width, height;
@@ -750,10 +749,8 @@ static void send_camera_information(struct ca_mavlink_server *server,
 #ifdef CAMERA_APP_ZT30_DEV
     // CAMERA_INFORMATION describes photographs; streaming dimensions belong
     // to VIDEO_STREAM_INFORMATION. Full-scope native capture includes zoom 4K.
-    if(ca_media_photo_available(server->media)) {
-        info.resolution_h=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?640:3840;
-        info.resolution_v=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?512:2160;
-    }
+    info.resolution_h=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?640:3840;
+    info.resolution_v=server->photo_scope==CA_PHOTO_SCOPE_THERMAL?512:2160;
 #endif
     put_text((char *)info.vendor_name, sizeof(info.vendor_name), "ArduPilot");
     put_text((char *)info.model_name, sizeof(info.model_name),
