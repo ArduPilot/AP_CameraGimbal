@@ -142,9 +142,12 @@ def build(args):
         flag.touch()
         if args.overlay_output:
             args.overlay_output.parent.mkdir(parents=True,exist_ok=True)
+            def root_owned(info):
+                info.uid=info.gid=0;info.uname=info.gname='root'
+                return info
             with tarfile.open(args.overlay_output,'w:gz') as archive:
-                archive.add(app,arcname='camera-app')
-                archive.add(demo,arcname='demo.sh')
+                archive.add(app,arcname='camera-app',filter=root_owned)
+                archive.add(demo,arcname='demo.sh',filter=root_owned)
             manifest={str(f.relative_to(customer)):{'sha256':sha(f.read_bytes()),'mode':f.stat().st_mode&0o777}
                 for f in [demo]+sorted(app.rglob('*')) if f.is_file()}
             args.overlay_output.with_suffix(args.overlay_output.suffix+'.json').write_text(json.dumps({

@@ -90,6 +90,14 @@ int main(int argc,char **argv) {
    try:status,page=request('/');break
    except (ConnectionError,OSError):time.sleep(.05)
   assert status==200,page
+  # A stale session must not trigger a browser Basic-auth prompt while the
+  # upgrade monitor polls either endpoint.
+  for path in ('/upgrade-status','/upgrade-result'):
+   c=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+   c.request('GET',path,headers={'Cookie':'session=expired'})
+   response=c.getresponse();assert response.status==401
+   assert response.getheader('WWW-Authenticate') is None
+   response.read();c.close()
   assert b'id=firmware-upload' in page and b'id=bundle-selected' in page,page
   csrf=re.search(rb'name=csrf value="([0-9a-f]+)"',page)[1].decode()
   payload,id=bundle()

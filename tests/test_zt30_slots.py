@@ -132,9 +132,13 @@ int main(int argc,char **argv) {
     def test_writer_lock_does_not_modify_active(self):
         self.slot(self.a)
         with (self.root/'.slot-update.lock').open('w') as lock:
+            os.fchmod(lock.fileno(),0o600)
             fcntl.flock(lock,fcntl.LOCK_EX)
-            self.call('activate',self.a,ok=False)
+            result=subprocess.run([str(self.binary),'--root',str(self.root),'activate',self.a],capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('locked',result.stderr.lower())
             self.assertFalse((self.root/'active').exists())
+        self.call('activate',self.a) # now proves validation passed and only the lock blocked
 
     def test_boot_prefix_starts_recovery_even_with_invalid_slot(self):
         run=Path(self.temp.name)/'run';run.mkdir()
@@ -159,6 +163,36 @@ int main(int argc,char **argv) {
             if events.exists() and {'recovery','web-manager'} <= set(events.read_text().splitlines()):break
             time.sleep(.02)
         self.assertEqual(set(events.read_text().splitlines()),{'recovery','web-manager'})
+
+    def test_boot_credentials_missing_empty_preserved_and_failed_copy(self):
+        fake=Path(self.temp.name)/'bin';fake.mkdir()
+        for command in ('ifconfig','sync'):
+            path=fake/command;path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
+        for name in ('start-dropbear.sh','web-supervisor.sh'):
+            path=self.root/name;path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
+        # Only exercise startup through credential publication.
+        prefix=(ROOT/'packaging/zt30/app-init.sh').read_text().split('mkdir -p /mnt')[0]
+        prefix=prefix.split('# A separate supervisor')[0]
+        script=Path(self.temp.name)/'boot.sh';script.write_text(prefix)
+        (self.root/'web.pass.default').write_text('default-secret\n')
+        env=os.environ|{'PATH':str(fake)+':'+os.environ['PATH'],
+                       'APCG_ZT30_APP_DIR':str(self.root),'APCG_ZT30_RUN_DIR':str(Path(self.temp.name)/'run')}
+        password=self.root/'web.pass'
+        for initial,expected in ((None,'default-secret\n'),('','default-secret\n'),('user-secret\n','user-secret\n')):
+            with self.subTest(initial=initial):
+                password.unlink(missing_ok=True)
+                if initial is not None:password.write_text(initial)
+                result=subprocess.run(['sh',str(script)],env=env,capture_output=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(password.read_text(),expected)
+                if initial!='user-secret\n':self.assertEqual(password.stat().st_mode&0o777,0o600)
+                self.assertFalse(list(self.root.glob('.web.pass.*')))
+        password.write_text('')
+        (fake/'cp').write_text('#!/bin/sh\nprintf partial > "$2"\nexit 1\n');(fake/'cp').chmod(0o755)
+        result=subprocess.run(['sh',str(script)],env=env,capture_output=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(password.read_bytes(),b'') # partial secret never published
+        self.assertFalse(list(self.root.glob('.web.pass.*')))
 
     def test_supervisor_recovers_after_invalid_slot_is_repaired(self):
         slot=self.slot(self.a)
@@ -274,7 +308,8 @@ int main(int argc,char **argv) {
             self.call('activate',self.b)
             until=time.monotonic()+7
             while time.monotonic()<until:
-                if 'logger b ' in events.read_text():break
+                text=events.read_text()
+                if 'logger b ' in text and 'app b ' in text:break
                 time.sleep(.02)
             lines=events.read_text().splitlines()
             self.assertIn('app a '+str(old/'encoder-sdk.so'),lines)

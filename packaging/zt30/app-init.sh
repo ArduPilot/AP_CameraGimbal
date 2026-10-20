@@ -22,9 +22,19 @@ ifconfig lo 127.0.0.1 up || echo "Loopback setup failed; web video unavailable" 
 if [ ! -e "$CAMERA_APP_CONFIG" ]; then
     cp "$app_dir/camera.ini.default" "$CAMERA_APP_CONFIG"
 fi
-if [ ! -e "$app_dir/web.pass" ]; then
-    umask 077
-    cp "$app_dir/web.pass.default" "$app_dir/web.pass"
+if [ ! -s "$app_dir/web.pass" ]; then
+    # Publish complete credentials atomically; recover an empty file left by
+    # an interrupted older installation without replacing an existing password.
+    ( umask 077
+      temporary=$(mktemp "$app_dir/.web.pass.XXXXXX")
+      trap 'rm -f "$temporary"' EXIT HUP INT TERM
+      cp "$app_dir/web.pass.default" "$temporary"
+      [ -s "$temporary" ]
+      chmod 0600 "$temporary"
+      sync
+      mv -f "$temporary" "$app_dir/web.pass"
+      sync
+    )
 fi
 # A separate supervisor keeps the web listener recoverable while the camera
 # supervisor is waiting on its foreground app/logger pipeline.
