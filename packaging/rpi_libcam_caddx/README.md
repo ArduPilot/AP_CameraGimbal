@@ -110,19 +110,28 @@ Flight Controller page, add a UDP output to `127.0.0.1:14570` so mavlink-router
 forwards traffic between the flight controller, the GCS and the camera.
 
 Behind mavlink-router the camera cannot tell which network the GCS is on, so
-the RTSP address it advertises in `VIDEO_STREAM_INFORMATION` is a guess: an
-address on 192.168.144.0/24 if the Pi has one (the usual SIYI/MT11 camera
-subnet), otherwise the numerically lowest non-loopback IPv4 address. When the
-Pi has more than one network, for example Ethernet to the flight controller
-and WiFi to the GCS, set the address the GCS can reach with a drop-in:
+by default the RTSP address it advertises in `VIDEO_STREAM_INFORMATION` is a
+guess: an address on 192.168.144.0/24 if the Pi has one (the usual SIYI/MT11
+camera subnet), otherwise the numerically lowest non-loopback IPv4 address.
+When the Pi has more than one network, for example Ethernet to the flight
+controller and WiFi to the GCS, set the URI the GCS can reach in the web
+interface under Parameters → Network → Video stream 1 URI (`[network]
+video1_uri` in `camera.ini`), a complete `rtsp://` or `rtsps://` URI such as
+`rtsp://10.0.0.5:8554/video1`. It is sent to the GCS as is, so it can also set a
+different port, a host name or an extra path; a blank value goes back to the
+guess. The camera does not check that it serves the path you give: to serve an
+extra path, set `alias` under `[stream.main]` as well. Credentials are not
+allowed in the URI. It applies without restarting the camera app, but a GCS
+that has already read the stream information may need to reconnect.
 
-```sh
-sudo mkdir -p /etc/systemd/system/ap-cameragimbal.service.d
-printf '[Service]\nEnvironment=CAMERA_APP_VIDEO_ADDRESS=10.0.2.100\n' |
-    sudo tee /etc/systemd/system/ap-cameragimbal.service.d/video-address.conf
-sudo systemctl daemon-reload
-sudo systemctl restart ap-cameragimbal
-```
+If the flight controller runs ArduPilot with a MAVLink camera (`CAM1_TYPE` 6),
+it keeps its own copy of the camera's stream information and serves that to
+the GCS alongside the camera's reply. In testing, with ArduPilot 4.8.0 it kept
+serving the old URI after the setting was changed, so the GCS showed the old
+address until the flight controller was rebooted.
+
+`CAMERA_APP_VIDEO_ADDRESS` is no longer used. Move any address to the video stream 1 URI
+setting and delete its `video-address.conf` systemd drop-in.
 
 ## Gimbal
 
@@ -165,5 +174,4 @@ set `MNT1_TYPE = 0` so only the camera reports the gimbal.
 
 - `CAMERA_APP_RPI_CAMERA`: libcamera camera ID (default: first camera).
 - `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
-- `CAMERA_APP_VIDEO_ADDRESS`: IPv4 address advertised in RTSP URIs.
 - `CAMERA_APP_UART`: gimbal link, a serial device or `udp://IPv4:PORT`.
