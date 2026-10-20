@@ -6,7 +6,24 @@ vendor SDK, kernel, bootloader and gimbal MCU firmware are outside the bundle.
 They require the stable AP launchers and a safe slots directory, at launcher
 version 1. Staging remains available when the active selection is damaged.
 
-Build against the captured runtime, which must match the receiving camera:
+Build the release bundle and its instructions/checksums with:
+
+```
+make release RELEASE_TARGETS=ZT30
+```
+
+The package is written to `release/<version>/SIYI_ZT30/`. The default build
+checks the pinned runtime in `packaging/zt30/platform` and builds the native
+camera application, web server and SDK adapter before creating the bundle.
+`make zt30_package` builds just the bundle under `build/`; `ZT30_PACKAGE_OUT`
+overrides its path. This is a web application update, and requires the stable
+AP launchers described below to be installed already.
+
+For a different retained runtime, set `ZT30_RUNTIME_ROOT` to a captured root
+containing `/config/lib` and `/lib`, with a `SHA256SUMS` manifest at its root.
+`ZT30_SDK_LIBDIR` defaults to that root's `/config/lib`. The retained libraries
+must match the receiving camera. The bundle builder can also be run directly
+after compiling the three native binaries:
 
 ```
 python3 tools/build_zt30_app_bundle.py --runtime-root /path/to/captured/root \

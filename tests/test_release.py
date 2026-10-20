@@ -58,7 +58,8 @@ if Path('fail').exists():
             self.assertIn('v1.0.1', (folder / 'README.md').read_text())
 
     def test_make_selects_highest_reachable_version(self):
-        for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk', 'tools/build.mk'):
+        for name in ('Makefile', 'web/Makefile', 'include/apcam/targets.mk',
+                     'tools/build.mk', 'tools/zt30_stream.mk'):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / name, destination)
@@ -87,12 +88,24 @@ if Path('fail').exists():
         self.git('checkout', '--detach', self.revision)
         check('v1.1')
 
+    def test_make_default_release_targets(self):
+        for name in ('Makefile', 'tools/build.mk', 'tools/zt30_stream.mk'):
+            destination = self.repo / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / name, destination)
+        output = subprocess.check_output(
+            ['make', '--no-print-directory', '-s', '-f', 'Makefile', '-f', '-', 'print-targets'],
+            input=".PHONY: print-targets\nprint-targets:\n\t@echo '$(RELEASE_TARGETS)'\n",
+            cwd=self.repo, text=True)
+        self.assertEqual(set(output.split()), set(release.TARGETS))
+
     def test_layout_and_checksums(self):
         self.build(list(release.TARGETS))
         expected = {
             'SIYI_A8': 'SIYI_4K_MINI_UpgradeSD.bin',
             'SIYI_MT11': f'MT11_FW_ArduPilot_v1.0_{self.revision[:6]}.bin',
             'SIYI_ZR10': 'ZR10_UpgradeSD.bin',
+            'SIYI_ZT30': f'ZT30_AP_v1.0_{self.revision[:6]}.apbundle',
             'XFRobot_Z1-Mini': f'Z1Mini_AP_native_v1.0_{self.revision[:6]}.gcu',
         }
         for name, firmware in expected.items():
@@ -130,6 +143,7 @@ if Path('fail').exists():
     def test_target_aliases_and_version_validation(self):
         self.assertEqual(release.target_name('a8'), 'A8')
         self.assertEqual(release.target_name('z1mini'), 'Z1-Mini')
+        self.assertEqual(release.target_name('zt30'), 'ZT30')
         with self.assertRaises(argparse.ArgumentTypeError):
             release.target_name('unknown')
         for version in ('post-refactor', 'v1', 'v1.0.', 'v1.0.1.2', 'v1.0.1-rc1', '1.0.1'):

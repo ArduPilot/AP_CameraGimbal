@@ -9,6 +9,7 @@ The following hardware is currently supported:
  - SIYI MT11
  - SIYI A8-mini
  - SIYI ZR10
+ - SIYI ZT30 (application updates for cameras with the AP launchers installed)
  - XFRobot Z1-Mini
  - Raspberry Pi CM4 with an IMX477 CSI camera and CADDX gimbal (see [`packaging/rpi_libcam_caddx/README.md`](packaging/rpi_libcam_caddx/README.md))
 
@@ -118,8 +119,16 @@ Output defaults to short progress messages such as `Compiling main.cpp` and
 The output is `release/<version>/`, where `<version>` is the latest reachable
 `vX.y` or `vX.y.z` tag (for example, `v1.0.1`). Checkpoint tags such as
 `post-refactor` are ignored.
-Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10` and
+Camera folders include the vendor: `SIYI_A8`, `SIYI_MT11`, `SIYI_ZR10`, `SIYI_ZT30` and
 `XFRobot_Z1-Mini` (for example, `release/v1.0/SIYI_A8/`).
+
+ZT30 releases contain `ZT30_AP_<version>_<revision>.apbundle` for the web
+upgrader on cameras with the stable AP launchers installed. Build only that
+bundle with `make release RELEASE_TARGETS=ZT30`. The required retained runtime
+libraries are pinned under `packaging/zt30/platform`; they are checked during
+the build and on the receiving camera, and are not included in the update.
+See [`packaging/zt30/APP_BUNDLE.md`](packaging/zt30/APP_BUNDLE.md) for installation
+requirements and recovery behavior.
 
 ## Adding camera support
 

@@ -29,6 +29,7 @@ class BuildDependenciesTest(unittest.TestCase):
         tools = self.repo / 'tools'
         tools.mkdir()
         shutil.copyfile(ROOT / 'tools/build.mk', tools / 'build.mk')
+        shutil.copyfile(ROOT / 'tools/zt30_stream.mk', tools / 'zt30_stream.mk')
         bootstrap = tools / 'bootstrap_dependencies.sh'
         bootstrap.write_text('''#!/bin/sh
 set -eu
