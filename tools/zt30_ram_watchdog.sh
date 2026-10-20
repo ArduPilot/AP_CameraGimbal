@@ -85,7 +85,8 @@ live() { case "$(state "$1")" in ''|Z|X) return 1;; *) return 0;; esac; }
 [ "$(state "$restore_pid")" != T ] || exit 2
 # Refuse to guess resource limits. Restart inherits these exact matching limits.
 cat "/proc/$vendor_pid/limits" > "$session/vendor.limits"
-cmp -s "$session/vendor.limits" "/proc/$$/limits" || { echo 'vendor/watchdog limits differ; qualify launcher first' >&2; exit 2; }
+cat "/proc/$$/limits" > "$session/watchdog.limits"
+cmp -s "$session/vendor.limits" "$session/watchdog.limits" || { echo 'vendor/watchdog limits differ; qualify launcher first' >&2; exit 2; }
 ( set -C; echo "$$" > "$session/watchdog.pid" )
 cat "/proc/$vendor_pid/environ" > "$session/vendor.environ"
 [ "$(wc -c < "$session/vendor.environ")" -lt 16384 ] || exit 2

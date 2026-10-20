@@ -746,8 +746,9 @@ zt30_ioctl_payload_trace-test:
 
 .PHONY: zt30_media_abi-test
 zt30_media_abi-test:
-	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_media_abi.cpp -o /tmp/apcg-test-zt30-media-abi
-	/tmp/apcg-test-zt30-media-abi
+	@mkdir -p build/tests
+	$(CXX) -std=c++11 -O2 -Wall -Wextra -Werror tests/test_zt30_media_abi.cpp -o build/tests/zt30-media-abi-test
+	build/tests/zt30-media-abi-test
 
 .PHONY: zt30_rgb_probe zt30_rgb_owner-test
 zt30_rgb_probe: build/zt30/rgb-probe build/zt30/rgb-sdk.so
@@ -811,13 +812,13 @@ zt30_media_backend-test:
 # CI can compile/link without the private libraries loaded only at runtime.
 .PHONY: zt30_ram_camera zt30_ram_camera_build
 zt30_ram_camera: build/zt30/encoder-sdk.so zt30_ram_camera_build
-zt30_ram_camera_build:
+zt30_ram_camera_build: generated
 	$(MAKE) -C camera_app CAMERA_BACKEND=zt30 ZT30_RAM_BUILD=1 CROSS_COMPILE=$(ZT30_CROSS_COMPILE) all
 
 # Development application: continuous RGB, normal frontends, no flash installer.
 .PHONY: zt30_dev_camera zt30_dev_camera_build
 zt30_dev_camera: build/zt30/encoder-sdk.so zt30_dev_camera_build
-zt30_dev_camera_build:
+zt30_dev_camera_build: generated
 	$(MAKE) -C camera_app CAMERA_BACKEND=zt30 ZT30_DEV_BUILD=1 CROSS_COMPILE=$(ZT30_CROSS_COMPILE) all
 
 .PHONY: zt30_ram_frontend-test
@@ -934,10 +935,17 @@ zt30_dev_package: zt30_dev_camera build/zt30/zt30-slot
 	python3 tools/build_zt30_dev_package.py build --customer-root '$(ZT30_CUSTOMER_ROOT)' --camera-app camera_app/build/zt30-dev/camera-app --web-app web/zt30-web --sdk build/zt30/encoder-sdk.so --dropbear '$(ZT30_DEV_TOOLS)/dropbear' --dropbearkey '$(ZT30_DEV_TOOLS)/dropbearkey' --output '$(ZT30_DEV_PACKAGE_OUT)'
 
 .PHONY: zt30_native_control-test
-zt30_native_control-test:
+zt30_native_control-test: generated
 	mkdir -p build/tests
 	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build tests/test_zt30_native_control.cpp camera_app/src/protocol/siyi.cpp camera_app/src/protocol/private_uart.cpp -lutil -Wl,--wrap=write -o build/tests/zt30-native-control-test
 	build/tests/zt30-native-control-test
+
+# Compile the native protocol policy without the hardware media factory.
+.PHONY: zt30_camera_information-test
+zt30_camera_information-test: generated
+	mkdir -p build/tests
+	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build/mavlink/all/include -ffunction-sections -fdata-sections -Wl,--gc-sections tests/test_zt30_camera_information.cpp camera_app/src/protocol/mavlink.cpp camera_app/src/config.cpp -lm -o build/tests/zt30-camera-information-test
+	build/tests/zt30-camera-information-test
 
 .PHONY: zt30_input_mapping-test
 zt30_input_mapping-test:
@@ -971,7 +979,7 @@ zt30_bundle-test:
 	python3 tests/test_zt30_bundle.py
 
 .PHONY: zt30_update-test
-zt30_update-test:
+zt30_update-test: generated
 	python3 tests/test_zt30_update.py
 	python3 tests/test_zt30_services.py
 	python3 tests/test_live_video_probe.py

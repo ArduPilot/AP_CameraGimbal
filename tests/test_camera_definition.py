@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class Definitions(unittest.TestCase):
     def test_recording_resolution_only_where_it_can_be_chosen(self):
         """A target that records the stream it serves has no recording resolution setting."""
-        for target in ('mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'):
+        for target in ('mt11', 'a8', 'zr10', 'zt30', 'z1mini', 'rpi_libcam_caddx'):
             with self.subTest(target=target):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name') for p in root.findall('parameters/parameter')}
@@ -25,7 +25,7 @@ class Definitions(unittest.TestCase):
 
     def test_single_stream_target_has_no_sub_stream_settings(self):
         """A target with one stream does not list settings for a second one."""
-        for target in ('mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx'):
+        for target in ('mt11', 'a8', 'zr10', 'zt30', 'z1mini', 'rpi_libcam_caddx'):
             with self.subTest(target=target):
                 root = ET.parse(ROOT / 'build/camera-definitions' / (target + '.xml')).getroot()
                 params = {p.get('name') for p in root.findall('parameters/parameter')}
@@ -57,9 +57,9 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('CAM_LENS' in params, target in ('mt11', 'zt30'))
                 self.assertEqual('CAM_AUTOFOCUS' in params, target in ('mt11', 'zt30'))
                 self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8', 'zt30'))
-                self.assertEqual('CAM_OPT_ZOOM' in params, target == 'mt11')
-                if target == 'mt11':
-                    self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2)
+                self.assertEqual('CAM_OPT_ZOOM' in params, target in ('mt11', 'zt30'))
+                if target in ('mt11','zt30'):
+                    self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2 if target=='mt11' else 30)
                     self.assertEqual(params['CAM_OPT_ZOOM'].get('step'), '0.1')
                     lens_options = params['CAM_LENS'].findall('options/option')
                     self.assertEqual([o.findtext('exclusions/exclude') for o in lens_options],
@@ -74,9 +74,12 @@ class Definitions(unittest.TestCase):
                 if target == 'z1mini':
                     self.assertEqual({o.get('value') for o in params['REC_RESOLUTION'].findall('options/option')}, {'1', '2'})
                 if target == 'zt30':
-                    self.assertEqual(params['CAM_LENS'].get('default'), '1')
-                    self.assertIsNone(params['CAM_LENS'].findall('options/option')[1].find('exclusions'))
-                    self.assertEqual(params['CAM_SOURCE'].findall('options/option')[1].findtext('exclusions/exclude'), 'CAM_ZOOM')
+                    self.assertEqual(params['CAM_LENS'].get('default'), '0')
+                    # The inactive RGB lens remains configurable even when
+                    # thermal is primary; CAM_LENS selects its zoom control.
+                    self.assertIsNone(params['CAM_SOURCE'].findall('options/option')[1].find('exclusions'))
+                    self.assertEqual([u.text for u in params['CAM_SOURCE'].findall('updates/update')],
+                                     ['CAM_LENS','CAM_ZOOM','CAM_OPT_ZOOM'])
                 for name, p in params.items():
                     boolean = name in {'OSD_CROSS', 'OSD_RECORD', 'OSD_THERMAL_FOV',
                                        'LOG_DISARMED', 'MAV_POS_TARGET'}

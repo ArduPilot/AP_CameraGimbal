@@ -10,6 +10,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from sitl.target_properties import TARGETS, transform
+from windows.test_package import check_video_size
 
 assert set(TARGETS) == {'mt11', 'a8', 'zr10', 'z1mini', 'rpi_libcam_caddx', 'zt30'}
 recording_defaults = {
@@ -65,3 +66,17 @@ with tempfile.TemporaryDirectory(prefix='apcam-target-test-') as temp:
                     recovered = transform(target, channel, inverted, converted, rates=rates, inverse=True)
                     assert list(vector) == recovered
 print('PASS six-target compiler exports, profile defaults, orthogonal mappings and known calibration vectors')
+
+# The Windows packaged self-test must accept each native thermal geometry
+# for both live video and recordings, and reject the other camera's size.
+for name,target in TARGETS.items():
+    check_video_size(target,False,1280,720)
+    if target['have_thermal']:
+        check_video_size(target,True,target['thermal_stream_width'],target['thermal_stream_height'])
+        wrong=(1280,720) if name=='zt30' else (640,512)
+        try:
+            check_video_size(target,True,*wrong)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError((name,'accepted wrong thermal stream geometry',wrong))

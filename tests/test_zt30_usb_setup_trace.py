@@ -9,10 +9,11 @@ class Setup(unittest.TestCase):
    # Constructor requires canonical /tmp prefix, not a nested directory.
    canonical=Path('/tmp')/p.name;p.rename(canonical);p=canonical
    try:
+    host_fs=subprocess.check_output(['stat','-f','-c','%t',str(p)],text=True).strip()
     probe=p/'probe';obs=p/'observer.so';real=p/'real.so'
     subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror',str(ROOT/'tests/zt30_usb_setup_fixture.c'),'-lpthread','-o',str(probe)],check=True)
     subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared',str(ROOT/'tests/zt30_usb_setup_mock.c'),'-o',str(real)],check=True)
-    subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared','-fstack-usage','-DZT30_IOCTL_VENDOR_EXE="'+str(probe)+'"','-DZT30_USB_DEVICE="/dev/null"',str(ROOT/'tools/zt30_usb_setup_trace.c'),'-ldl','-lpthread','-o',str(obs)],check=True)
+    subprocess.run(['cc','-O2','-Wall','-Wextra','-Werror','-fPIC','-shared','-fstack-usage','-DTMPFS_MAGIC=0x'+host_fs,'-DZT30_IOCTL_VENDOR_EXE="'+str(probe)+'"','-DZT30_USB_DEVICE="/dev/null"',str(ROOT/'tools/zt30_usb_setup_trace.c'),'-ldl','-lpthread','-o',str(obs)],check=True)
     result=subprocess.run([str(probe),mode],env=dict(os.environ,LD_PRELOAD=str(obs)+':'+str(real),APCG_USB_SETUP_TRACE=str(p/'usb_setup.bin')),capture_output=True,text=True,timeout=8)
     return result,(p/'usb-setup.bin').read_bytes(),(p/'usb_setup.bin').read_bytes(),(p/'usb_setup-counts.bin').read_bytes()
    finally:shutil.rmtree(p)
