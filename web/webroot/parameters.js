@@ -55,6 +55,12 @@
     const parts = text.split('.');
     return parts.length === 4 && parts.every(p => /^(0|[1-9][0-9]{0,2})$/.test(p) && Number(p) <= 255);
   };
+  // Keep in step with apcam_video_uri_valid() in include/apcam/network.h.
+  const videoUri = text => {
+    const m = /^rtsps?:\/\/[a-zA-Z0-9._-]+(?::([0-9]{1,5}))?(?:\/.*)?$/.exec(text);
+    return Boolean(m) && text.length < 160 && !/[^\x21-\x7e]|"/.test(text) &&
+      (!m[1] || (Number(m[1]) >= 1 && Number(m[1]) <= 65535));
+  };
   const number = text => text.split('.').reduce((v, n) => ((v << 8) | Number(n)) >>> 0, 0);
   const host = text => ipv4(text) && Number(text.split('.')[0]) > 0 && Number(text.split('.')[0]) !== 127 && Number(text.split('.')[0]) < 224;
   function invalid(field, message) {
@@ -71,6 +77,7 @@
     for (const name of ['proxy_host', 'network_interface', 'main_alias', 'sub_alias']) {
       if (!/^[a-zA-Z0-9_.-]*$/.test(value(name))) invalid(get(name));
     }
+    if (value('network_video1_uri') && !videoUri(value('network_video1_uri'))) invalid(get('network_video1_uri'));
     const parseAddress = text => {
       const parts = text.split('/');
       if (parts.length !== 2 || !host(parts[0]) || !/^([1-9]|[12][0-9]|3[0-2])$/.test(parts[1])) return null;
