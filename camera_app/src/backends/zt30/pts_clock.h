@@ -24,11 +24,16 @@ public:
         }
         if (pts <= last_pts || middle_us <= last_us) return fail();
         uint64_t mapped=0;
-        if (!translate(pts,mapped)) return fail();
+        if (!translate(pts,origin_pts,origin_us,mapped)) return fail();
         // 5ms fixed budget plus 1000ppm drift since the initial sample.
         const uint64_t tolerance=5000+(middle_us-origin_us)/1000;
         const uint64_t error=mapped>middle_us?mapped-middle_us:middle_us-mapped;
         if (error>tolerance) return fail();
+        // Also reject a sudden step after long uptime, when the cumulative
+        // drift budget alone would conceal it.
+        if (!translate(pts,last_pts,last_us,mapped)) return fail();
+        const uint64_t recent_error=mapped>middle_us?mapped-middle_us:middle_us-mapped;
+        if (recent_error>5000+(middle_us-last_us)/1000) return fail();
         last_pts=pts;last_us=middle_us;
         return true;
     }
@@ -36,7 +41,7 @@ public:
         mapped_us=0;
         uint64_t mapped=0;
         if (failed || !initialized || (have_frame && pts<=last_frame_pts) ||
-            !translate(pts,mapped)) return fail();
+            !translate(pts,last_pts,last_us,mapped)) return fail();
         if ((mapped>receipt_us && mapped-receipt_us>2000) ||
             (mapped<=receipt_us && receipt_us-mapped>500000)) return fail();
         if (have_frame && mapped<=last_frame_us) return fail();
@@ -46,15 +51,18 @@ public:
     }
     bool healthy() const { return initialized && !failed; }
 private:
-    bool translate(uint64_t pts,uint64_t &result) const {
-        if (pts>=origin_pts) {
-            const uint64_t delta=pts-origin_pts;
-            if (delta>std::numeric_limits<uint64_t>::max()-origin_us) return false;
-            result=origin_us+delta;
+    // Frame mapping uses the latest qualified observation so allowed clock
+    // drift cannot accumulate into a false future/stale-frame failure. Keep
+    // the initial observation separately to validate the total clock drift.
+    static bool translate(uint64_t pts,uint64_t anchor_pts,uint64_t anchor_us,uint64_t &result) {
+        if (pts>=anchor_pts) {
+            const uint64_t delta=pts-anchor_pts;
+            if (delta>std::numeric_limits<uint64_t>::max()-anchor_us) return false;
+            result=anchor_us+delta;
         } else {
-            const uint64_t delta=origin_pts-pts;
-            if (delta>origin_us) return false;
-            result=origin_us-delta;
+            const uint64_t delta=anchor_pts-pts;
+            if (delta>anchor_us) return false;
+            result=anchor_us-delta;
         }
         return true;
     }
