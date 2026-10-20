@@ -51,10 +51,10 @@ def run(binary):
                 fc = connect(f'tcp:127.0.0.1:{cp}')
                 fc.mav.srcSystem, fc.mav.srcComponent = 42, 1
 
-                def owner():
+                def owner(ours=True):
                     fc.mav.heartbeat_send(M.MAV_TYPE_FIXED_WING, M.MAV_AUTOPILOT_ARDUPILOTMEGA,
                                           M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 10, M.MAV_STATE_ACTIVE)
-                    fc.mav.gimbal_manager_status_send(1000, 0, 154, 42, 154, 0, 0)
+                    fc.mav.gimbal_manager_status_send(1000, 0, 154, 42, 154 if ours else 1, 0, 0)
                     while fc.recv_match(blocking=False):
                         pass
 
@@ -63,11 +63,11 @@ def run(binary):
                     ack = receive(link, 'COMMAND_ACK', lambda m: m.command == command_id)
                     assert ack.result == expected, ack
 
-                def state(predicate):
+                def state(predicate, owned=True):
                     deadline = time.monotonic()+3
                     last = None
                     while time.monotonic() < deadline:
-                        owner()
+                        owner(owned)
                         if status_path.exists():
                             last = json.loads(status_path.read_text())
                             if predicate(last):
@@ -105,6 +105,65 @@ def run(binary):
                                   s['state'] == expected)
                     assert after['captured'] == 0
                     assert attitude() == before, 'external command moved the gimbal in Survey mode'
+
+                def rates(moving):
+                    deadline = time.monotonic()+2
+                    while time.monotonic() < deadline:
+                        with socket.create_connection(('127.0.0.1', sp), 2) as sock:
+                            feedback = struct.unpack('<6h', siyi_request(sock, 25, 0x0d)[:12])
+                        if any(feedback[3:]) == moving:
+                            return
+                        time.sleep(.02)
+                    raise AssertionError(('gimbal should be moving' if moving else 'latched external rate survived ownership grant', feedback))
+
+                def external_rate():
+                    fc.mav.gimbal_device_set_attitude_send(42, 154, 0,
+                        [math.nan]*4, math.nan, .2, .3)
+                    rates(True)
+
+                # Direct FC rates do not belong to the camera's ROI controller.
+                # A grant must still stop them before telemetry/terrain permit
+                # survey steering, even though subsequent external stops reject.
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 2])
+                state(lambda s: s['state'] == 'waiting for gimbal ownership', owned=False)
+                external_rate()
+                state(lambda s: s['state'] == 'waiting for fresh terrain and telemetry')
+                rates(False)
+                before = attitude();time.sleep(.2)
+                assert attitude() == before, 'gimbal drifted after the survey ownership grant'
+                # Entering Survey from Photo must discard a direct rate too.
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 0])
+                external_rate()
+                command(M.MAV_CMD_SET_CAMERA_MODE, [0, 2])
+                state(lambda s: s['state'] == 'waiting for gimbal ownership', owned=False)
+                rates(False)
+
+                # Manual pointing paths pause a waiting survey. A delayed
+                # manager grant must not silently restart it afterwards.
+                for source in ('SIYI','UniGCS','web PTZ','ROI LOCATION'):
+                    command(M.MAV_CMD_SET_CAMERA_MODE, [0, 0])
+                    command(M.MAV_CMD_SET_CAMERA_MODE, [0, 2])
+                    state(lambda s: s['state'] == 'waiting for gimbal ownership', owned=False)
+                    if source == 'SIYI':
+                        with socket.create_connection(('127.0.0.1', sp), 2) as sock:
+                            siyi_request(sock, 26, 0x0e, struct.pack('<hh', 100, 100))
+                    elif source == 'UniGCS':
+                        client = Client(up)
+                        client.sock.sendall(unigcs_command(0x9a, b'\x0a\x00', dest=0x2e, link=0x11))
+                    elif source == 'web PTZ':
+                        token = lease(1)
+                        assert token[-1] == 0
+                        assert lease(3, token[2])[-1] == 0
+                    else:
+                        link.mav.command_int_send(42, 154, M.MAV_FRAME_GLOBAL,
+                            M.MAV_CMD_DO_SET_ROI_LOCATION, 0, 0, 0, 0, 0, 0, -352826408, 1490052529, 600)
+                        ack = receive(link, 'COMMAND_ACK', lambda m: m.command == M.MAV_CMD_DO_SET_ROI_LOCATION)
+                        assert ack.result == M.MAV_RESULT_ACCEPTED, ack
+                    state(lambda s: s['state'].startswith('survey paused:'), owned=False)
+                    owner();time.sleep(.6)
+                    state(lambda s: s['state'].startswith('survey paused:'))
+                if client:
+                    client.sock.close();client = None
 
                 start()
                 before = attitude()
@@ -214,7 +273,7 @@ def run(binary):
                 after = state(lambda s: s['state'] == before['state'])
                 assert after['captured'] == before['captured']
                 assert not Path(str(cfg)+'.survey.json').exists()
-                print('PASS survey ignores FC/GCS attitude, ROI and SIYI/UniGCS pointing while it holds the gimbal, follows pointing once paused or denied, reports a refused claim, Photo/Video restore control')
+                print('PASS survey stops latched FC rates on entry/grant, pauses waiting claims on manual pointing, ignores external pointing while owned, follows takeover, reports refused claims and restores Photo/Video control')
             except BaseException:
                 log.flush()
                 log.seek(0)
