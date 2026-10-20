@@ -80,6 +80,9 @@ static void survey_clear_external(ca_mavlink_server *s)
 {
     ca_media_tracking_stop(s->media);
     s->target_location_active=false; stop_tracking_rate(s);
+    // Direct MAVLink rates bypass the ROI controller's tracking_rate_active
+    // flag. Cancel those latched rates before survey ownership blocks stops.
+    (void)ca_backend_set_gimbal_rates(s->backend,0,0);
 }
 
 static uint8_t set_camera_mode(ca_mavlink_server *s, unsigned mode)
