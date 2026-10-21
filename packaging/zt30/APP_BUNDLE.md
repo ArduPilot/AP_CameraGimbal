@@ -131,3 +131,12 @@ retrying or assuming rollback. Initial SD-card flash packaging is separate.
 These are unsigned bundles: SHA256 detects corruption, not malicious
 substitution. Install only trusted builds through authenticated SSH or the later
 CSRF-protected web upload. No package-controlled installer commands run.
+
+Trial journals keep the original strict `trial.json` schema so the stable launcher
+and older web payloads can read them. The older manual restore selection is saved
+in a private `trial.rollback.v1.<sha256>` sidecar with schema
+`apcg.zt30.rollback.v1`. Its name binds it to the journal's previous slot,
+candidate slot, boot ID and deadline (joined by newlines). The sidecar is synced
+before publishing that journal epoch; old epochs remain available across an
+interrupted publication. Older inline rollback fields are accepted and migrated
+when a new helper writes the journal.

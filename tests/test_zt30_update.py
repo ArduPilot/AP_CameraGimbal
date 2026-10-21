@@ -70,7 +70,14 @@ int rename(const char *a,const char *b){
         p=subprocess.run([str(self.runner),str(self.root),str(self.runtime),str(self.bundle()),mode],capture_output=True,text=True,timeout=5,env=env)
         self.assertEqual(p.returncode,code,p.stdout+p.stderr);self.assert_preserved();return p.stdout
     def trial(self):return json.loads((self.root/'trial.json').read_bytes())
+    def rollback_path(self,t):
+        identity='\n'.join(str(t[key]) for key in ('previous','candidate','boot','deadline'))
+        return self.root/('trial.rollback.v1.'+sha(identity.encode()))
     def write_trial(self,t):
+        # Simulate the production writer when injecting a boot/deadline change.
+        old=self.rollback_path(self.trial())
+        if old.exists():
+            extension=self.rollback_path(t);extension.write_bytes(old.read_bytes());extension.chmod(0o600)
         (self.root/'trial.json').write_bytes(canonical(t));(self.root/'trial.json').chmod(0o600)
     def test_update_pending_until_both_real_services_are_verified(self):
         self.update();t=self.trial();self.assertEqual(t['state'],'ready')
@@ -134,6 +141,23 @@ int rename(const char *a,const char *b){
         self.call('maintain')
         self.active_old();self.assertEqual(os.readlink(self.root/'previous'),'slots/'+'e'*64)
         self.assertEqual(self.trial()['state'],'rolled-back')
+    def test_journal_remains_readable_by_strict_legacy_helpers(self):
+        self.update()
+        trial=self.trial()
+        self.assertEqual(set(trial),{'previous','candidate','boot','deadline','attempts','state'})
+        extension=self.rollback_path(trial)
+        self.assertEqual(json.loads(extension.read_bytes()),{'schema':'apcg.zt30.rollback.v1','previous':''})
+        self.assertEqual(extension.stat().st_mode&0o777,0o600)
+        # An interrupted writer may leave metadata for the next epoch. The
+        # current journal must retain its own rollback selection.
+        next_trial=trial|{'deadline':trial['deadline']+1}
+        self.rollback_path(next_trial).write_bytes(canonical({'schema':'apcg.zt30.rollback.v1','previous':'e'*64}))
+        trial['deadline']=1;self.write_trial(trial);self.call('maintain')
+        self.assertFalse((self.root/'previous').is_symlink())
+    def test_unknown_rollback_metadata_version_is_rejected(self):
+        self.update()
+        self.rollback_path(self.trial()).write_bytes(canonical({'schema':'apcg.zt30.rollback.v2','previous':''}))
+        self.call('maintain',ok=False)
     def test_malformed_trial_fails_closed(self):
         (self.root/'trial.json').write_bytes(b'{"state":"ready"}')
         self.update(code=1);self.active_old();self.call('maintain',ok=False)

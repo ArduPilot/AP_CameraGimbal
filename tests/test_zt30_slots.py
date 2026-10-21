@@ -169,10 +169,9 @@ int main(int argc,char **argv) {
         for command in ('ifconfig','sync'):
             path=fake/command;path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
         for name in ('start-dropbear.sh','web-supervisor.sh'):
-            path=self.root/name;path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
-        # Only exercise startup through credential publication.
+            path=self.root/name;path.write_text('#!/bin/sh\necho started > \"$APCG_ZT30_RUN_DIR/'+name+'.started\"\n');path.chmod(0o755)
+        # Exercise credential publication and recovery supervisor startup.
         prefix=(ROOT/'packaging/zt30/app-init.sh').read_text().split('mkdir -p /mnt')[0]
-        prefix=prefix.split('# A separate supervisor')[0]
         script=Path(self.temp.name)/'boot.sh';script.write_text(prefix)
         (self.root/'web.pass.default').write_text('default-secret\n')
         env=os.environ|{'PATH':str(fake)+':'+os.environ['PATH'],
@@ -187,12 +186,56 @@ int main(int argc,char **argv) {
                 self.assertEqual(password.read_text(),expected)
                 if initial!='user-secret\n':self.assertEqual(password.stat().st_mode&0o777,0o600)
                 self.assertFalse(list(self.root.glob('.web.pass.*')))
+        marker=Path(env['APCG_ZT30_RUN_DIR'])/'web-supervisor.sh.started'
+        marker.unlink(missing_ok=True)
         password.write_text('')
         (fake/'cp').write_text('#!/bin/sh\nprintf partial > "$2"\nexit 1\n');(fake/'cp').chmod(0o755)
         result=subprocess.run(['sh',str(script)],env=env,capture_output=True)
-        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(b'Cannot seed web credentials',result.stderr)
+        until=time.monotonic()+2
+        while time.monotonic()<until and not marker.exists():time.sleep(.02)
+        self.assertTrue(marker.exists())
         self.assertEqual(password.read_bytes(),b'') # partial secret never published
         self.assertFalse(list(self.root.glob('.web.pass.*')))
+
+    def test_stale_dropbear_key_temporary_does_not_block_recovery(self):
+        (self.root/'auth/dropbear_ed25519_host_key.new').write_text('partial key')
+        keygen=self.root/'dropbearkey'
+        keygen.write_text('#!/bin/sh\n[ ! -e "$4" ] || exit 1\nprintf complete-key > "$4"\n')
+        keygen.chmod(0o755)
+        daemon=self.root/'dropbear'
+        daemon.write_text('#!/bin/sh\nprintf started\n');daemon.chmod(0o755)
+        env=os.environ|{'APCG_ZT30_APP_DIR':str(self.root)}
+        command=['sh',str(ROOT/'packaging/zt30/start-dropbear.sh')]
+        result=subprocess.run(command,env=env,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout,'started')
+        key=self.root/'auth/dropbear_ed25519_host_key'
+        self.assertEqual(key.read_text(),'complete-key');self.assertEqual(key.stat().st_mode&0o777,0o600)
+        self.assertEqual(key.parent.stat().st_mode&0o777,0o700)
+        key.write_text('existing-key')
+        subprocess.run(command,env=env,check=True,capture_output=True)
+        self.assertEqual(key.read_text(),'existing-key')
+
+    def test_recovery_web_starts_despite_malformed_trial(self):
+        slot=self.slot(self.a);shutil.copy2(self.listener,slot/'zt30-web')
+        shutil.copy2(self.binary,self.root/'zt30-slot');self.call('activate',self.a)
+        (self.root/'trial.json').write_text('{"state":"ready"}')
+        run=Path(self.temp.name)/'run';run.mkdir();events=Path(self.temp.name)/'events'
+        env=os.environ|{'APCG_ZT30_APP_DIR':str(self.root),'APCG_ZT30_RUN_DIR':str(run),
+                        'APCG_ZT30_WEB_PORT':str(self.web_port),'SLOT_EVENTS':str(events)}
+        with (run/'test.log').open('w') as log:
+            proc=subprocess.Popen(['sh',str(ROOT/'packaging/zt30/web-supervisor.sh')],env=env,
+                                  stdout=log,stderr=log,start_new_session=True)
+            try:
+                until=time.monotonic()+5
+                while time.monotonic()<until and not events.exists():time.sleep(.02)
+                self.assertTrue(events.exists(),(run/'test.log').read_text())
+                self.assertIn(str(slot/'webroot'),events.read_text())
+                self.assertIn('recovery web',(run/'test.log').read_text())
+            finally:
+                os.killpg(proc.pid,15);proc.wait(timeout=5)
 
     def test_supervisor_recovers_after_invalid_slot_is_repaired(self):
         slot=self.slot(self.a)
@@ -218,7 +261,7 @@ int main(int argc,char **argv) {
                 self.call('activate',self.a)
                 until=time.monotonic()+8
                 while time.monotonic()<until:
-                    if events.exists() and 'logger' in events.read_text():break
+                    if events.exists() and {'logger','app'} <= set(events.read_text().splitlines()):break
                     time.sleep(.02)
                 # Camera supervisor recovers app/logger; independent web test
                 # below verifies listener recovery while that pipeline blocks.

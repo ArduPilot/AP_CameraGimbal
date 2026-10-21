@@ -83,7 +83,7 @@ static void handle_zt30_upgrade(int fd, const APC_HTTPRequest *request, const ch
         }
         close(output); output = -1;
     }
-    char restart_error[512]{}; restart = lock_restart(restart_error, sizeof(restart_error));
+    char restart_error[512]{}; restart = lock_restart(restart_error, sizeof(restart_error), true);
     writer = restart < 0 ? -1 : open((std::string(APP_DIR)+"/.slot-update.lock").c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (restart < 0 || writer < 0 || !apcam_zt30::regular(std::string(APP_DIR)+"/.slot-update.lock") || flock(writer, LOCK_EX | LOCK_NB)) {
         clean(); send_text_error(fd, 409, "Conflict", "Camera restart or slot update is busy.\n", nullptr); return;
