@@ -17,6 +17,8 @@ public:
     int configure(const struct ca_config *settings);
     const struct ca_config * settings() const;
     bool ready() const;
+    void defer_autorecord() { _autorecord_pending=true; _autorecord_next=0; _autorecord_deadline=0; }
+    void periodic(uint64_t now_ms);
     int set_recording(bool active);
     bool recording() const;
     const char * recording_path() const;
@@ -52,6 +54,8 @@ public:
     int set_inverted(bool inverted);
     APC_Tracking &tracking() { return _tracking; }
 private:
+    bool _autorecord_pending=false;
+    uint64_t _autorecord_next=0, _autorecord_deadline=0;
     int (*_photo_prepare)(void*)=nullptr;void *_photo_opaque=nullptr;
     struct LiveControls;
     struct SurveyWorker;

@@ -578,10 +578,14 @@ int APC_CameraApp::run(int argc, char **argv)
     }
     if (ca_manual_control_open(&_manual,_backend,_mavlink_server)<0)
         ca_log("web manual control unavailable: %s",strerror(errno));
+#ifdef CAMERA_APP_ZT30_DEV
+    if (app_config.autorecord == CA_AUTORECORD_ENABLED) ca_media_defer_autorecord(_media);
+#else
     if (app_config.autorecord == CA_AUTORECORD_ENABLED &&
         ca_media_set_recording(_media, true) < 0) {
         ca_log("automatic recording could not start: %s", strerror(errno));
     }
+#endif
     /* The vendor media libraries install signal handlers while starting ISP.
      * Restore application-owned shutdown handling once all of them are loaded. */
     install_signal_handlers();
@@ -678,6 +682,7 @@ int APC_CameraApp::run(int argc, char **argv)
             return result;
         }
         ca_backend_periodic(_backend);
+        ca_media_periodic(_media);
         ca_mavlink_server_periodic(_mavlink_server);
 #if APCAM_HAVE_SIYI
         ca_unigcs_update(_unigcs, _backend, _manual.active, _mavlink_server);

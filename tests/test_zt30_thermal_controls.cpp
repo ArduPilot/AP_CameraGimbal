@@ -50,7 +50,11 @@ int main() {
     }
     failure=0;ignore_writes=true;
     assert(module.set_palette(3)<0 && errno==EIO && module_palette==1);
+    n=calls;
+    const auto cached=module.cached_palette();
+    assert(cached!=255 && calls==n);
     module.detach();n=calls;
+    assert(module.cached_palette()==cached && calls==n);
     assert(module.palette(&value)<0 && errno==ENODATA && calls==n);
     puts("PASS ZT30 module palette: wire protocol, readback, partial-write rollback, invalid/stale controls");
 }

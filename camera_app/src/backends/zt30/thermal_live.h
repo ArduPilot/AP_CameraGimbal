@@ -28,6 +28,7 @@ public:
     bool start(const char *run_name=nullptr);
     using FrameCallback=void(*)(void*,const EncodedFrame&,uint64_t,bool);
     void set_frame_callback(FrameCallback fn,void *p) { callback=fn;callback_opaque=p; } // Before start().
+    uint8_t cached_palette() const { return controls.cached_palette(); }
     int palette(uint8_t *value) { return controls.palette(value); }
     int set_palette(uint8_t value) { return controls.set_palette(value); }
     void initial_palette(uint8_t value) { wanted_palette=value; } // Before start().

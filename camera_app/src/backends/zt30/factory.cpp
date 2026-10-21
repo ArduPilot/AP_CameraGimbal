@@ -275,16 +275,16 @@ public:
     }
     int set_lens(enum ca_media_lens value) override {
         if(value!=CA_MEDIA_LENS_WIDE && value!=CA_MEDIA_LENS_ZOOM) { errno=EINVAL;return -1; }
-        if(set_thermal_main(false))return -1;
         const auto selected=value==CA_MEDIA_LENS_WIDE?EncoderSource::Wide:EncoderSource::Zoom;
         const auto before=context->primary_source.load();
-        if(selected==before)return 0;
+        if(selected==before)return set_thermal_main(false);
         if(!context->photo_opened) { errno=ENODATA;return -1; }
         int rc=select_source(selected);
         if(!rc && context->main_output)rc=context->main_output->select_source(selected);
         if(!rc && context->sub_output)rc=context->sub_output->select_source(selected);
         if(!rc && context->record_output)rc=context->record_output->select_source(selected);
         if(!rc)rc=context->overlay.select_source(unsigned(selected));
+        if(!rc)rc=set_thermal_main(false);
         if(rc) {
             if(rc==EOWNERDEAD || select_source(before) ||
                (context->main_output && context->main_output->select_source(before)) ||
@@ -303,7 +303,17 @@ public:
         if(thermal==context->thermal_primary)return 0;
         for(unsigned stream=0;stream<2;stream++) {
             const bool th=(stream==0)==thermal;
-            if(ca_live_video_server_configure(context->live,stream,th?640:1280,th?512:720,th?15:30,true))return -1;
+            if(ca_live_video_server_configure(context->live,stream,th?640:1280,th?512:720,th?15:30,true)) {
+                const int error=errno;
+                for(unsigned restore=0;restore<2;restore++) {
+                    const bool was_thermal=(restore==0)==context->thermal_primary;
+                    if(ca_live_video_server_configure(context->live,restore,was_thermal?640:1280,
+                                                     was_thermal?512:720,was_thermal?15:30,true))_exit(28);
+                    (void)ca_rtsp_set_frame_rate(context->rtsp,restore,was_thermal?15:30);
+                    context->waiting_key[restore]=true;
+                }
+                errno=error;return -1;
+            }
             (void)ca_rtsp_set_frame_rate(context->rtsp,stream,th?15:30);
             context->waiting_key[stream]=true;
         }
@@ -311,6 +321,9 @@ public:
         ca_log("ZT30 main source selected: %s",thermal?"thermal":"RGB");return 0;
     }
     bool thermal_main() const override { std::lock_guard<std::mutex> g(context->route_lock);return context->thermal_primary; }
+    void periodic(uint64_t now_ms) override {
+        (void)context->overlay.refresh(now_ms);
+    }
     int set_recording(bool active) override {
         if(active && (!context->thermal_live || !context->thermal_live->ready())) { errno=ENODATA;return -1; }
         return context->recordings.set(active);
@@ -371,8 +384,10 @@ public:
         return context->image.exposure(lens,sample);
     }
     int get_thermal_palette(uint8_t *value) override {
-        if(!context->thermal_live) { errno=ENODATA;return -1; }
-        return context->thermal_live->palette(value);
+        if(!value) { errno=EINVAL;return -1; }
+        const auto palette=context->thermal_live?context->thermal_live->cached_palette():uint8_t(255);
+        *value=palette==255?uint8_t(context->settings.thermal_palette):palette;
+        return 0;
     }
     int set_thermal_palette(uint8_t value) override {
         if(!context->thermal_live) { errno=ENODATA;return -1; }

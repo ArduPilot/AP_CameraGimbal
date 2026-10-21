@@ -27,10 +27,12 @@ int Overlay::configure(unsigned ch,bool aux,const ca_config &config) {
     return apply(config);
 }
 int Overlay::apply(const ca_config &config) {
+    timespec at{};clock_gettime(CLOCK_MONOTONIC,&at);
+    return apply_with_fov(config,zoom_feedback().hfov(source==1,uint64_t(at.tv_sec)*1000+at.tv_nsec/1000000));
+}
+int Overlay::apply_with_fov(const ca_config &config,float rgb_fov) {
     if(!initialized) { errno=ENODEV;return -1; }
     if(config.osd_thermal_fov && config.thermal_hfov_cd<100) { errno=EINVAL;return -1; }
-    timespec at{};clock_gettime(CLOCK_MONOTONIC,&at);
-    const float rgb_fov=zoom_feedback().hfov(source==1,uint64_t(at.tv_sec)*1000+at.tv_nsec/1000000);
     for(unsigned c=0;c<4;c++) {
         unsigned width=1280,height=720;
         if(c==1)ca_video_resolution_size(config.main_resolution,&width,&height);
@@ -67,7 +69,16 @@ int Overlay::apply(const ca_config &config) {
         ca_overlay_free(bits);
         if(error) { ca_log("ZT30 RGB overlay failed: raw=%d",error);errno=EIO;return -1; }
     }
-    settings=config;return 0;
+    settings=config;applied_hfov=rgb_fov;return 0;
+}
+int Overlay::refresh(uint64_t now_ms) {
+    if(!initialized || !settings.osd_thermal_fov || now_ms<refresh_after)return 0;
+    refresh_after=now_ms+500;
+    const float hfov=zoom_feedback().hfov(source==1,now_ms);
+    if(std::fabs(hfov-applied_hfov)<.001f)return 0;
+    const int rc=apply_with_fov(settings,hfov);
+    if(rc)refresh_after=now_ms+5000; // Bound diagnostics and SDK retries on failure.
+    return rc;
 }
 int Overlay::select_source(unsigned ch) {
     if(ch>1)return EINVAL;

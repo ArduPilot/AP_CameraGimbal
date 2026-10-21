@@ -46,6 +46,7 @@ static uint64_t mono_us() {
 }
 struct ca_thermal_stream {
     std::atomic<uint64_t> source_timeout{0};
+    std::atomic<unsigned> thermal_hfov_cd{unsigned(APCAM_LENS3_FOV_H*100)};
     int listener = -1;
     ca_support_video *proxy = nullptr;
     pthread_t thread{};
@@ -166,7 +167,7 @@ static void publish_sensor(ca_thermal_stream *s, const uint16_t *pixels,
     char telemetry[CA_VIDEO_METADATA_JSON_MAX];
     if (!ca_video_metadata_json(&metadata,captured_at,now*9/100,telemetry,sizeof(telemetry))) return;
     publish_frame(s, pixels, now, telemetry, gain, rotated,
-                  s->simulated ? "test_pattern" : "", APCAM_LENS3_FOV_H, metadata, *captured_at, calibrated);
+                  s->simulated ? "test_pattern" : "", s->thermal_hfov_cd.load()*.01f, metadata, *captured_at, calibrated);
 }
 
 void ca_thermal_stream_publish(ca_thermal_stream *s,const uint16_t *pixels,
@@ -338,6 +339,9 @@ int ca_thermal_stream_configure(ca_thermal_stream *s, const ca_config *settings)
     }
     if (previous != s->record_fps) s->next_record = 0;
     public_fps = settings->raw_stream_fps;
+#ifdef CAMERA_APP_ZT30_DEV
+    s->thermal_hfov_cd = settings->thermal_hfov_cd;
+#endif
     return 0;
 }
 

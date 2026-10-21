@@ -5,7 +5,8 @@
 #include <cassert>
 #include <initializer_list>
 static bool overlay_live, recording_active, fail_open;
-static unsigned closed, opened, log_count;
+static unsigned closed, opened, log_count, recording_calls;
+static int recording_error;
 static int control_result, overlay_result;
 static bool combined, thermal;
 static float active_hfov=50;
@@ -21,7 +22,11 @@ class OverlayBackend final : public TestMediaBackend {
 public:
     ~OverlayBackend() override { closed++; }
     bool recording() const override { return recording_active; }
-    int set_recording(bool active) override { recording_active=active; return 0; }
+    int set_recording(bool active) override {
+        recording_calls++;
+        if(active && recording_error) { errno=recording_error;return -1; }
+        recording_active=active;return 0;
+    }
     int apply_overlay(const ca_config *) override
     { overlay_live=overlay_result==0; errno=ENOSPC; return overlay_result; }
     bool tracking_available() const override { return true; }
@@ -128,7 +133,34 @@ int main()
     assert(ca_media_settings(media)->main_resolution==next.main_resolution);
     ca_media_close(media);
     assert(closed==opened-1); // The failed open never acquired a backend.
-    puts("PASS media controls, overlay errors, recording guard, rollback and lifetime");
+    config.settings.autorecord=CA_AUTORECORD_ENABLED;
+    assert(ca_media_open(&media,&config)==0);
+    recording_error=ENODATA;
+    const auto calls=recording_calls;
+    ca_media_defer_autorecord(media);
+    media->periodic(1000);media->periodic(1200);
+    assert(recording_calls==calls+1 && !recording_active);
+    media->periodic(1500);
+    assert(recording_calls==calls+2 && !recording_active);
+    recording_error=0;media->periodic(2000);
+    assert(recording_calls==calls+3 && recording_active);
+    ca_media_set_recording(media,false);media->periodic(2500);
+    assert(recording_calls==calls+4 && !recording_active);
+    // A stop before readiness cancels startup intent too.
+    recording_error=ENODATA;ca_media_defer_autorecord(media);media->periodic(3000);
+    ca_media_set_recording(media,false);
+    recording_error=0;media->periodic(3500);
+    assert(recording_calls==calls+6 && !recording_active);
+    // Storage and other permanent errors stop retries.
+    recording_error=EIO;ca_media_defer_autorecord(media);media->periodic(4000);
+    recording_error=0;media->periodic(4500);
+    assert(recording_calls==calls+7 && !recording_active);
+    recording_error=ENODATA;ca_media_defer_autorecord(media);media->periodic(5000);
+    const auto attempts=recording_calls;
+    media->periodic(65000);recording_error=0;media->periodic(65500);
+    assert(recording_calls==attempts && !recording_active);
+    ca_media_close(media);
+    puts("PASS media controls, overlay errors, recording guard, rollback, lifetime and deferred autorecord");
 }
 
 // These media lifetime tests do not open a gimbal transport.

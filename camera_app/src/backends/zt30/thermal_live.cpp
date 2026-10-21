@@ -214,7 +214,7 @@ void ThermalLive::encode() {
                 if(error && !raw_error_logged)ca_log("ZT30 raw TCP publish failed errno=%d; repeats suppressed",errno);
                 raw_error_logged=error;
             }
-            ca_thermal_stream_publish_counts(raw_stream,radiometric.get(),&at,controls.cached_palette(),false,received/1000);
+            ca_thermal_stream_publish_counts(raw_stream,radiometric.get(),&at,255,false,received/1000);
             uint64_t pts=0;const auto before=now();const int rc=sdk.current_pts(0,&pts);const auto after=now();
             if(rc) { ca_log("ZT30 thermal degraded: GetCurPts raw=%d",rc);degraded.store(true);break; }
             if(after-before>2000000ULL) {

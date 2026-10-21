@@ -86,14 +86,15 @@ def run(build, orientation, no_version_reply=False):
                         assert abs(message.vfov-vertical)<.02,message
                 def ext_set(name,value,accepted=True):
                     drain(link)
-                    wire=struct.pack('<f',value) if name=='CAM_ZOOM' else struct.pack('<i',value)
-                    kind=M.MAV_PARAM_EXT_TYPE_REAL32 if name=='CAM_ZOOM' else M.MAV_PARAM_EXT_TYPE_INT32
+                    wire=struct.pack('<f',value) if name in ('CAM_ZOOM','CAM_OPT_ZOOM') else struct.pack('<i',value)
+                    kind=M.MAV_PARAM_EXT_TYPE_REAL32 if name in ('CAM_ZOOM','CAM_OPT_ZOOM') else M.MAV_PARAM_EXT_TYPE_INT32
                     link.mav.param_ext_set_send(42,CAMERA,name.encode(),wire.ljust(128,b'\0'),kind)
                     ack=receive(link,'PARAM_EXT_ACK',lambda m:m.param_id==name and m.param_result!=M.PARAM_ACK_IN_PROGRESS)
                     assert (ack.param_result==M.PARAM_ACK_ACCEPTED)==accepted,ack
-                def ext_zoom(expected):
-                    drain(link);link.mav.param_ext_request_read_send(42,CAMERA,b'CAM_ZOOM',-1)
-                    value=receive(link,'PARAM_EXT_VALUE',lambda m:m.param_id=='CAM_ZOOM')
+                def ext_zoom(expected,wide=False):
+                    name='CAM_ZOOM' if wide else 'CAM_OPT_ZOOM'
+                    drain(link);link.mav.param_ext_request_read_send(42,CAMERA,name.encode(),-1)
+                    value=receive(link,'PARAM_EXT_VALUE',lambda m:m.param_id==name)
                     assert abs(struct.unpack('<f',value._param_value_raw[:4])[0]-expected)<.01,value
                 def module_zoom(client,value):
                     assert client.request(0xd2,b'\x0a'+struct.pack('<H',round(value*10)))==b'\x0a\x01'
@@ -101,8 +102,8 @@ def run(build, orientation, no_version_reply=False):
 
                 xml=ET.parse(build.parent/'camera-definitions/zt30.xml') if (build.parent/'camera-definitions/zt30.xml').exists() else ET.parse(ROOT/'build/camera-definitions/zt30.xml')
                 parameters={p.get('name'):p for p in xml.findall('parameters/parameter')}
-                assert parameters['CAM_ZOOM'].get('max')=='180'
-                assert parameters['CAM_OPT_ZOOM'].get('max')=='30'
+                assert parameters['CAM_ZOOM'].get('max')=='1'
+                assert parameters['CAM_OPT_ZOOM'].get('max')=='180'
                 assert parameters['CAM_LENS'].get('default')=='0'
 
                 verify_rtsp_video(rtsp,'video1',(1280,720),'h264')
@@ -122,12 +123,12 @@ def run(build, orientation, no_version_reply=False):
                 ack=receive(link,'COMMAND_ACK',lambda m:m.command==M.MAV_CMD_SET_CAMERA_ZOOM)
                 assert ack.result==M.MAV_RESULT_ACCEPTED,ack
                 ext_zoom(180)
-                ext_set('CAM_ZOOM',90);ext_zoom(90)
+                ext_set('CAM_OPT_ZOOM',90);ext_zoom(90)
                 # Wide must ignore background module zoom and refuse lens-local zoom.
-                ext_set('CAM_LENS',0);ext_zoom(1);fov(84.5)
+                ext_set('CAM_LENS',0);ext_zoom(1,wide=True);fov(84.5)
                 assert c.request(0x92)==b'\x01\x02'
                 for value in (1,30,90,180):
-                    module_zoom(c,value);ext_zoom(1);fov(84.5)
+                    module_zoom(c,value);ext_zoom(1,wide=True);ext_zoom(value);fov(84.5)
                 ext_set('CAM_ZOOM',2,accepted=False)
                 request_message(M.MAVLINK_MSG_ID_CAMERA_SETTINGS)
                 settings=receive(link,'CAMERA_SETTINGS');assert math.isfinite(settings.zoomLevel) and settings.zoomLevel==0,settings

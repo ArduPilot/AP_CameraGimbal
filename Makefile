@@ -1009,3 +1009,9 @@ zt30_overlay-test:
 	@mkdir -p build/tests
 	$(CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -no-pie -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -I. -Iinclude -Icamera_app/include tests/test_zt30_overlay.cpp camera_app/src/backends/zt30/overlay.cpp camera_app/src/media/overlay.cpp camera_app/src/log.cpp -ldl -lpthread -o build/tests/zt30-overlay-test
 	build/tests/zt30-overlay-test
+
+.PHONY: zt30_unigcs_encoder-test
+zt30_unigcs_encoder-test:
+	@mkdir -p build/tests
+	$(ZT30_HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -Icamera_app/include -Icamera_app/build -ffunction-sections -fdata-sections -Wl,--gc-sections tests/test_zt30_unigcs_encoder.cpp -o build/tests/zt30-unigcs-encoder-test
+	build/tests/zt30-unigcs-encoder-test

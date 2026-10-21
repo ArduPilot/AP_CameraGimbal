@@ -18,6 +18,7 @@ public:
     APC_Media_Backend &operator=(const APC_Media_Backend &) = delete;
     static std::unique_ptr<APC_Media_Backend> create(const ca_media_config &config);
     virtual bool ready() const = 0;
+    virtual void periodic(uint64_t) {} // main-thread maintenance only
     virtual int set_recording(bool active) = 0;
     virtual bool recording() const = 0;
     virtual const char * recording_path() const = 0;
