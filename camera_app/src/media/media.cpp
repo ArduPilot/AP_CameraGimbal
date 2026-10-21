@@ -402,8 +402,28 @@ APC_Media::~APC_Media()
 #define REQUIRE_IMPL do { if (!_backend) { errno = ENODEV; return -1; } } while (0)
 bool APC_Media::ready() const
 { return _backend && _backend->ready(); }
+void APC_Media::periodic(uint64_t now_ms)
+{
+    if (!_backend) return;
+    _backend->periodic(now_ms);
+    if (_config.settings.autorecord!=CA_AUTORECORD_ENABLED) _autorecord_pending=false;
+    if (!_autorecord_pending || now_ms<_autorecord_next) return;
+    if (!_autorecord_deadline) _autorecord_deadline=now_ms+60000;
+    if (now_ms>=_autorecord_deadline) {
+        _autorecord_pending=false;
+        ca_log("automatic recording timed out waiting for media readiness");
+        return;
+    }
+    _autorecord_next=now_ms+500;
+    if (set_recording(true)==0) return;
+    // Only startup readiness and temporary resource contention are retried.
+    // Explicit start/stop calls clear this pending request in set_recording().
+    if (errno==ENODATA || errno==EAGAIN || errno==EBUSY) _autorecord_pending=true;
+    else ca_log("automatic recording could not start: %s",strerror(errno));
+}
 int APC_Media::set_recording(bool active)
 {
+    _autorecord_pending=false;
     REQUIRE_IMPL;
     bool previous=_backend->recording();
     struct ca_log_vid r={.time_us=ca_binlog_time_us(),.active=active};
@@ -418,6 +438,13 @@ int APC_Media::set_recording(bool active)
     if (previous!=active || r.result<0) ca_binlog_emit(CA_LOG_VID,&r,sizeof(r));
     errno=saved_errno;
     return r.result;
+}
+void ca_media_defer_autorecord(struct ca_media *media)
+{ if (media) media->defer_autorecord(); }
+void ca_media_periodic(struct ca_media *media)
+{
+    timespec at{};clock_gettime(CLOCK_MONOTONIC,&at);
+    if (media) media->periodic(uint64_t(at.tv_sec)*1000+at.tv_nsec/1000000);
 }
 bool APC_Media::recording() const
 { return _backend && _backend->recording(); }

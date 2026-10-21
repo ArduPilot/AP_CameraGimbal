@@ -59,14 +59,14 @@ class Definitions(unittest.TestCase):
                 self.assertEqual('CAM_ZOOM' in params, target in ('mt11', 'a8', 'zt30'))
                 self.assertEqual('CAM_OPT_ZOOM' in params, target in ('mt11', 'zt30'))
                 if target in ('mt11','zt30'):
-                    self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2 if target=='mt11' else 30)
+                    self.assertAlmostEqual(float(params['CAM_OPT_ZOOM'].get('max')), 3.2 if target=='mt11' else 180)
                     self.assertEqual(params['CAM_OPT_ZOOM'].get('step'), '0.1')
                     lens_options = params['CAM_LENS'].findall('options/option')
                     self.assertEqual([o.findtext('exclusions/exclude') for o in lens_options],
                                      ['CAM_OPT_ZOOM', 'CAM_ZOOM'])
                 if 'CAM_ZOOM' in params:
                     self.assertEqual((params['CAM_ZOOM'].get('min'), params['CAM_ZOOM'].get('max'),
-                                      params['CAM_ZOOM'].get('step')), ('1', '10' if target == 'mt11' else '180' if target == 'zt30' else '6', '0.1'))
+                                      params['CAM_ZOOM'].get('step')), ('1', '10' if target == 'mt11' else '1' if target == 'zt30' else '6', '0.1'))
                 self.assertEqual('IMG_ISO' in params, target in ('mt11', 'a8', 'zt30'))
                 expected_res = ({'0', '1', '2', '3'} if target == 'zt30' else {'0', '1', '2'} if target in ('mt11', 'a8')
                                 else {'0', '1', '3'} if target == 'zr10' else {'1'})

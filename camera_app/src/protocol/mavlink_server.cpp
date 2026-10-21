@@ -2646,7 +2646,7 @@ static bool camera_parameter_get(struct ca_mavlink_server *server,
             ? &server->parameters : &server->settings, (size_t)p->config_index);
         return true;
     case CA_CAMERA_ZOOM:
-        *value = !APCAM_ZOOM_SELECTS_LENS ? selected_zoom(server) :
+        *value = !APCAM_ZOOM_SELECTS_LENS && APCAM_TARGET!=APCAM_TARGET_ZT30 ? selected_zoom(server) :
             ca_media_lens_zoom(server->media, CA_MEDIA_LENS_WIDE);
         return isfinite(*value);
     case CA_CAMERA_OPTICAL_ZOOM:
@@ -2763,7 +2763,7 @@ static int camera_parameter_set(struct ca_mavlink_server *server,
 #endif
     case CA_CAMERA_ZOOM:
         server->zoom_rate = 0;
-        return !APCAM_ZOOM_SELECTS_LENS ? set_selected_zoom(server, value) :
+        return !APCAM_ZOOM_SELECTS_LENS && APCAM_TARGET!=APCAM_TARGET_ZT30 ? set_selected_zoom(server, value) :
             ca_media_set_lens_zoom(server->media, CA_MEDIA_LENS_WIDE, value);
     case CA_CAMERA_OPTICAL_ZOOM:
         server->zoom_rate = 0;

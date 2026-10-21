@@ -1097,3 +1097,9 @@ tests/test_terrain: tests/test_terrain.cpp src/protocol/terrain.cpp include/came
 terrain-test: tests/test_terrain
 	python3 tests/test_terrain.py ./tests/test_terrain
 test: terrain-test
+
+.PHONY: zt30-thermal-metadata-test
+zt30-thermal-metadata-test: $(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a
+	@mkdir -p build/tests
+	$(HOST_CXX) -std=gnu++17 -O2 -Wall -Wextra -Werror -Wno-missing-field-initializers -DCA_THERMAL_STREAM_FFV1 -DCAMERA_APP_ZT30_DEV -DAPCAM_TARGET=APCAM_TARGET_ZT30 -Iinclude -I../include -I$(THERMAL_CODECS_ROOT)/host/include -ffunction-sections -fdata-sections -Wl,--gc-sections ../tests/test_zt30_thermal_metadata.cpp $(THERMAL_CODECS_ROOT)/host/lib/libavcodec.a $(THERMAL_CODECS_ROOT)/host/lib/libavutil.a $(call thermal_extra_libs,host) -pthread -lm -o build/tests/zt30-thermal-metadata-test
+	./build/tests/zt30-thermal-metadata-test

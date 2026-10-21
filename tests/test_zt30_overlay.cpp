@@ -4,10 +4,13 @@
 #include <map>
 #include <set>
 #include <tuple>
+#include <ctime>
+#include "camera_app/src/backends/zt30/zoom_feedback.h"
 using namespace ca_zt30;
 static std::map<unsigned,RgnConfig> regions;
 static std::map<unsigned,std::pair<unsigned,unsigned>> attached;
 static bool initialized=false,fail_bitmap=false,fail_detach=false;
+static unsigned bitmaps;
 extern "C" void ca_video_resolution_size(ca_video_resolution value,unsigned *w,unsigned *h) {
     switch(value) {
     case CA_VIDEO_2160P:*w=3840;*h=2160;break;
@@ -35,6 +38,7 @@ int main() {
     sdk.rgn.destroy=[](uint16_t chip,uint32_t id){assert(!chip && !attached.count(id) && regions.count(id));regions.erase(id);return 0;};
     sdk.rgn.bitmap=[](uint16_t chip,uint32_t id,RgnBitmap *b) {
         assert(!chip && regions.count(id) && b->width==regions[id].width && b->height==regions[id].height && b->format==0 && b->address);
+        bitmaps++;
         if(fail_bitmap)return -77;
         return 0;
     };
@@ -66,6 +70,18 @@ int main() {
     for(auto &entry:attached)assert(entry.second.first==0);
     // Unknown zoom geometry removes the FOV box instead of inventing a size.
     assert(attached.size()==4);
+    timespec at{};clock_gettime(CLOCK_MONOTONIC,&at);
+    const uint64_t now=uint64_t(at.tv_sec)*1000+at.tv_nsec/1000000;
+    assert(zoom_feedback().observe(1,0,now));
+    assert(owner.refresh(now)==0 && attached.size()==20);
+    const auto updates=bitmaps;
+    assert(owner.refresh(now+500)==0 && bitmaps==updates);
+    assert(zoom_feedback().observe(30,0,now+1000));
+    assert(owner.refresh(now+1000)==0 && attached.size()==4);
+    assert(zoom_feedback().observe(1,0,now+1500));
+    assert(owner.refresh(now+1500)==0 && attached.size()==20);
+    assert(owner.refresh(now+4500)==0 && attached.size()==4); // stale telemetry
+
     fail_detach=true;assert(owner.close()==-88 && initialized && !regions.empty());fail_detach=false;
     assert(owner.close()==0 && !initialized && regions.empty() && attached.empty());
     assert(owner.close()==0);
