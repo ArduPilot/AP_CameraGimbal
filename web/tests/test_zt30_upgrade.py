@@ -2,7 +2,7 @@
 '''HTTP upload orchestration with real validation and injected lifecycle callbacks.
 No ARM candidate executes on the host; hardware testing covers real services.
 '''
-import base64,copy,fcntl,http.client,json,os,re,shutil,socket,struct,subprocess,sys,tempfile,time
+import base64,copy,fcntl,http.client,json,os,re,shutil,socket,struct,subprocess,sys,tempfile,time,threading
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tests'))
@@ -65,6 +65,10 @@ extern "C" int __wrap_close(int fd) {
  return __real_close(fd);
 }
 int main(int argc,char **argv) {
+ if(argc==2 && !strcmp(argv[1],"--restart-lock-test")) {
+  char error[256]{};int lock=lock_restart(error,sizeof(error));
+  if(lock<0){fprintf(stderr,"%s",error);return 1;}close(lock);return 0;
+ }
  zt30_upgrade_services={fake_restart,fake_ready,nullptr};return zt30_web_main(argc,argv);
 }''')
  paths={'APP_DIR':app,'MEDIA_ROOT':base/'mnt','RUNTIME_DIR':run,'CAMERA_READY_PATH':run/'ready',
@@ -79,6 +83,19 @@ int main(int argc,char **argv) {
                  '-DZT30_UPLOAD_DURATION_MS=1000','-DAPCAM_TARGET=APCAM_TARGET_ZT30','-DZT30_WEB_NATIVE','-DCAMERA_APP_ZT30_DEV','-DMT11_WEB_TEST',
                  '-I'+str(ROOT/'include'),*[f'-D{name}="{path}"' for name,path in paths.items()],
                  str(wrapper),str(ROOT/'camera_app/src/config.cpp'),'-Wl,--wrap=close','-lm','-o',str(binary)],check=True)
+ # Ordinary restarts tolerate short supervisor maintenance transactions;
+ # uploads retain the immediate conflict policy tested through HTTP below.
+ with (run/'camera-app.restart.lock').open('w') as restart_lock:
+  fcntl.flock(restart_lock,fcntl.LOCK_EX)
+  release=threading.Timer(.15,lambda:fcntl.flock(restart_lock,fcntl.LOCK_UN));release.start()
+  started=time.monotonic()
+  result=subprocess.run([str(binary),'--restart-lock-test'],capture_output=True,timeout=3)
+  release.join();assert result.returncode==0,result.stderr
+  assert .1<time.monotonic()-started<1.2
+  fcntl.flock(restart_lock,fcntl.LOCK_EX)
+  started=time.monotonic()
+  result=subprocess.run([str(binary),'--restart-lock-test'],capture_output=True,timeout=3)
+  assert result.returncode==1 and 1.4<time.monotonic()-started<2.5
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
  log=(base/'web.log').open('w');process=subprocess.Popen([str(binary),'-p',str(port)],stdout=log,stderr=log)
  auth='Basic '+base64.b64encode(b'admin:test-password').decode()
@@ -115,6 +132,8 @@ int main(int argc,char **argv) {
    try:status,page=request('/');break
    except (ConnectionError,OSError):time.sleep(.05)
   assert status==200,page
+  pending='Checking the new application and web interface…'.encode()
+  assert pending not in page
   # A stale session must not trigger a browser Basic-auth prompt while the
   # upgrade monitor polls either endpoint.
   for path in ('/upgrade-status','/upgrade-result'):
@@ -162,10 +181,12 @@ int main(int argc,char **argv) {
   status,result=request('/upgrade-result');assert status==200
   result=json.loads(result);assert result['state']=='ready' and result['candidate']==id,result
   status,page=request('/');assert b'http-test' in page and b'id=application-rollback' in page
+  assert pending in page
   # Model independent supervisor confirmation; callback tests cover recovery,
   # hardware checks the actual listener/app/gates and confirmation.
   trial=json.loads((app/'trial.json').read_bytes());trial['state']='confirmed';(app/'trial.json').write_bytes(canonical(trial))
   status,result=request('/upgrade-result');assert json.loads(result)['state']=='confirmed'
+  status,page=request('/');assert pending not in page
   status,bad_csrf=request('/upgrade/rollback',b'csrf=bad',{'Content-Type':'application/x-www-form-urlencoded'});assert status!=201 and os.readlink(app/'active')=='slots/'+id,(status,bad_csrf)
   status,result=request('/upgrade/rollback',('csrf='+csrf).encode(),{'Content-Type':'application/x-www-form-urlencoded'})
   assert status==201,(status,result);assert json.loads(result)['slot']==old

@@ -28,9 +28,12 @@ while :; do
         sleep 1
         continue
     fi
-    if ! "$app_dir/zt30-slot" --root "$app_dir" --run-dir "$run_dir" note-web-launch "$web_port"; then
-        sleep 1
-        continue
+    if "$app_dir/zt30-slot" --root "$app_dir" --run-dir "$run_dir" note-web-launch "$web_port"; then
+        :
+    else
+        result=$?
+        if [ "$result" = 3 ]; then sleep 1; continue; fi
+        echo 'Application trial launch accounting failed; starting recovery web service anyway' >&2
     fi
     if ! selection=$("$app_dir/zt30-slot" --root "$app_dir" resolve 2>&1); then
         if [ "$payload_failed" = 0 ]; then

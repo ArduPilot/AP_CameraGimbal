@@ -152,6 +152,10 @@ tests/test_zt30_process: tests/test_zt30_process.cpp zt30-process.h ../include/a
 zt30-parameters-test: generated
 	python3 tests/test_zt30_parameters.py
 
+.PHONY: zt30-process-test
+zt30-process-test: tests/test_zt30_process
+	./tests/test_zt30_process
+
 test: zt30-parameters-test tests/test_zt30_process $(HOST_TEST) $(A8_HOST_CHECK) tests/test_string_buffer tests/test_webroot
 	./tests/test_zt30_process
 	./tests/test_string_buffer

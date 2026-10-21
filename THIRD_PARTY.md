@@ -87,3 +87,14 @@ Source: <https://github.com/davisking/dlib/tree/v20.0.1>.
 The bundled KISS FFT is BSD-3-Clause, copyright Mark Borgerding 2003–2010.
 Both license notices are in `web/webroot/licenses`, copied into every camera
 package with the web assets.
+
+The ZT30 qualification inputs under `packaging/zt30/platform` are byte-for-byte
+libraries from the tested SIYI ZT30 0.1.9 installation, pinned in that directory's
+`SHA256SUMS`. They include glibc 2.30 (LGPL-2.1-or-later), the GCC 9 C++ and support
+runtimes (GPL-3.0-or-later with the GCC Runtime Library Exception where applicable),
+and SigmaStar MI/ISP libraries with vendor-specific licensing. They are used to
+validate ELF dependencies and are not installed by `.apbundle` application updates.
+These inputs remain subject to their component license terms. Vendor redistribution
+permission and the availability of corresponding source for the retained runtime
+inputs have not been established by this port; maintainers must confirm those terms
+before distributing the inputs. This entry records provenance, not a grant of rights.

@@ -6,7 +6,7 @@ app_dir=${APCG_ZT30_APP_DIR:-/customer/camera-app}
 run_dir=${APCG_ZT30_RUN_DIR:-/tmp/apcg-zt30}
 mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
-export LD_LIBRARY_PATH="/config/lib:/customer/ssh/lib:/lib:/usr/lib"
+export LD_LIBRARY_PATH="/config/lib:/lib:/usr/lib"
 export CAMERA_APP_CONFIG="$app_dir/camera.ini"
 export CAMERA_APP_READY_PATH="$run_dir/camera-app.ready"
 export CAMERA_APP_RECORD_ROOT=/mnt/DCIM
@@ -26,15 +26,15 @@ if [ ! -s "$app_dir/web.pass" ]; then
     # Publish complete credentials atomically; recover an empty file left by
     # an interrupted older installation without replacing an existing password.
     ( umask 077
-      temporary=$(mktemp "$app_dir/.web.pass.XXXXXX")
+      temporary=$(mktemp "$app_dir/.web.pass.XXXXXX") || exit 1
       trap 'rm -f "$temporary"' EXIT HUP INT TERM
-      cp "$app_dir/web.pass.default" "$temporary"
-      [ -s "$temporary" ]
-      chmod 0600 "$temporary"
+      cp "$app_dir/web.pass.default" "$temporary" &&
+      [ -s "$temporary" ] &&
+      chmod 0600 "$temporary" &&
+      sync &&
+      mv -f "$temporary" "$app_dir/web.pass" &&
       sync
-      mv -f "$temporary" "$app_dir/web.pass"
-      sync
-    )
+    ) || echo 'Cannot seed web credentials; camera and recovery web supervisors will still start' >&2
 fi
 # A separate supervisor keeps the web listener recoverable while the camera
 # supervisor is waiting on its foreground app/logger pipeline.

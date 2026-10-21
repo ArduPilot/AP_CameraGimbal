@@ -3838,7 +3838,7 @@ static char *read_current_app_log(size_t *length)
 }
 #endif
 
-static int lock_restart(char *error, size_t error_size)
+static int lock_restart(char *error, size_t error_size, bool nonblocking = false)
 {
     char path[PATH_MAX];
     if (snprintf(path, sizeof(path), "%s/camera-app.restart.lock", RUNTIME_DIR) >= (int)sizeof(path)) {
@@ -3847,11 +3847,20 @@ static int lock_restart(char *error, size_t error_size)
     }
     int lock = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 
-    if (lock < 0 || flock(lock, LOCK_EX
+    int result = -1;
 #ifdef ZT30_WEB_NATIVE
-        | LOCK_NB
+    const int64_t deadline = apcam::probe_milliseconds() + 1500;
+    if (lock >= 0) do {
+        result = flock(lock, LOCK_EX | LOCK_NB);
+        if (!result || nonblocking || (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR) ||
+            apcam::probe_milliseconds() >= deadline) break;
+        usleep(20000);
+    } while (true);
+#else
+    (void)nonblocking;
+    if (lock >= 0) result = flock(lock, LOCK_EX);
 #endif
-        ) < 0) {
+    if (result < 0) {
         snprintf(error, error_size, T(S_E_SWITCH_LOCK), strerror(errno));
         if (lock >= 0) close(lock);
         return -1;
@@ -4962,7 +4971,7 @@ static char *render_page(const char *message, bool message_is_error, size_t *pag
                       "<p class=muted>", T(S_STATUS_UPGRADE_BUTTON), csrf_token);
     page.appendf(T(S_STATUS_UPGRADE_HELP), FIRMWARE_NAME_PATTERNS);
 #ifdef ZT30_WEB_NATIVE
-    page.append(T(S_APP_UPDATE_PENDING));
+    // Actual pending trials are shown by append_zt30_bundle_status().
 #elif WEB_INSTALLS_FIRMWARE
     page.append(T(S_STATUS_UPGRADE_INSTALL_Z1));
 #elif APCAM_TARGET == APCAM_TARGET_MT11

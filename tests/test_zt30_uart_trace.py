@@ -29,11 +29,24 @@ class UartTrace(unittest.TestCase):
         self.program=Path(self.temp.name)/'fixture'
         source=Path(self.temp.name)/'fixture.c'
         source.write_text('''#include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+static int output_descriptor(const char *wanted) {
+ DIR *dir=opendir("/proc/self/fd");if(!dir)return -1;
+ struct dirent *entry;int found=-1;
+ while((entry=readdir(dir))) {
+  char *end=0;long n=strtol(entry->d_name,&end,10);if(!*entry->d_name || *end)continue;
+  char name[64],target[4096];snprintf(name,sizeof(name),"/proc/self/fd/%ld",n);
+  ssize_t size=readlink(name,target,sizeof(target)-1);if(size<0)continue;target[size]=0;
+  if(!strcmp(target,wanted)){found=(int)n;break;}
+ }
+ closedir(dir);return found;
+}
 int main(int argc, char **argv) {
  (void)argc;
  int fd=open(argv[1],O_RDWR|O_NOCTTY|O_NONBLOCK);
@@ -48,8 +61,9 @@ int main(int argc, char **argv) {
   }
  } else {
   if(strcmp(argv[2],"reuse")==0) {
+   int output=output_descriptor(getenv("APCG_UART_TRACE"));if(output<0)return 10;
    int sink=open(argv[3],O_RDWR|O_CREAT|O_TRUNC,0600);
-   if(sink<0 || write(sink,"untouched",9)!=9 || dup2(sink,512)!=512)return 9;
+   if(sink<0 || write(sink,"untouched",9)!=9 || dup2(sink,output)!=output)return 9;
    close(sink);
   }
   for(int i=0;i<20000;i++) {

@@ -12,17 +12,33 @@ class IoctlTrace(unittest.TestCase):
 #define EXPECTED_ERR 16
 #endif
 #include <errno.h>
+#include <dirent.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdint.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+static int output_descriptor(const char *wanted) {
+ DIR *dir=opendir("/proc/self/fd");if(!dir)return -1;
+ struct dirent *entry;int found=-1;
+ while((entry=readdir(dir))) {
+  char *end=0;long n=strtol(entry->d_name,&end,10);if(!*entry->d_name || *end)continue;
+  char name[64],target[4096];snprintf(name,sizeof(name),"/proc/self/fd/%ld",n);
+  ssize_t size=readlink(name,target,sizeof(target)-1);if(size<0)continue;target[size]=0;
+  if(!strcmp(target,wanted)){found=(int)n;break;}
+ }
+ closedir(dir);return found;
+}
 int main(void) {
  int fd=open("/dev/null",O_RDWR);if(fd<0)return 2;
  int other=open("/dev/zero",O_RDWR);if(other<0)return 6;
 #ifdef REUSE_OUTPUT
+ int output=output_descriptor(getenv("TRACE_REUSE_PATH"));if(output<0)return 22;
  int sink=open("output-sink",O_RDWR|O_CREAT|O_TRUNC,0600);if(sink<0)return 20;
- if(write(sink,"keep original sink",18)!=18 || dup2(sink,OUTPUT_FD)!=OUTPUT_FD)return 21;close(sink);
+ if(write(sink,"keep original sink",18)!=18 || dup2(sink,output)!=output)return 21;close(sink);
 #endif
  for(unsigned i=0;i<COUNT;i++) {
   unsigned long command=0x6900U+(i&255U)+((unsigned long)((i>>8)&3U)<<30);
@@ -47,7 +63,7 @@ int main(void) {
  close(fd);puts("PASSTHROUGH PASS");return 0;
 }
 ''')
-        subprocess.run(['cc','-O2','-DCOUNT='+str(count),*(['-DREUSE_OUTPUT','-DOUTPUT_FD='+str(513 if reuse_counts else 512)] if reuse or reuse_counts else []),*(['-DCOLLISION'] if collision else []),*(['-DDISTINCT'] if distinct else []),*(['-DABRUPT'] if abrupt else []),*(['-DZERO'] if zero else []),*(['-DEXPECTED_RC=-1','-DEXPECTED_ERR=9'] if negative else []),str(source),'-o',str(app)],check=True)
+        subprocess.run(['cc','-O2','-DCOUNT='+str(count),*(['-DREUSE_OUTPUT'] if reuse or reuse_counts else []),*(['-DCOLLISION'] if collision else []),*(['-DDISTINCT'] if distinct else []),*(['-DABRUPT'] if abrupt else []),*(['-DZERO'] if zero else []),*(['-DEXPECTED_RC=-1','-DEXPECTED_ERR=9'] if negative else []),str(source),'-o',str(app)],check=True)
         mock=root/'mock.c';mock.write_text('''#ifndef EXPECTED_RC
 #define EXPECTED_RC 123
 #define EXPECTED_ERR 16
@@ -86,7 +102,7 @@ int ioctl(int fd,unsigned long command,...) {
         output=root/('usb.bin' if usb else 'ioctl.bin');count_file=root/('usb-counts.bin' if usb else 'ioctl-counts.bin')
         if existing:output.write_bytes(b'do not overwrite')
         if counts_existing:count_file.write_bytes(b'keep original counts')
-        result=subprocess.run([str(app)],env={'LD_PRELOAD':str(lib)+':'+str(real),('APCG_USB_TRACE' if usb else 'APCG_IOCTL_TRACE'):str(output)},capture_output=True,text=True,timeout=10,cwd=root)
+        result=subprocess.run([str(app)],env={'TRACE_REUSE_PATH':str(count_file if reuse_counts else output),'LD_PRELOAD':str(lib)+':'+str(real),('APCG_USB_TRACE' if usb else 'APCG_IOCTL_TRACE'):str(output)},capture_output=True,text=True,timeout=10,cwd=root)
         if reuse or reuse_counts:self.assertEqual((root/'output-sink').read_bytes(),b'keep original sink')
         return result,output.read_bytes() if output.exists() else b'',count_file.read_bytes() if count_file.exists() else b''
     def test_plain_tracer_pins_metadata_and_count_outputs(self):
