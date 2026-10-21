@@ -57,6 +57,8 @@ extern "C" void overlay_test_layout(unsigned out[5]) {
         cls.Bitmaps = Bitmap * layout[1]
         cls.lib.ca_overlay_geometry.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.c_bool, C.c_bool, C.c_float]
         cls.lib.ca_overlay_geometry.restype = None
+        cls.lib.ca_overlay_geometry_fov.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.c_bool, C.c_bool, C.c_float, C.c_float, C.c_float]
+        cls.lib.ca_overlay_geometry_fov.restype = None
         cls.lib.ca_overlay_tracking.argtypes = [C.POINTER(Geometry), C.c_uint, C.c_uint, C.POINTER(C.c_float)]
         cls.lib.ca_overlay_tracking.restype = None
         cls.lib.ca_overlay_bitmaps.argtypes = [C.POINTER(Bitmap), C.c_uint, C.c_uint, C.POINTER(Geometry)]
@@ -162,15 +164,33 @@ extern "C" void overlay_test_layout(unsigned out[5]) {
         self.assertTrue(all(not b.pixels for b in bitmaps))
 
 
-class UnknownThermalFOV(unittest.TestCase):
+class ZT30ThermalFOV(unittest.TestCase):
     target = 'APCAM_TARGET_ZT30'
     setUpClass = classmethod(Overlays.setUpClass.__func__)
     geometry = Overlays.geometry
 
+    def test_assumed_mt11_thermal_box(self):
+        # ZT30 uses the requested MT11 24.2 degree thermal FOV and 640x512
+        # aspect. Its boundary is visible in both full-width RGB lens views.
+        for fov in (84.5, 58.1):
+            g = self.geometry(cross=False, fov=fov)
+            self.assertEqual(g.count, 4)
+            top, bottom = g.lines[:2]
+            expected_width = 1280*np.tan(np.radians(24.2)/2)/np.tan(np.radians(fov)/2)
+            self.assertAlmostEqual(top.x1-top.x0, expected_width, delta=1)
+            self.assertAlmostEqual((top.x1-top.x0)/(bottom.y0-top.y0), 640/512, delta=.01)
+            self.assertEqual(self.geometry(cross=True, fov=fov).count, 8)
+        # At full optical zoom the thermal boundary surrounds the RGB image.
+        self.assertEqual(self.geometry(cross=False, fov=2.14).count, 0)
+        self.assertEqual(self.geometry(cross=True, fov=2.14).count, 4)
+
     def test_unknown_thermal_box_is_absent(self):
-        for fov in (84.5, 58.1, 2.14):
-            self.assertEqual(self.geometry(cross=False, fov=fov).count, 0)
-            self.assertEqual(self.geometry(cross=True, fov=fov).count, 4)
+        # Keep explicit unknown/invalid geometry coverage for native callers.
+        for thermal_fov in (float('nan'), 0, -1, 180):
+            for cross in (False, True):
+                g = self.Geometry()
+                self.lib.ca_overlay_geometry_fov(C.byref(g), 1280, 720, cross, True, 84.5, thermal_fov, 640/512)
+                self.assertEqual(g.count, 4 if cross else 0)
 
 
 if __name__ == '__main__':

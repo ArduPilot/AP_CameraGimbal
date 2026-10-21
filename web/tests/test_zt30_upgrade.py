@@ -54,6 +54,16 @@ static bool fake_ready(void *,const std::string &,bool &thermal,std::string &err
  if(selected_version()=="fail-ready")return apcam_zt30::fail(error,"injected candidate RGB failure");
  return true;
 }
+// Keep the response/cleanup gap observable on fast hosts too. Production
+// intentionally retains the update lock until after sending the response.
+extern "C" int __real_close(int fd);
+extern "C" int __wrap_close(int fd) {
+ char name[64]{},target[4096]{};
+ snprintf(name,sizeof(name),"/proc/self/fd/%d",fd);
+ ssize_t size=readlink(name,target,sizeof(target)-1);
+ if(size>0 && !strcmp(target,UPGRADE_LOCK_PATH))usleep(50000);
+ return __real_close(fd);
+}
 int main(int argc,char **argv) {
  zt30_upgrade_services={fake_restart,fake_ready,nullptr};return zt30_web_main(argc,argv);
 }''')
@@ -68,15 +78,30 @@ int main(int argc,char **argv) {
  subprocess.run(['c++','-std=gnu++17','-O2','-Wall','-Wextra','-Werror','-Wno-missing-field-initializers',
                  '-DZT30_UPLOAD_DURATION_MS=1000','-DAPCAM_TARGET=APCAM_TARGET_ZT30','-DZT30_WEB_NATIVE','-DCAMERA_APP_ZT30_DEV','-DMT11_WEB_TEST',
                  '-I'+str(ROOT/'include'),*[f'-D{name}="{path}"' for name,path in paths.items()],
-                 str(wrapper),str(ROOT/'camera_app/src/config.cpp'),'-lm','-o',str(binary)],check=True)
+                 str(wrapper),str(ROOT/'camera_app/src/config.cpp'),'-Wl,--wrap=close','-lm','-o',str(binary)],check=True)
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
  log=(base/'web.log').open('w');process=subprocess.Popen([str(binary),'-p',str(port)],stdout=log,stderr=log)
  auth='Basic '+base64.b64encode(b'admin:test-password').decode()
+ def wait_upload_idle():
+  deadline=time.monotonic()+5
+  while time.monotonic()<deadline:
+   try:
+    with (run/'upload.lock').open('r+') as lock:
+     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    return
+   except FileNotFoundError:return
+   except BlockingIOError:time.sleep(.01)
+  raise AssertionError('Previous HTTP update worker did not release its upload lock')
  def request(path,body=None,headers=None,authenticated=True):
   c=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
   h={'Authorization':auth} if authenticated else {}
   h.update(headers or {});c.request('POST' if body is not None else 'GET',path,body,h)
-  response=c.getresponse();status=response.status;payload=response.read();c.close();return status,payload
+  response=c.getresponse();status=response.status;payload=response.read();c.close()
+  # The worker sends its reply before closing the transaction locks, keeping
+  # the supervisor from reloading web services mid-response. Payload receipt
+  # alone is not a cleanup barrier. Never retry requests or mask real 409s.
+  if path in ('/upgrade','/upgrade/rollback') and status!=409:wait_upload_idle()
+  return status,payload
  def preserved():
   assert (app/'camera.ini').read_bytes()==config
   assert (app/'web.pass').read_bytes()==b'test-password\n'
