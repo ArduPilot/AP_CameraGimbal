@@ -1157,3 +1157,13 @@ build/tests/test_stream_layout: tests/test_stream_layout.cpp src/protocol/mavlin
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $< -lpthread -lm
 
 test: stream-layout-test
+
+# Cloud upload: the rclone supervisor.
+tests/test_uploader: tests/test_uploader.cpp src/upload/uploader.cpp include/camera_app/uploader.h src/log.cpp tests/fake_rclone.sh
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^)
+
+.PHONY: uploader-test
+uploader-test: tests/test_uploader
+	./tests/test_uploader
+test: uploader-test
