@@ -14,6 +14,9 @@
     });
     const name = tab.id.slice(4);
     form.setAttribute('action', '/parameters#' + name);
+    // Forms that post elsewhere also return to this tab.
+    document.querySelectorAll('form[data-return-tab]').forEach(other =>
+      other.setAttribute('action', other.getAttribute('action').split('#')[0] + '#' + name));
     try { history.replaceState(null, '', '#' + name); } catch (_) {}
     if (focus) tab.focus();
   }
@@ -38,6 +41,41 @@
   const fromHash = () => selectTab(tabs.find(tab => tab.id === 'tab-' + location.hash.slice(1)));
   fromHash();
   window.addEventListener('hashchange', fromHash);
+  // Keep the upload status and the Upload now button current while the tab is shown.
+  const uploadStatus = document.getElementById('upload-status');
+  const uploadNow = document.querySelector('button[form=upload-now]');
+  if (uploadStatus && uploadNow) {
+    let busy = false;
+    setInterval(async () => {
+      const element = document.getElementById('upload-status');
+      if (busy || document.hidden || !element || element.closest('[hidden]')) return;
+      busy = true;
+      try {
+        const response = await fetch('/upload-status', { credentials: 'same-origin', cache: 'no-store' });
+        if (response.ok) {
+          const text = await response.text();
+          const newline = text.indexOf('\n');
+          const holder = document.createElement('div');
+          holder.innerHTML = text.slice(newline + 1);
+          if (holder.firstElementChild && element.innerHTML !== holder.firstElementChild.innerHTML) {
+            element.className = holder.firstElementChild.className;
+            element.innerHTML = holder.firstElementChild.innerHTML;
+          }
+          uploadNow.disabled = ['none', 'disabled'].includes(text.slice(0, newline));
+        }
+      } catch (_) { /* try again next time */ }
+      busy = false;
+    }, 3000);
+  }
+  // Saving or removing the credentials reloads the page; come back to their status line.
+  const credentials = document.getElementById('upload-credentials');
+  if (credentials) {
+    credentials.addEventListener('submit', () => { try { sessionStorage.setItem('scrollCredentials', '1'); } catch (_) {} });
+    let again = false;
+    try { again = sessionStorage.getItem('scrollCredentials') === '1'; sessionStorage.removeItem('scrollCredentials'); } catch (_) {}
+    const status = document.getElementById('upload-credentials-status');
+    if (again && status && !status.closest('[hidden]')) status.scrollIntoView({ block: 'center' });
+  }
   const fields = [...form.querySelectorAll('.field input, .field select')];
   const touched = new Set();
   let attempted = Boolean(document.querySelector('.notice.error'));
@@ -70,6 +108,9 @@
   function invalid(field, message) {
     if (field) field.setCustomValidity(message || L.invalid.replace('%s', field.closest('.field').querySelector('label').textContent));
   }
+  // Keep in step with apcam_upload_folder_valid() in include/apcam/network.h.
+  const uploadFolder = text => text === '' || (text.length < 150 && !/^[-\/ ]| $/.test(text) && !/[^\x20-\x7e]|["\\:]/.test(text) &&
+    text.split('/').every(part => part !== '' && part !== '.' && part !== '..'));
   function validate() {
     for (const field of fields) {
       field.setCustomValidity('');
@@ -129,6 +170,7 @@
         if (Number(value('proxy_video' + n + '_port')) && !value('proxy_video' + n + '_name')) invalid(get('proxy_video' + n + '_name'));
       }
     }
+    if (!uploadFolder(value('upload_folder'))) invalid(get('upload_folder'));
     for (const field of fields) {
       const bad = !field.validity.valid && (attempted || touched.has(field));
       const error = document.getElementById(field.id + '-error');
