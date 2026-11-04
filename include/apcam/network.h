@@ -116,4 +116,37 @@ static inline bool apcam_network_valid(const char *primary, const char *secondar
     }
     return true;
 }
+/* The rclone remote the web page stores the Google Drive credentials under. */
+#define APCAM_UPLOAD_REMOTE_NAME "gdrive"
+/* True if text is blank or a Google Drive folder: printable ASCII without
+ * quotes, backslashes or colons, not starting with - (rclone would read an
+ * option) or /, with no leading or trailing space and no empty, "." or ".."
+ * path components. A colon is refused so a "gdrive:Folder" typed from the old
+ * format is noticed. */
+#define APCAM_UPLOAD_FOLDER_SIZE 150 /* keep equal to ca_config.upload_folder; "gdrive:" plus it fits the uploader remote */
+static inline bool apcam_upload_folder_valid(const char *text)
+{
+    size_t length = strlen(text);
+    if (length >= APCAM_UPLOAD_FOLDER_SIZE)
+        return false;
+    if (!length)
+        return true;
+    if (text[0] == '-' || text[0] == '/' || text[0] == ' ' || text[length - 1] == ' ')
+        return false;
+    size_t component = 0; /* length of the path component being read */
+    for (const char *p = text;; p++) {
+        if (*p == '/' || !*p) {
+            if (!component || (component == 1 && p[-1] == '.') || (component == 2 && p[-1] == '.' && p[-2] == '.'))
+                return false;
+            component = 0;
+            if (!*p)
+                break;
+            continue;
+        }
+        if ((unsigned char)*p < 0x20 || (unsigned char)*p > 0x7e || *p == '"' || *p == '\\' || *p == ':')
+            return false;
+        component++;
+    }
+    return true;
+}
 #endif

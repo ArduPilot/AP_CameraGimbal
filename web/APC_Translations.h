@@ -654,6 +654,58 @@ enum string_id {
     S_BUNDLE_CAMERA,
     S_BUNDLE_WEB,
     S_BUNDLE_STATE,
+    S_PARAMS_UPLOAD,
+    S_P_UPLOAD_ENABLE,
+    S_H_UPLOAD_ENABLE,
+    S_P_UPLOAD_FOLDER,
+    S_H_UPLOAD_FOLDER,
+    S_P_UPLOAD_WHAT,
+    S_H_UPLOAD_WHAT,
+    S_UPLOAD_PHOTOS,
+    S_UPLOAD_RECORDINGS,
+    S_UPLOAD_BOTH,
+    S_P_UPLOAD_AFTER,
+    S_H_UPLOAD_AFTER,
+    S_UPLOAD_KEEP,
+    S_UPLOAD_DELETE,
+    S_UPLOAD_DELETE_LOW,
+    S_P_UPLOAD_LOW_SPACE,
+    S_H_UPLOAD_LOW_SPACE,
+    S_P_UPLOAD_BANDWIDTH,
+    S_H_UPLOAD_BANDWIDTH,
+    S_P_UPLOAD_SCAN,
+    S_H_UPLOAD_SCAN,
+    S_UPLOAD_STATUS,
+    S_UPLOAD_NO_STATUS,
+    S_UPLOAD_STATE,
+    S_UPLOAD_STATE_DISABLED,
+    S_UPLOAD_STATE_WAITING,
+    S_UPLOAD_STATE_RUNNING,
+    S_UPLOAD_STATE_STOPPING,
+    S_UPLOAD_STATE_BACKOFF,
+    S_UPLOAD_PROGRESS,
+    S_UPLOAD_PROGRESS_PERCENT,
+    S_UPLOAD_CHECKING,
+    S_UPLOAD_LAST_SUCCESS,
+    S_UPLOAD_NEVER,
+    S_UPLOAD_LAST_ERROR,
+    S_UPLOAD_CRED_HEADING,
+    S_UPLOAD_CRED_HELP,
+    S_UPLOAD_CRED_SAVED_FOR,
+    S_UPLOAD_CRED_NONE,
+    S_UPLOAD_CRED_ID,
+    S_UPLOAD_CRED_SECRET,
+    S_UPLOAD_CRED_TOKEN,
+    S_UPLOAD_CRED_SAVE,
+    S_UPLOAD_CRED_REMOVE,
+    S_UPLOAD_CRED_SAVED,
+    S_UPLOAD_CRED_REPLACE,
+    S_UPLOAD_CRED_REMOVED,
+    S_UPLOAD_NOW,
+    S_UPLOAD_NOW_SENT,
+    S_UPLOAD_NOW_FAILED,
+    S_UPLOAD_CRED_INVALID,
+    S_UPLOAD_CRED_FAILED,
     S_COUNT
 };
 
@@ -1337,6 +1389,58 @@ static constexpr Translations translations = [] {
     result[S_BUNDLE_CAMERA] = {"Running camera bundle", "运行中的相机程序包", "実行中のカメラパッケージ"};
     result[S_BUNDLE_WEB] = {"Running web bundle", "运行中的网页程序包", "実行中のウェブパッケージ"};
     result[S_BUNDLE_STATE] = {"Application update", "应用程序更新", "アプリの更新"};
+    result[S_PARAMS_UPLOAD] = {"Cloud Upload", "云端上传", "クラウドアップロード"};
+    result[S_P_UPLOAD_ENABLE] = {"Upload to cloud", "上传到云端", "クラウドへアップロード"};
+    result[S_H_UPLOAD_ENABLE] = {"Copies photos and recordings to your cloud storage with rclone, only while the camera is not recording and the vehicle is not armed. Needs the credentials above and a folder. Applies without restarting.", "使用 rclone 将照片和录像复制到您的云存储，仅在相机未录像且飞行器未解锁时进行。需要上方的凭据和文件夹。无需重启即可生效。", "rclone を使って写真と録画をクラウドストレージにコピーします。カメラが録画中でなく、機体がアームされていないときのみ実行されます。上の認証情報とフォルダー名が必要です。再起動なしで反映されます。"};
+    result[S_P_UPLOAD_FOLDER] = {"Google Drive folder", "Google Drive 文件夹", "Google Drive のフォルダー"};
+    result[S_H_UPLOAD_FOLDER] = {"Name of the folder in your Google Drive, for example AP_CameraGimbal (it is created if needed, and may include subfolders such as Camera/Pics). Photos go to a photos folder and recordings to a recordings folder inside it. Needs the credentials above.", "您的 Google Drive 中的文件夹名称，例如 AP_CameraGimbal（如不存在会自动创建，可包含子文件夹，如 Camera/Pics）。照片保存到其中的 photos 文件夹，录像保存到 recordings 文件夹。需要上方的凭据。", "Google Drive 内のフォルダー名です（例: AP_CameraGimbal）。存在しない場合は作成され、Camera/Pics のようにサブフォルダーも指定できます。写真はその中の photos フォルダー、録画は recordings フォルダーに保存されます。上の認証情報が必要です。"};
+    result[S_P_UPLOAD_WHAT] = {"What to upload", "上传内容", "アップロード対象"};
+    result[S_H_UPLOAD_WHAT] = {"Photos, recordings, or both.", "照片、录像或两者。", "写真、録画、またはその両方。"};
+    result[S_UPLOAD_PHOTOS] = {"Photos", "照片", "写真"};
+    result[S_UPLOAD_RECORDINGS] = {"Recordings", "录像", "録画"};
+    result[S_UPLOAD_BOTH] = {"Photos and recordings", "照片和录像", "写真と録画"};
+    result[S_P_UPLOAD_AFTER] = {"After uploading", "上传后", "アップロード後"};
+    result[S_H_UPLOAD_AFTER] = {"Keep the local copy, delete it once the upload has been verified, or delete it only when a check starts with free space below the low space limit (then every file uploaded in that check is deleted).", "保留本地副本、在验证上传成功后删除，或仅当某次检查开始时可用空间低于下方限制时删除（此时该次检查上传的所有文件都会被删除）。", "ローカルのコピーを残す、アップロードの確認後に削除する、またはチェック開始時の空き容量が下の下限を下回っているときだけ削除します（その場合、そのチェックでアップロードしたすべてのファイルが削除されます）。"};
+    result[S_UPLOAD_KEEP] = {"Keep local copy", "保留本地副本", "ローカルのコピーを残す"};
+    result[S_UPLOAD_DELETE] = {"Delete local copy", "删除本地副本", "ローカルのコピーを削除"};
+    result[S_UPLOAD_DELETE_LOW] = {"Delete only when space is low", "仅在空间不足时删除", "空き容量が少ないときだけ削除"};
+    result[S_P_UPLOAD_LOW_SPACE] = {"Low space limit (%)", "空间不足下限 (%)", "空き容量の下限 (%)"};
+    result[S_H_UPLOAD_LOW_SPACE] = {"Free space below this percentage counts as low.", "可用空间低于此百分比即视为不足。", "空き容量がこの割合を下回ると少ないと見なします。"};
+    result[S_P_UPLOAD_BANDWIDTH] = {"Speed limit (KiB/s)", "速度限制 (KiB/s)", "速度制限 (KiB/s)"};
+    result[S_H_UPLOAD_BANDWIDTH] = {"Maximum upload speed in kibibytes per second. 0 means no limit.", "最大上传速度，单位 KiB/s。0 表示不限制。", "最大アップロード速度（KiB/s）。0 は無制限です。"};
+    result[S_P_UPLOAD_SCAN] = {"Check for new files (minutes)", "检查新文件的间隔（分钟）", "新しいファイルの確認間隔（分）"};
+    result[S_H_UPLOAD_SCAN] = {"How often to look for new files while idle. Recording ending or the vehicle disarming also triggers a check.", "空闲时检查新文件的频率。录像结束或飞行器上锁时也会触发检查。", "待機中に新しいファイルを確認する間隔。録画の終了や機体のディスアームでも確認します。"};
+    result[S_UPLOAD_STATUS] = {"Upload status", "上传状态", "アップロードの状態"};
+    result[S_UPLOAD_NO_STATUS] = {"Not available: the camera app is stopped or has not reported yet.", "不可用：相机应用已停止或尚未报告。", "利用できません: カメラアプリが停止しているか、まだ報告していません。"};
+    result[S_UPLOAD_STATE] = {"State", "状态", "状態"};
+    result[S_UPLOAD_STATE_DISABLED] = {"Disabled", "已禁用", "無効"};
+    result[S_UPLOAD_STATE_WAITING] = {"Waiting", "等待中", "待機中"};
+    result[S_UPLOAD_STATE_RUNNING] = {"Uploading", "正在上传", "アップロード中"};
+    result[S_UPLOAD_STATE_STOPPING] = {"Stopping", "正在停止", "停止中"};
+    result[S_UPLOAD_STATE_BACKOFF] = {"Failed, will try again", "失败，稍后重试", "失敗しました。再試行します"};
+    result[S_UPLOAD_PROGRESS_PERCENT] = {"Uploading %lu of %lu (%u%%)", "正在上传 %lu / %lu（%u%%）", "アップロード中 %lu / %lu（%u%%）"};
+    result[S_UPLOAD_CHECKING] = {"Checking for new files", "正在检查新文件", "新しいファイルを確認中"};
+    result[S_UPLOAD_PROGRESS] = {"Uploading %lu of %lu", "正在上传 %lu / %lu", "アップロード中 %lu / %lu"};
+    result[S_UPLOAD_LAST_SUCCESS] = {"Last complete check", "上次完成检查", "前回の完了した確認"};
+    result[S_UPLOAD_NEVER] = {"never", "从未", "なし"};
+    result[S_UPLOAD_LAST_ERROR] = {"Last error", "上次错误", "前回のエラー"};
+    result[S_UPLOAD_CRED_HEADING] = {"Google Drive credentials", "Google Drive 凭据", "Google Drive の認証情報"};
+    result[S_UPLOAD_CRED_HELP] = {"You create your own credentials: a Google Cloud project with the Drive API enabled and an OAuth client ID, then run rclone authorize \"drive\" \"CLIENT_ID\" \"CLIENT_SECRET\" on a computer with a browser and paste the token it prints here. Step-by-step instructions are in the Cloud upload section of the Raspberry Pi README. The secret and token are stored on this device in a file only the camera software can read, and are never shown again.", "您需要自行创建凭据：启用 Drive API 的 Google Cloud 项目和 OAuth 客户端 ID，然后在带浏览器的电脑上运行 rclone authorize \"drive\" \"CLIENT_ID\" \"CLIENT_SECRET\"，并将打印的令牌粘贴到此处。详细步骤见树莓派 README 的 Cloud upload 部分。密钥和令牌保存在本设备上仅相机软件可读的文件中，不会再次显示。", "認証情報はご自身で作成します。Drive API を有効にした Google Cloud プロジェクトと OAuth クライアント ID を用意し、ブラウザのあるコンピューターで rclone authorize \"drive\" \"CLIENT_ID\" \"CLIENT_SECRET\" を実行して、表示されたトークンをここに貼り付けます。手順は Raspberry Pi の README の Cloud upload にあります。シークレットとトークンはこのデバイス上のカメラソフトだけが読めるファイルに保存され、再表示されません。"};
+    result[S_UPLOAD_CRED_SAVED_FOR] = {"Credentials saved for remote gdrive.", "已为远程位置 gdrive 保存凭据。", "リモート gdrive の認証情報が保存されています。"};
+    result[S_UPLOAD_CRED_NONE] = {"No credentials saved yet.", "尚未保存凭据。", "認証情報はまだ保存されていません。"};
+    result[S_UPLOAD_CRED_ID] = {"Client ID", "客户端 ID", "クライアント ID"};
+    result[S_UPLOAD_CRED_SECRET] = {"Client secret", "客户端密钥", "クライアントシークレット"};
+    result[S_UPLOAD_CRED_TOKEN] = {"Token from rclone authorize", "rclone authorize 输出的令牌", "rclone authorize のトークン"};
+    result[S_UPLOAD_CRED_SAVE] = {"Save credentials", "保存凭据", "認証情報を保存"};
+    result[S_UPLOAD_CRED_REMOVE] = {"Remove credentials", "删除凭据", "認証情報を削除"};
+    result[S_UPLOAD_CRED_SAVED] = {"Credentials saved. Now enter a Google Drive folder name below.", "凭据已保存。请在下方输入 Google Drive 文件夹名称。", "認証情報を保存しました。下に Google Drive のフォルダー名を入力してください。"};
+    result[S_UPLOAD_CRED_REPLACE] = {"Saved; enter a new one to replace it", "已保存；输入新的内容可替换", "保存済み。置き換えるには新しく入力してください"};
+    result[S_UPLOAD_NOW] = {"Upload now", "立即上传", "今すぐアップロード"};
+    result[S_UPLOAD_NOW_SENT] = {"Upload requested. It starts at once unless the camera is recording, the vehicle is armed or the camera app has only just started.", "已请求上传。除非相机正在录像、飞行器已解锁或相机应用刚刚启动，否则会立即开始。", "アップロードを要求しました。録画中、機体がアーム中、またはカメラアプリが起動直後でなければ、すぐに開始します。"};
+    result[S_UPLOAD_NOW_FAILED] = {"Cannot request an upload: %s", "无法请求上传：%s", "アップロードを要求できません: %s"};
+    result[S_UPLOAD_CRED_REMOVED] = {"Credentials removed.", "凭据已删除。", "認証情報を削除しました。"};
+    result[S_UPLOAD_CRED_INVALID] = {"Enter the client ID, the client secret and the token (a single line starting with { ).", "请输入客户端 ID、客户端密钥和令牌（以 { 开头的单行内容）。", "クライアント ID、クライアントシークレット、トークン（{ で始まる1行）を入力してください。"};
+    result[S_UPLOAD_CRED_FAILED] = {"Cannot save credentials: %s", "无法保存凭据：%s", "認証情報を保存できません: %s"};
     return result;
 }();
 /* ---- end of user-visible strings ---- */
