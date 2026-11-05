@@ -214,7 +214,7 @@ A8_HOST_SOURCES := $(filter-out src/backends/mt11/control.cpp \
 # RPi target with stub media, for host tests of its MAVLink behaviour.
 RPI_HOST_TARGET := tests/camera-app-rpi-host
 RPI_HOST_SOURCES := $(filter-out $(CONTROL_DIR)/control.cpp src/protocol/unigcs.cpp,$(COMMON_SOURCES)) \
-	src/backends/caddx/control.cpp src/media/stub.cpp
+	src/backends/caddx/control.cpp src/media/stub.cpp src/opticalflow/optical_flow.cpp
 SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sitl)
 SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
 SITL_OBJDIR ?= build/$(SITL_VARIANT)
@@ -305,7 +305,7 @@ A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
 ARM_APP_OBJECTS := $(patsubst %.cpp,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURCES) \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
-	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
+	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp $(OPTICAL_FLOW_SOURCES)) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
 OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
 $(TARGET): Makefile $(OBJECTS)
@@ -313,9 +313,11 @@ $(TARGET): Makefile $(OBJECTS)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
-		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS))
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS) $(OPENCV_LIBS))
 
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
+build/rpi_libcam_caddx/c/src/opticalflow/flow_lk.o: CPPFLAGS += $(OPENCV_ISYSTEM)
+build/rpi_libcam_caddx/c/src/opticalflow/flow_lk.o: override CXXFLAGS += -fexceptions
 # Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS += -std=gnu++20
 
@@ -479,9 +481,9 @@ $(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src
 		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
 
 $(RPI_HOST_TARGET): CAMERA_BACKEND=rpi_libcam_caddx
-$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS)
+$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) build/host/flow_lk.o $(MAVLINK_DEPS)
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
+	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) $(OPENCV_LIBS) -lm -lpthread
 
 build/host/flow_lk.o: src/opticalflow/flow_lk.cpp include/camera_app/optical_flow.h
 	mkdir -p $(@D)

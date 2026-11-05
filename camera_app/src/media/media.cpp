@@ -172,6 +172,9 @@ void APC_Media::_stop_controls_monitor()
 {
     _tracking.stop();
     _tracking.close();
+#if APCAM_HAVE_OPTICAL_FLOW
+    _flow.close();
+#endif
     if (!_controls_running && !_exposure_running) return;
     {
         APC_LockGuard guard(_controls_lock);
@@ -188,6 +191,10 @@ void APC_Media::_start_controls_monitor()
 {
     if (!_backend || _controls_running || _exposure_running) return;
     (void)_tracking.open(_backend.get());
+#if APCAM_HAVE_OPTICAL_FLOW
+    _flow.configure(_config.settings.optical_flow);
+    (void)_flow.open(_backend.get(), _backend->hfov(false));
+#endif
     _controls_stop=false;
     _cached_thermal=false;
     int error = pthread_create(&_exposure_thread, nullptr, [](void *opaque) -> void * {
@@ -356,8 +363,8 @@ int APC_Media::configure(const struct ca_config *settings)
             errno = saved_errno ? saved_errno : EIO;
             return -1;
         }
-        _start_controls_monitor();
         _config = next;
+        _start_controls_monitor();
         return 0;
     }
     if (!ca_config_image_equal(old, settings)) {
@@ -388,6 +395,9 @@ int APC_Media::configure(const struct ca_config *settings)
         return -1;
     }
     _config.settings = *settings;
+#if APCAM_HAVE_OPTICAL_FLOW
+    _flow.configure(settings->optical_flow);
+#endif
     return 0;
 #endif
 }
@@ -630,6 +640,14 @@ ca_tracking_status ca_media_tracking_status(ca_media *media)
 { return media?media->tracking().status():ca_tracking_status{}; }
 void ca_media_tracking_update(ca_media *media, ca_backend *backend, bool manual)
 { if(media) media->tracking().update(backend,manual,media->hfov(media->thermal_main())); }
+#if APCAM_HAVE_OPTICAL_FLOW
+void ca_media_flow_update(ca_media *media, ca_backend *backend)
+{ if(media) media->optical_flow().update(backend); }
+bool ca_media_flow_poll(ca_media *media, ca_flow_sample *sample)
+{ return media && sample && media->optical_flow().poll(*sample); }
+ca_flow_state ca_media_flow_state(ca_media *media)
+{ return media ? media->optical_flow().state() : CA_FLOW_STATE_OFF; }
+#endif
 int ca_media_configure(struct ca_media *media, const struct ca_config *settings)
 {
     if (!media) { errno = EINVAL; return -1; }

@@ -3,6 +3,9 @@
 #include "apcam/APC_Camera.h"
 #include "apcam/APC_Resource.h"
 #include "camera_app/APC_Tracking.h"
+#if APCAM_HAVE_OPTICAL_FLOW
+#include "camera_app/APC_OpticalFlow.h"
+#endif
 
 // Stable owner used by protocol callbacks while the underlying image pipeline
 // changes. Diagnostic workers are joined before replacement and destruction.
@@ -53,6 +56,9 @@ public:
     int set_thermal_palette(uint8_t palette);
     int set_inverted(bool inverted);
     APC_Tracking &tracking() { return _tracking; }
+#if APCAM_HAVE_OPTICAL_FLOW
+    APC_OpticalFlow &optical_flow() { return _flow; }
+#endif
 private:
     bool _autorecord_pending=false;
     uint64_t _autorecord_next=0, _autorecord_deadline=0;
@@ -73,6 +79,9 @@ private:
     const APC_Camera &_camera = APC_Camera::get_singleton();
     std::unique_ptr<APC_Media_Backend> _backend;
     APC_Tracking _tracking;
+#if APCAM_HAVE_OPTICAL_FLOW
+    APC_OpticalFlow _flow;
+#endif
     ca_media_config _config {};
     bool _inverted = false;
     uint8_t _cached_gain = 0, _cached_palette = 0;
