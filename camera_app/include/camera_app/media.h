@@ -23,6 +23,13 @@ int ca_media_tracking_start(struct ca_media *media, ca_tracking_rect rect, ca_tr
 void ca_media_tracking_stop(struct ca_media *media, ca_tracking_owner owner=CA_TRACK_OWNER_NONE);
 ca_tracking_status ca_media_tracking_status(struct ca_media *media);
 void ca_media_tracking_update(struct ca_media *media, struct ca_backend *backend, bool manual);
+#if APCAM_HAVE_OPTICAL_FLOW
+struct ca_flow_sample;
+enum ca_flow_state : uint8_t;
+void ca_media_flow_update(struct ca_media *media, struct ca_backend *backend);
+bool ca_media_flow_poll(struct ca_media *media, struct ca_flow_sample *sample);
+enum ca_flow_state ca_media_flow_state(struct ca_media *media);
+#endif
 
 enum ca_media_lens {
     CA_MEDIA_LENS_WIDE = 0,

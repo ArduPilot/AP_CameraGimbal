@@ -183,8 +183,15 @@ struct ca_survey_config {
     unsigned turn_deg;
 };
 
+struct ca_optical_flow_config {
+    bool enabled;
+    unsigned max_tilt_deg;
+    bool gimbal_check;
+};
+
 struct ca_config {
     struct ca_survey_config survey;
+    struct ca_optical_flow_config optical_flow;
     struct ca_network_config network;
     bool network_capture;
     /* Complete URI advertised for stream 1 on host-OS targets; empty = built

@@ -698,6 +698,9 @@ int APC_CameraApp::run(int argc, char **argv)
         ca_unigcs_update(_unigcs, _backend, _manual.active, _mavlink_server);
 #endif
         ca_media_tracking_update(_media, _backend, _manual.active);
+#if APCAM_HAVE_OPTICAL_FLOW
+        ca_media_flow_update(_media, _backend);
+#endif
         _network_capture.configure(ca_media_settings(_media)->network_capture);
     }
 #ifdef CAMERA_APP_ZT30_RAM

@@ -81,6 +81,10 @@
 #ifndef APCAM_HAVE_UART_DEVICE_OVERRIDE
 #define APCAM_HAVE_UART_DEVICE_OVERRIDE 0
 #endif
+/* Targets with optical flow set this to 1. */
+#ifndef APCAM_HAVE_OPTICAL_FLOW
+#define APCAM_HAVE_OPTICAL_FLOW 0
+#endif
 #ifndef APCAM_LOG_ROOT
 #define APCAM_LOG_ROOT "/mnt/logs"
 #endif
