@@ -69,6 +69,13 @@ MAVLINK_STAMP := build/$(CAMERA_BACKEND)/mavlink-dialect
 MAVLINK_DEPS := $(APCAM_HEADERS) $(MAVLINK_HEADER) $(MAVLINK_STAMP) include/camera_app/mavlink.h
 MAVLINK_CPPFLAGS := -I$(MAVLINK_GEN_DIR) -DCA_MAVLINK_DIALECT=$(MAVLINK_DIALECT)
 
+# Optical flow: OpenCV from Raspberry Pi OS libopencv-dev.
+PKG_CONFIG ?= pkg-config
+OPENCV_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags opencv4)
+OPENCV_LIBS ?= -lopencv_video -lopencv_imgproc -lopencv_core
+OPENCV_ISYSTEM = $(patsubst -I%,-isystem %,$(OPENCV_CFLAGS))
+OPTICAL_FLOW_SOURCES := src/opticalflow/optical_flow.cpp src/opticalflow/flow_lk.cpp
+
 # rpi_libcam_caddx combines the Raspberry Pi media backend with the CADDX gimbal.
 ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
 BACKEND_DIR := src/backends/rpi_libcam
@@ -475,6 +482,10 @@ $(RPI_HOST_TARGET): CAMERA_BACKEND=rpi_libcam_caddx
 $(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS)
 	$(call progress,Linking $@)
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
+
+build/host/flow_lk.o: src/opticalflow/flow_lk.cpp include/camera_app/optical_flow.h
+	mkdir -p $(@D)
+	$(HOST_CXX) $(DEPFLAGS) -Iinclude $(OPENCV_ISYSTEM) $(APP_CXXFLAGS) -fexceptions -c $< -o $@
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
