@@ -7,6 +7,7 @@
 #include <memory>
 #include <cerrno>
 #include <cmath>
+struct ca_flow_frame;
 
 // Image pipeline only. Gimbal transport/control remains a separate backend.
 // A backend owns its SDK, capture workers and stream/recording resources. The
@@ -58,6 +59,9 @@ public:
     virtual bool tracking_frame(ca_tracking_frame &) { return false; }
     // Main thread. nullptr removes the tracking box.
     virtual void tracking_overlay(const ca_tracking_status *) {}
+    virtual bool flow_available() const { return false; }
+    // Optical flow worker: the luma of the next frame's centre crop.
+    virtual bool flow_frame(ca_flow_frame &, unsigned /*timeout_ms*/) { return false; }
 protected:
     APC_Media_Backend() = default;
 };

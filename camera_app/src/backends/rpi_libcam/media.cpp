@@ -13,6 +13,7 @@
 #include "camera_app/video_metadata.h"
 #include "camera_app/log.h"
 #include "camera_app/still.h"
+#include "camera_app/optical_flow.h"
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -94,6 +95,8 @@ public:
     int exposure(unsigned lens, struct ca_exposure *sample) override;
     int apply_overlay(const struct ca_config *settings) override;
     int apply_image(const struct ca_config *settings) override;
+    bool flow_available() const override { return _state && _state->pipeline; }
+    bool flow_frame(ca_flow_frame &frame, unsigned timeout_ms) override;
 private:
     APC_Media_RPiLibcam() = default;
     int init(const ca_media_config *config);
@@ -296,6 +299,24 @@ int APC_Media_RPiLibcam::exposure(unsigned lens, struct ca_exposure *s)
     if (now < cached.time_us || now - cached.time_us > 1000000U) return -ETIMEDOUT;
     *s = cached;
     return s->result;
+}
+
+bool APC_Media_RPiLibcam::flow_frame(ca_flow_frame &frame, unsigned timeout_ms)
+{
+    auto *m = _state;
+    const ca_flow_crop crop = ca_flow_crop_of(m->width, m->height);
+    if (crop.width > CA_FLOW_MAX_WIDTH || crop.height > CA_FLOW_MAX_HEIGHT) {
+        static atomic_bool warned;
+        if (!atomic_exchange(&warned, true))
+            ca_log("RPi optical flow needs %ux%u or smaller video", CA_FLOW_MAX_SOURCE_WIDTH, CA_FLOW_MAX_SOURCE_HEIGHT);
+        usleep(timeout_ms * 1000U);
+        return false;
+    }
+    if (ca_rpi_pipeline_grab_luma(m->pipeline, crop.x, crop.y, crop.width, crop.height,
+                                  frame.pixels, &frame.timestamp_us, timeout_ms) < 0) return false;
+    frame.width = crop.width; frame.height = crop.height;
+    frame.source_width = m->width; frame.source_height = m->height;
+    return true;
 }
 
 int APC_Media_RPiLibcam::apply_overlay(const struct ca_config *settings)
