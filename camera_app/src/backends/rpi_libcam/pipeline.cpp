@@ -82,6 +82,16 @@ struct ca_rpi_pipeline {
     bool still_done = false;
     atomic_bool still_wanted; /* lock-free check on every frame */
 
+    /* Optical flow: a luma rectangle, handed over like a still. */
+    pthread_cond_t luma_ready;
+    struct luma_request {
+        unsigned x, y, width, height;
+        uint8_t *out;
+        uint64_t timestamp_us;
+        bool done, valid;
+    } *luma = nullptr;
+    atomic_bool luma_wanted; /* lock-free check on every frame */
+
     /* Sensor mode switch for larger stills: video frames stop going to the
      * encoder while paused; still_mode routes completed requests to the
      * still capture. The encoder must return every camera buffer before
@@ -202,6 +212,42 @@ static void copy_still(struct ca_rpi_pipeline *p, unsigned index, FrameBuffer *b
     pthread_mutex_unlock(&p->lock);
 }
 
+/* libcamera's thread. The request is claimed under the lock and copied
+ * without it, so the encoder thread never waits for the copy. */
+static void copy_luma(struct ca_rpi_pipeline *p, unsigned index, FrameBuffer *buffer, uint64_t timestamp_us)
+{
+    pthread_mutex_lock(&p->lock);
+    auto *request = p->luma;
+    p->luma = nullptr;
+    pthread_mutex_unlock(&p->lock);
+    if (!request) return;
+    const auto planes = buffer->planes();
+    bool valid = index < p->mapped.size() && p->mapped[index] && !planes.empty();
+    if (valid) {
+        const StreamConfiguration &stream = p->stream->configuration();
+        const size_t stride = stream.stride;
+        const size_t last = planes[0].offset + (size_t)(request->y + request->height - 1U) * stride +
+                            request->x + request->width;
+        valid = request->x + request->width <= stream.size.width &&
+                request->y + request->height <= stream.size.height &&
+                last <= p->mapped_length[index] && last <= planes[0].offset + planes[0].length;
+        if (valid) {
+            const int fd = planes[0].fd.get();
+            const uint8_t *in = p->mapped[index] + planes[0].offset + (size_t)request->y * stride + request->x;
+            dmabuf_sync(fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+            for (unsigned row = 0; row < request->height; row++)
+                memcpy(request->out + (size_t)row * request->width, in + row * stride, request->width);
+            dmabuf_sync(fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+        }
+    }
+    pthread_mutex_lock(&p->lock);
+    request->valid = valid;
+    request->timestamp_us = timestamp_us;
+    request->done = true;
+    pthread_cond_signal(&p->luma_ready);
+    pthread_mutex_unlock(&p->lock);
+}
+
 /* Frames delivered after a still configuration starts with locked controls:
  * take the first whose exposure matches, or the last if it never settles. */
 #define RPI_STILL_SETTLE_FRAMES 6U
@@ -259,6 +305,7 @@ static void request_complete(struct ca_rpi_pipeline *p, Request *request)
     const auto sensor_ns = request->metadata().get(controls::SensorTimestamp);
     const uint64_t timestamp_us = sensor_ns ? (uint64_t)*sensor_ns / 1000U : monotonic_us();
     if (atomic_load(&p->still_wanted)) copy_still(p, (unsigned)request->cookie(), buffer, timestamp_us);
+    if (atomic_load(&p->luma_wanted)) copy_luma(p, (unsigned)request->cookie(), buffer, timestamp_us);
 
     struct v4l2_plane plane = {};
     struct v4l2_buffer v = {};
@@ -603,6 +650,7 @@ int ca_rpi_pipeline_open(struct ca_rpi_pipeline **out, const struct ca_rpi_pipel
     p->config = *config;
     atomic_init(&p->stop, false);
     atomic_init(&p->still_wanted, false);
+    atomic_init(&p->luma_wanted, false);
     atomic_init(&p->paused, false);
     atomic_init(&p->still_mode, false);
     atomic_init(&p->encoder_queued, 0);
@@ -612,6 +660,7 @@ int ca_rpi_pipeline_open(struct ca_rpi_pipeline **out, const struct ca_rpi_pipel
     pthread_condattr_init(&condattr);
     pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC);
     pthread_cond_init(&p->still_ready, &condattr);
+    pthread_cond_init(&p->luma_ready, &condattr);
     pthread_condattr_destroy(&condattr);
     if (start(p) < 0) {
         int saved = errno ? errno : EIO;
@@ -678,6 +727,7 @@ void ca_rpi_pipeline_close(struct ca_rpi_pipeline *p)
     if (p->manager) p->manager->stop();
     p->manager.reset();
     pthread_cond_destroy(&p->still_ready);
+    pthread_cond_destroy(&p->luma_ready);
     pthread_mutex_destroy(&p->video_lock);
     pthread_mutex_destroy(&p->lock);
     delete p;
@@ -717,6 +767,32 @@ int ca_rpi_pipeline_grab_still(struct ca_rpi_pipeline *p, struct ca_rpi_still_fr
         errno = ETIMEDOUT;
         return -1;
     }
+    return 0;
+}
+
+int ca_rpi_pipeline_grab_luma(struct ca_rpi_pipeline *p, unsigned x, unsigned y, unsigned width,
+                              unsigned height, uint8_t *out, uint64_t *timestamp_us, unsigned timeout_ms)
+{
+    if (!p || !out || !width || !height) { errno = EINVAL; return -1; }
+    struct ca_rpi_pipeline::luma_request request = {x, y, width, height, out, 0, false, false};
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += timeout_ms / 1000U;
+    deadline.tv_nsec += (long)(timeout_ms % 1000U) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&p->lock);
+    p->luma = &request;
+    atomic_store(&p->luma_wanted, true);
+    int error = 0;
+    while (!request.done && error == 0) error = pthread_cond_timedwait(&p->luma_ready, &p->lock, &deadline);
+    /* Claimed by copy_luma(): the copy is under way. */
+    while (!request.done && p->luma != &request) pthread_cond_wait(&p->luma_ready, &p->lock);
+    p->luma = nullptr;
+    atomic_store(&p->luma_wanted, false);
+    pthread_mutex_unlock(&p->lock);
+    if (!request.done) { errno = ETIMEDOUT; return -1; }
+    if (!request.valid) { errno = EINVAL; return -1; }
+    if (timestamp_us) *timestamp_us = request.timestamp_us;
     return 0;
 }
 
