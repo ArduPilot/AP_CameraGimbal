@@ -30,6 +30,8 @@ function mp4Track({
   edits = [],
   composition = [80, -40, 0],
   zeroRuns = false,
+  sizes = null,
+  durations = null,
 } = {}) {
   const tkhd = full('tkhd', 0, n32(0), n32(0), n32(1), zeros(64));
   const mdhd = full('mdhd', 0, n32(0), n32(0), n32(1000), n32(10000));
@@ -39,17 +41,21 @@ function mp4Track({
   new DataView(fields.buffer).setUint16(26, 512);
   const avcC = hex('0142001effe100056742001e800100026880');
   const stsd = full('stsd', 0, n32(1), box('avc1', fields, box('avcC', avcC)));
-  const stsz = full('stsz', 0, n32(packet.length), n32(fragmented ? 0 : count));
-  const stts = full(
-    'stts',
-    0,
-    n32(fragmented ? 0 : zeroRuns ? 4 : 1),
-    ...(fragmented
-      ? []
-      : zeroRuns
-        ? [n32(0), n32(999), n32(1), n32(40), n32(0), n32(888), n32(count - 1), n32(40)]
-        : [n32(count), n32(40)]),
-  );
+  const stsz = sizes
+    ? full('stsz', 0, n32(0), n32(sizes.length), ...sizes.map(n32))
+    : full('stsz', 0, n32(packet.length), n32(fragmented ? 0 : count));
+  const stts = durations
+    ? full('stts', 0, n32(durations.length), ...durations.flatMap((d) => [n32(1), n32(d)]))
+    : full(
+        'stts',
+        0,
+        n32(fragmented ? 0 : zeroRuns ? 4 : 1),
+        ...(fragmented
+          ? []
+          : zeroRuns
+            ? [n32(0), n32(999), n32(1), n32(40), n32(0), n32(888), n32(count - 1), n32(40)]
+            : [n32(count), n32(40)]),
+      );
   const tables = fragmented
     ? []
     : [
@@ -169,7 +175,61 @@ test('classic MP4 co64 seeks above 2GiB; signed B-frame PTS stays distinct from 
   assert.ok(file.total < 20000, `read ${file.total}`);
 });
 
-function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
+test('empty MP4 samples are skipped but keep their time, as SkyViper recordings have', async () => {
+  // the SkyViper's recorder keeps a constant frame rate by writing
+  // empty samples for the frames its encoder missed
+  const track = () =>
+    mp4Track({ count: 4, sizes: [6, 0, 0, 6], composition: [0, 0, 0, 0], offset });
+  let offset = 0;
+  const header = join(box('ftyp', encode('isom'), n32(0)), movie(track()));
+  offset = header.length + 8;
+  const file = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(track()),
+    box('mdat', packet, packet),
+  );
+  const { source } = await indexAll(new Blob([file]));
+  assert.deepEqual(
+    source.frames.map((f) => f.pts),
+    [0, 0.12],
+  );
+  assert.deepEqual(await source.readPacket(source.frames[1]), packet);
+});
+
+test('an empty first MP4 sample does not set the default frame duration', async () => {
+  const track = () =>
+    mp4Track({
+      count: 3,
+      sizes: [0, 6, 6],
+      durations: [0, 40, 40],
+      composition: [0, 0, 0],
+      offset,
+    });
+  let offset = 0;
+  offset = join(box('ftyp', encode('isom'), n32(0)), movie(track())).length + 8;
+  const file = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(track()),
+    box('mdat', packet, packet),
+  );
+  const { source } = await indexAll(new Blob([file]));
+  assert.deepEqual(
+    source.frames.map((f) => f.pts),
+    [0, 0.04],
+  );
+  assert.equal(source.tracks[0].defaultDuration, 0.04);
+});
+
+function fragmentedMP4(
+  repeat = 1,
+  samplePayload = packet,
+  edits = [],
+  {
+    sizes = [samplePayload.length, samplePayload.length],
+    durations = [40, 40],
+    flags = [0, 0x10000],
+  } = {},
+) {
   const prefix = join(
     box('ftyp', encode('isom'), n32(0)),
     movie(
@@ -177,7 +237,7 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
       box('mvex', full('trex', 0, n32(1), n32(1), n32(40), n32(samplePayload.length), n32(0))),
     ),
   );
-  const payload = join(samplePayload, samplePayload);
+  const payload = join(...sizes.filter((n) => n).map(() => samplePayload));
   function fragment(pts) {
     const tfhd = full('tfhd', 0x020000, n32(1));
     const tfdt = full('tfdt', 0x01000000, n64(pts));
@@ -187,13 +247,13 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
         0x01000f01,
         n32(2),
         n32(offset),
+        n32(durations[0]),
+        n32(sizes[0]),
+        n32(flags[0]),
         n32(40),
-        n32(samplePayload.length),
-        n32(0),
-        n32(40),
-        n32(40),
-        n32(samplePayload.length),
-        n32(0x10000),
+        n32(durations[1]),
+        n32(sizes[1]),
+        n32(flags[1]),
         n32(-40),
       );
     let moof = box('moof', box('traf', tfhd, tfdt, trun(0)));
@@ -202,6 +262,50 @@ function fragmentedMP4(repeat = 1, samplePayload = packet, edits = []) {
   }
   return join(prefix, ...Array.from({ length: repeat }, (_, i) => fragment(123456 + i * 80)));
 }
+
+test('empty fragmented MP4 samples are skipped but keep their time', async () => {
+  const { source } = await indexAll(
+    new Blob([fragmentedMP4(1, packet, [], { sizes: [0, 6], flags: [0x10000, 0] })]),
+  );
+  assert.equal(source.frames.length, 1);
+  assert.equal(source.frames[0].dts, 123.496);
+  assert.equal(source.frames[0].pts, 123.456);
+  assert.equal(source.frames[0].keyframe, true);
+  assert.deepEqual(await source.readPacket(source.frames[0]), packet);
+
+  const { source: zero } = await indexAll(
+    new Blob([
+      fragmentedMP4(1, packet, [], { sizes: [0, 6], durations: [0, 40], flags: [0x10000, 0] }),
+    ]),
+  );
+  assert.equal(zero.frames[0].dts, 123.456);
+  assert.equal(zero.tracks[0].defaultDuration, 0.04);
+});
+
+test('empty fragmented MP4 samples must give their size of 0 themselves', async () => {
+  // with trex's default sample size 0, a 16-byte trun with no per-sample
+  // fields would otherwise describe a million empty samples
+  const prefix = join(
+    box('ftyp', encode('isom'), n32(0)),
+    movie(
+      mp4Track({ fragmented: true }),
+      box('mvex', full('trex', 0, n32(1), n32(1), n32(40), n32(0), n32(0))),
+    ),
+  );
+  const moof = box(
+    'moof',
+    box(
+      'traf',
+      full('tfhd', 0x020000, n32(1)),
+      full('tfdt', 0x01000000, n64(0)),
+      full('trun', 0, n32(1000000)),
+    ),
+  );
+  await assert.rejects(
+    indexAll(new Blob([join(prefix, moof, box('mdat', packet))])),
+    /Invalid fragmented MP4 sample/,
+  );
+});
 
 test('fragmented MP4 defaults, 64bit tfdt, signed composition, first batch before full scan', async () => {
   const data = fragmentedMP4(100),
@@ -324,6 +428,19 @@ test('unknown thermal FOV never falls back to the nested RGB lens; Matroska AVC 
     ]),
   );
   assert.equal(avc.tracks[0].codecString, 'avc1.640028');
+});
+
+test('Matroska codec IDs ignore the NUL padding GStreamer matroskamux writes', async () => {
+  const { source } = await indexAll(
+    new Blob([
+      thermalMKV({
+        codecId: 'V_MPEG4/ISO/AVC\0',
+        codecPrivate: hex('01640028ffe1000567640028800100026880'),
+      }),
+    ]),
+  );
+  assert.equal(source.tracks[0].codecId, 'V_MPEG4/ISO/AVC');
+  assert.equal(source.tracks[0].codec, 'avc');
 });
 
 test('unknown-size Matroska clusters stop at sibling clusters; lacing is rejected', async () => {
