@@ -71,6 +71,7 @@
 #include "../include/apcam/gimbal_transform.h"
 #include "../include/apcam/manual_control.h"
 #include "../include/apcam/survey_runtime.h"
+#include "../include/apcam/flow_status.h"
 #define SERVER_NAME APCAM_NAME "-web/2.0"
 #define PRODUCT_NAME APCAM_PRODUCT_NAME
 #define WEB_HAVE_THERMAL APCAM_HAVE_THERMAL
@@ -811,6 +812,14 @@ static const struct parameter replacement_parameters[] = {
     {"network_uart_device_override", "network", "uart_device_override", S_P_UART_DEVICE_OVERRIDE, S_H_UART_DEVICE_OVERRIDE,
      PARAM_TEXT, 0, 159, 1, NULL, 0},
 #endif
+#if APCAM_HAVE_OPTICAL_FLOW
+    {"optical_flow_enabled", "optical_flow", "enabled", S_P_FLOW_ENABLED, S_H_FLOW_ENABLED,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"optical_flow_max_tilt_deg", "optical_flow", "max_tilt_deg", S_P_FLOW_MAX_TILT, S_H_FLOW_MAX_TILT,
+     PARAM_INTEGER, 1, 90, 1, NULL, 0},
+    {"optical_flow_gimbal_check", "optical_flow", "gimbal_check", S_P_FLOW_GIMBAL_CHECK, S_H_FLOW_GIMBAL_CHECK,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+#endif
     {"survey_pattern", "survey", "pattern", S_SURV_PATTERN, S_SURV_PATTERN_HELP,
      PARAM_ENUM, 0, 0, 0, survey_patterns, sizeof(survey_patterns)/sizeof(survey_patterns[0])},
     {"survey_lens", "survey", "lens", S_SURV_LENS, S_SURV_LENS_HELP,
@@ -831,13 +840,22 @@ static const struct parameter replacement_parameters[] = {
     {"survey_turn_deg", "survey", "turn_deg", S_SURV_TURN_DEG, S_SURV_TURN_DEG_HELP, PARAM_INTEGER, 5, 45, 1, NULL, 0},
 };
 
-enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_COUNT };
+enum parameter_tab {
+    TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY,
+#if APCAM_HAVE_OPTICAL_FLOW
+    TAB_FLOW,
+#endif
+    TAB_COUNT
+};
 static const struct {
     const char *name;
     enum string_id label;
 } parameter_tabs[TAB_COUNT] = {
     {"system", S_PARAMS_SYSTEM}, {"network", S_PARAMS_NETWORK},
     {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY}, {"survey", S_PARAMS_SURVEY},
+#if APCAM_HAVE_OPTICAL_FLOW
+    {"opticalflow", S_PARAMS_FLOW},
+#endif
 };
 
 static enum parameter_tab parameter_tab(const struct parameter *p)
@@ -846,6 +864,9 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
         !strcmp(p->form_name, "mavlink_tcp_port") || !strcmp(p->form_name, "mavlink_udp_port"))
         return TAB_NETWORK;
     if (!strcmp(p->section, "survey")) return TAB_SURVEY;
+#if APCAM_HAVE_OPTICAL_FLOW
+    if (!strcmp(p->section, "optical_flow")) return TAB_FLOW;
+#endif
     if (!strcmp(p->section, "support_proxy")) return TAB_PROXY;
     if (!strcmp(p->section, "video") || !strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
@@ -891,6 +912,9 @@ static const char *replacement_defaults[] = {
 #endif
 #if APCAM_HAVE_UART_DEVICE_OVERRIDE
     "",
+#endif
+#if APCAM_HAVE_OPTICAL_FLOW
+    "false", "10", "true",
 #endif
     "both", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
 };
@@ -5353,6 +5377,12 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                 page.append("</p>");
             }
 #endif
+#if APCAM_HAVE_OPTICAL_FLOW
+            if (tab == TAB_FLOW)
+                webroot.render(page, "parameters-flow.html",
+                               {T(S_FLOW_LIVE), T(S_FLOW_UPDATE_RATE), T(S_FLOW_XY), T(S_FLOW_RATE_XY),
+                                T(S_FLOW_QUALITY), T(S_FLOW_LIVE_HELP)});
+#endif
             if (tab == TAB_SURVEY) {
                 page.append("<p>Survey tracks fixed ground points using the selected pattern. "
                     "Save settings before starting. Uses uploaded terrain first, with flight-controller terrain as fallback. Requires gimbal ownership.</p>"
@@ -6191,6 +6221,11 @@ static void send_parameters_script(int fd)
         {"ports", T(S_E_PROXY_VIDEO_PORTS)},
         {"network", T(S_E_NETWORK)},
         {"connectionLost", T(S_NETWORK_CONNECTION_LOST)},
+#if APCAM_HAVE_OPTICAL_FLOW
+        {"flowUnavailable", T(S_JS_FLOW_UNAVAILABLE)}, {"flowRunning", T(S_JS_FLOW_RUNNING)},
+        {"flowStopped", T(S_JS_FLOW_STOPPED)}, {"flowNotDown", T(S_JS_FLOW_NOT_DOWN)},
+        {"flowNoFrames", T(S_JS_FLOW_NO_FRAMES)}, {"flowNoFc", T(S_JS_FLOW_NO_FC)},
+#endif
     };
     send_script(fd, items, sizeof(items) / sizeof(items[0]), parameters_script);
 }
@@ -7457,6 +7492,22 @@ static char *read_survey_status(size_t *length)
     return nullptr;
 }
 
+#if APCAM_HAVE_OPTICAL_FLOW
+static char *read_flow_status(size_t *length)
+{
+    const char *directories[] = {nullptr, RUNTIME_DIR};
+    for (const char *directory : directories) {
+        char path[4096];
+        if (!apcam_flow_status_path(REPLACEMENT_CONFIG_PATH, path, sizeof(path), directory)) continue;
+        struct stat st{};
+        if (stat(path, &st) != 0 || time(NULL) - st.st_mtime > 5) continue;
+        char *body = read_file(path, 4096, length);
+        if (body) return body;
+    }
+    return nullptr;
+}
+#endif
+
 static void handle_request(int fd, const char *peer)
 {
     APC_HTTPRequest request = {};
@@ -7677,6 +7728,14 @@ static void handle_request(int fd, const char *peer)
         const char *empty="{\"state\":\"camera unavailable\"}";
         send_response(fd,200,"OK","application/json",body?body:empty,body?length:strlen(empty),"Cache-Control: no-store\r\n");
         free(body);
+#if APCAM_HAVE_OPTICAL_FLOW
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/optical_flow/status") == 0) {
+        size_t length = 0;
+        char *body = read_flow_status(&length);
+        const char *empty="{\"state\":\"camera unavailable\"}";
+        send_response(fd,200,"OK","application/json",body?body:empty,body?length:strlen(empty),"Cache-Control: no-store\r\n");
+        free(body);
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/healthz") == 0) {
         char health[96];
         enum camera_kind kind = current_camera_kind();

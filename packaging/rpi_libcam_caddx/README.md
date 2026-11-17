@@ -57,7 +57,7 @@ which is not implemented yet.
 On the Pi (Raspberry Pi OS Bookworm or later):
 
 ```sh
-sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config
+sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config libopencv-dev
 git submodule update --init --recursive
 make dependencies
 make rpi_libcam_caddx

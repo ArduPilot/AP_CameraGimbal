@@ -381,6 +381,25 @@ enum string_id {
     S_H_NETWORK_CAPTURE,
     S_P_UART_DEVICE_OVERRIDE,
     S_H_UART_DEVICE_OVERRIDE,
+    S_P_FLOW_ENABLED,
+    S_H_FLOW_ENABLED,
+    S_P_FLOW_MAX_TILT,
+    S_H_FLOW_MAX_TILT,
+    S_P_FLOW_GIMBAL_CHECK,
+    S_H_FLOW_GIMBAL_CHECK,
+    S_PARAMS_FLOW,
+    S_FLOW_LIVE,
+    S_FLOW_LIVE_HELP,
+    S_FLOW_UPDATE_RATE,
+    S_FLOW_XY,
+    S_FLOW_RATE_XY,
+    S_FLOW_QUALITY,
+    S_JS_FLOW_UNAVAILABLE,
+    S_JS_FLOW_RUNNING,
+    S_JS_FLOW_STOPPED,
+    S_JS_FLOW_NOT_DOWN,
+    S_JS_FLOW_NO_FRAMES,
+    S_JS_FLOW_NO_FC,
     S_P_NETWORK_VIDEO1_URI,
     S_H_NETWORK_VIDEO1_URI,
     S_NETWORK_CAPTURE_FILES,
@@ -1047,6 +1066,25 @@ static constexpr Translations translations = [] {
     result[S_H_NETWORK_CAPTURE] = {"Off by default. Save to start or stop capturing all network interfaces, including loopback. Keeps the latest four 16 MiB PCAP files in DCIM/network on the microSD card. Disable before downloading and open the files in Wireshark.", "默认关闭。保存后开始或停止抓取所有网络接口（包括回环）的数据包。在 microSD 卡的 DCIM/network 中保留最新的四个 16 MiB PCAP 文件。下载前请禁用，然后用 Wireshark 打开。", "初期設定は無効です。保存するとループバックを含む全インターフェースのキャプチャを開始・停止します。microSD の DCIM/network に最新の16 MiB PCAPファイルを4個保持します。ダウンロード前に無効にし、Wiresharkで開いてください。"};
     result[S_P_UART_DEVICE_OVERRIDE] = {"Gimbal link", "云台连接", "ジンバル接続"};
     result[S_H_UART_DEVICE_OVERRIDE] = {"Serial port on the Pi, or a network address such as udp://IP:PORT or tcp://IP:PORT.", "树莓派上的串口，或网络地址，例如 udp://IP:PORT 或 tcp://IP:PORT。", "Pi のシリアルポート、または udp://IP:PORT や tcp://IP:PORT などのネットワークアドレス。"};
+    result[S_P_FLOW_ENABLED] = {"Optical flow", "光流", "オプティカルフロー"};
+    result[S_H_FLOW_ENABLED] = {"Off by default. Measure image motion at the centre of the video and send it to the flight controller as MAVLink OPTICAL_FLOW. Set FLOW_TYPE = 5 on the flight controller. Applies without restarting.", "默认关闭。测量视频中心区域的图像运动，并以 MAVLink OPTICAL_FLOW 消息发送给飞控。飞控需设置 FLOW_TYPE = 5。无需重启即可生效。", "初期設定は無効です。映像中央の動きを測定し、MAVLink OPTICAL_FLOW としてフライトコントローラーへ送信します。フライトコントローラーで FLOW_TYPE = 5 を設定してください。再起動なしで反映されます。"};
+    result[S_P_FLOW_MAX_TILT] = {"Optical flow maximum tilt (degrees)", "光流最大倾斜角（度）", "オプティカルフロー最大傾斜（度）"};
+    result[S_H_FLOW_MAX_TILT] = {"Flow is sent only while the camera points within this angle of straight down. Default 10.", "仅当相机指向与正下方的夹角在此范围内时发送光流。默认 10。", "カメラが真下からこの角度以内を向いている間だけフローを送信します。初期値は 10 です。"};
+    result[S_P_FLOW_GIMBAL_CHECK] = {"Optical flow gimbal check", "光流云台检查", "オプティカルフローのジンバル確認"};
+    result[S_H_FLOW_GIMBAL_CHECK] = {"Use the gimbal attitude to check that the camera points down. Without a gimbal attitude, or when disabled, flow is always sent.", "使用云台姿态检查相机是否朝下。没有云台姿态或禁用时，始终发送光流。", "ジンバル姿勢でカメラが下を向いているか確認します。ジンバル姿勢がない場合や無効の場合は常に送信します。"};
+    result[S_PARAMS_FLOW] = {"OpticalFlow", "OpticalFlow", "OpticalFlow"};
+    result[S_FLOW_LIVE] = {"Live status", "实时状态", "ライブ状態"};
+    result[S_FLOW_LIVE_HELP] = {"Updates twice a second. Flow X / Y is the image motion between frames in source pixels; the arrow shows its direction. The flight controller needs FLOW_TYPE = 5.", "每秒更新两次。光流 X / Y 为相邻帧之间的图像运动（源像素），箭头表示方向。飞控需设置 FLOW_TYPE = 5。", "1 秒に 2 回更新します。フロー X / Y はフレーム間の画像の動き（ソース画素）で、矢印はその方向を示します。フライトコントローラーには FLOW_TYPE = 5 が必要です。"};
+    result[S_FLOW_UPDATE_RATE] = {"Update rate", "更新频率", "更新レート"};
+    result[S_FLOW_XY] = {"Flow X / Y (pixels)", "光流 X / Y（像素）", "フロー X / Y（画素）"};
+    result[S_FLOW_RATE_XY] = {"Flow rate X / Y (rad/s)", "光流角速度 X / Y（rad/s）", "フローレート X / Y（rad/s）"};
+    result[S_FLOW_QUALITY] = {"Quality", "质量", "品質"};
+    result[S_JS_FLOW_UNAVAILABLE] = {"Camera app not reporting", "相机程序未报告状态", "カメラアプリから状態がありません"};
+    result[S_JS_FLOW_RUNNING] = {"Running", "运行中", "動作中"};
+    result[S_JS_FLOW_STOPPED] = {"Stopped", "已停止", "停止"};
+    result[S_JS_FLOW_NOT_DOWN] = {"Waiting for the camera to point down", "等待相机朝下", "カメラが下を向くのを待っています"};
+    result[S_JS_FLOW_NO_FRAMES] = {"No camera frames", "没有相机画面", "カメラのフレームがありません"};
+    result[S_JS_FLOW_NO_FC] = {"No flight controller", "没有飞控", "フライトコントローラーなし"};
     result[S_P_NETWORK_VIDEO1_URI] = {"Video stream 1 URI", "视频流 1 URI", "映像ストリーム 1 URI"};
     result[S_H_NETWORK_VIDEO1_URI] = {"Complete rtsp:// or rtsps:// URI the GCS should use for video stream 1, for example rtsp://10.0.0.5:8554/video1. Sent as is in the video-stream-information message's URI field. The camera does not check that it serves this path; use the stream alias to serve extra paths. If left blank the URI is built from the Pi's own address, which is a guess when the Pi has several networks. Applies without restarting.", "地面站接收视频流 1 应使用的完整 rtsp:// 或 rtsps:// URI，例如 rtsp://10.0.0.5:8554/video1。通过 video-stream-information 消息的 URI 字段原样发送。相机不会检查是否提供该路径；可使用流别名提供额外路径。留空则根据树莓派自身的地址生成 URI；当树莓派有多个网络时，该地址只是推测。无需重启即可生效。", "GCS が映像ストリーム 1 に使用する完全な rtsp:// または rtsps:// URI（例: rtsp://10.0.0.5:8554/video1）。video-stream-information メッセージの URI フィールドでそのまま送信されます。カメラがこのパスを配信しているかは確認されません。追加のパスにはストリームのエイリアスを使用してください。空欄の場合は Pi 自身のアドレスから URI を生成しますが、Pi に複数のネットワークがある場合は推測になります。再起動なしで反映されます。"};
     result[S_NETWORK_CAPTURE_FILES] = {"Browse network captures", "浏览网络抓包文件", "キャプチャファイルを表示"};

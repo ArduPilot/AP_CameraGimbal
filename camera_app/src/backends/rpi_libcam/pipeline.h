@@ -58,6 +58,12 @@ int ca_rpi_pipeline_grab_still(struct ca_rpi_pipeline *pipeline,
 int ca_rpi_pipeline_capture_still(struct ca_rpi_pipeline *pipeline, unsigned width, unsigned height,
                                   struct ca_rpi_still_frame *frame, unsigned timeout_ms);
 
+/* Copy a rectangle of the next frame's luma into out (stride width) without
+ * interrupting video. Returns -1 with errno ETIMEDOUT if no frame arrives. */
+int ca_rpi_pipeline_grab_luma(struct ca_rpi_pipeline *pipeline, unsigned x, unsigned y,
+                              unsigned width, unsigned height, uint8_t *out,
+                              uint64_t *timestamp_us, unsigned timeout_ms);
+
 /* libcamera control values for the IMG_* settings, independent of libcamera
  * so they can be tested on the host. Zero gain/exposure means automatic. */
 struct ca_rpi_image_controls {

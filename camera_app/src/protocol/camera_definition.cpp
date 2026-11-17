@@ -129,6 +129,11 @@ static const struct ca_camera_parameter parameters[] = {
     CONFIG("SURV_MIN_SPEED", "Minimum ground speed (m/s)"),
     CONFIG("SURV_TURN_DEG", "Turn threshold (deg)"),
 #endif
+#if APCAM_HAVE_OPTICAL_FLOW
+    CONFIG("FLOW_ENABLE", "Optical flow"),
+    CONFIG("FLOW_MAX_TILT", "Optical flow maximum tilt from down (deg)"),
+    CONFIG("FLOW_GMB_CHECK", "Optical flow gimbal check"),
+#endif
 };
 
 size_t ca_camera_param_count(void) { return ARRAY_SIZE(parameters); }

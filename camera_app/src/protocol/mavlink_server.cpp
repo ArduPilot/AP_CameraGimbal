@@ -21,6 +21,9 @@
 #include "camera_app/mavlink.h"
 #include "camera_app/support_proxy.h"
 #include "camera_app/media.h"
+#if APCAM_HAVE_OPTICAL_FLOW
+#include "camera_app/optical_flow.h"
+#endif
 #include "camera_app/metadata.h"
 #include "camera_app/targeting.h"
 #include "camera_app/tracking_rate.h"
@@ -204,6 +207,14 @@ struct ca_mavlink_server {
     int logged_saved[128], logged_applied[128];
     float logged_camera[128];
     struct ca_log_mode logged_mode;
+#if APCAM_HAVE_OPTICAL_FLOW
+    enum ca_flow_state flow_state;
+    uint64_t flow_status_ms;
+    struct ca_flow_sample flow_last;
+    uint64_t flow_last_ms, flow_window_ms, flow_file_ms;
+    unsigned flow_frames;
+    float flow_rate_hz;
+#endif
 };
 
 static bool survey_running(const ca_mavlink_server *);
@@ -3344,6 +3355,7 @@ static int read_uart(struct ca_mavlink_server *server)
 }
 
 #include "apcam/survey_runtime.h"
+#include "apcam/flow_status.h"
 #include "survey_server.inc"
 
 static uint8_t survey_capture_start(ca_mavlink_server *s,int32_t count,float interval)
@@ -3523,6 +3535,91 @@ int ca_mavlink_server_handle(struct ca_mavlink_server *server)
     return 0;
 }
 
+#if APCAM_HAVE_OPTICAL_FLOW
+static const char *flow_state_text(enum ca_flow_state state)
+{
+    switch (state) {
+    case CA_FLOW_STATE_RUNNING: return "running";
+    case CA_FLOW_STATE_NOT_DOWN: return "waiting for the camera to point down";
+    case CA_FLOW_STATE_NO_FRAMES: return "no camera frames";
+    default: return "stopped";
+    }
+}
+
+static const char *flow_state_code(enum ca_flow_state state)
+{
+    switch (state) {
+    case CA_FLOW_STATE_RUNNING: return "running";
+    case CA_FLOW_STATE_NOT_DOWN: return "not_down";
+    case CA_FLOW_STATE_NO_FRAMES: return "no_frames";
+    default: return "stopped";
+    }
+}
+
+static void write_flow_status(struct ca_mavlink_server *server, uint64_t now,
+                              enum ca_flow_state state)
+{
+    if (now - server->flow_window_ms >= 1000U) {
+        server->flow_rate_hz = server->flow_window_ms ?
+            server->flow_frames * 1000.0f / (now - server->flow_window_ms) : 0;
+        server->flow_frames = 0;
+        server->flow_window_ms = now;
+    }
+    if (now - server->flow_file_ms < 500U) return;
+    server->flow_file_ms = now;
+    const struct ca_flow_sample &last = server->flow_last;
+    char path[4096], tmp[4100];
+    if (!apcam_flow_status_path(server->config_path, path, sizeof(path))) return;
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f,
+            "{\"state\":\"%s\",\"flight_controller\":%s,\"rate_hz\":%.1f,\"have_sample\":%s,"
+            "\"flow_x\":%d,\"flow_y\":%d,\"rate_x\":%.4f,\"rate_y\":%.4f,\"quality\":%u}\n",
+            flow_state_code(state), server->have_flight_controller_route ? "true" : "false",
+            server->flow_rate_hz,
+            server->flow_last_ms && now - server->flow_last_ms < 2000U ? "true" : "false",
+            last.flow_x, last.flow_y, isfinite(last.rate_x) ? last.rate_x : 0.0f,
+            isfinite(last.rate_y) ? last.rate_y : 0.0f, last.quality);
+    fclose(f);
+    rename(tmp, path);
+}
+
+/* OPTICAL_FLOW goes only to the flight controller; state changes at most
+ * once a second. */
+static void update_optical_flow(struct ca_mavlink_server *server, uint64_t now)
+{
+    struct ca_flow_sample sample;
+    while (ca_media_flow_poll(server->media, &sample)) {
+        server->flow_last = sample;
+        server->flow_last_ms = now;
+        server->flow_frames++;
+        if (!server->have_flight_controller_route) continue;
+        mavlink_optical_flow_t flow = {};
+        flow.time_usec = sample.timestamp_us;
+        flow.flow_x = sample.flow_x;
+        flow.flow_y = sample.flow_y;
+        flow.quality = sample.quality;
+        flow.ground_distance = -1; /* unknown */
+        flow.flow_rate_x = sample.rate_x;
+        flow.flow_rate_y = sample.rate_y;
+        mavlink_message_t message;
+        (void)mavlink_msg_optical_flow_encode_status(server->system_id, server->camera_component_id,
+                                                     &server->encode_status, &message, &flow);
+        (void)send_message(server, &server->flight_controller_route, &message);
+    }
+    const enum ca_flow_state state = ca_media_flow_state(server->media);
+    write_flow_status(server, now, state);
+    if (state == server->flow_state || now - server->flow_status_ms < 1000U) return;
+    server->flow_state = state;
+    server->flow_status_ms = now;
+    char text[64];
+    snprintf(text, sizeof(text), "OpticalFlow: %s", flow_state_text(state));
+    ca_log("%s", text);
+    parameter_status(server, text);
+}
+#endif
+
 void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
 {
     if (server == NULL) return;
@@ -3555,6 +3652,9 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
     }
 #endif
     update_binlog(server, true);
+#if APCAM_HAVE_OPTICAL_FLOW
+    update_optical_flow(server, now);
+#endif
     bool recording = ca_media_recording(server->media);
     if (recording != server->reported_recording) {
         server->reported_recording = recording;

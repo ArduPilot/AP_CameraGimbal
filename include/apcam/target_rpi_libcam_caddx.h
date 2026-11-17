@@ -51,6 +51,8 @@
 #define APCAM_HAVE_EXTERNAL_UART 0
 #define APCAM_HAVE_SSH_KEYS 0
 #define APCAM_HAVE_SOC_TEMPERATURE 1
+/* OpenCV optical flow, sent to the flight controller. */
+#define APCAM_HAVE_OPTICAL_FLOW 1
 /* Hardware only for now: no simulated camera, web UI or SITL launcher entry. */
 #define APCAM_HAVE_SITL 0
 /* The host OS (for example Rpanion-server) owns the network interfaces. */

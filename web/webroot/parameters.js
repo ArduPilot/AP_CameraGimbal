@@ -260,3 +260,48 @@
   pattern.addEventListener('change', update);
   update();
 })();
+
+(() => {
+  const box = document.getElementById('flow-status');
+  if (!box) return;
+  const $ = id => document.getElementById(id);
+  const dot = $('flow-dot'), state = $('flow-state'), arrow = $('flow-arrow'), tip = $('flow-tip');
+  const values = ['flow-rate', 'flow-xy', 'flow-rxy', 'flow-quality'].map($);
+  const labels = {running: L.flowRunning, stopped: L.flowStopped, not_down: L.flowNotDown, no_frames: L.flowNoFrames};
+  const dash = '\u2013';
+  const point = (x, y) => {
+    arrow.setAttribute('x2', x); arrow.setAttribute('y2', y);
+    tip.setAttribute('cx', x); tip.setAttribute('cy', y);
+  };
+  const show = s => {
+    if (!(s.state in labels)) {
+      dot.dataset.state = 'unknown'; state.textContent = L.flowUnavailable;
+      values.forEach(v => { v.textContent = dash; });
+      tip.style.visibility = 'hidden'; point(0, 0);
+      return;
+    }
+    const running = s.state === 'running', noFc = !s.flight_controller;
+    dot.dataset.state = running && !noFc ? 'running' : s.state === 'stopped' ? 'stopped' : 'warning';
+    state.textContent = labels[s.state] + (running && noFc ? ' (' + L.flowNoFc + ')' : '');
+    const sample = s.have_sample;
+    values[0].textContent = s.rate_hz.toFixed(1) + ' Hz';
+    values[1].textContent = sample ? s.flow_x + ' / ' + s.flow_y : dash;
+    values[2].textContent = sample ? s.rate_x.toFixed(3) + ' / ' + s.rate_y.toFixed(3) : dash;
+    values[3].textContent = sample ? s.quality + ' / 255' : dash;
+    const length = sample ? Math.hypot(s.flow_x, s.flow_y) : 0;
+    const scale = length ? Math.min(46, 4.6 * length) / length : 0;
+    point((s.flow_x * scale).toFixed(1), (s.flow_y * scale).toFixed(1));
+    tip.style.visibility = sample ? 'visible' : 'hidden';
+  };
+  async function poll() {
+    if (!document.hidden && !box.closest('.parameter-panel').hidden) {
+      try {
+        const response = await fetch('/optical_flow/status', {cache: 'no-store'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        show(await response.json());
+      } catch (_) { show({}); }
+    }
+    setTimeout(poll, 500);
+  }
+  poll();
+})();

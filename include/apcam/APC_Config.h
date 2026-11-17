@@ -397,6 +397,14 @@ private:
         {"network", "uart_device_override", Kind::String, offsetof(struct ca_config, uart_device_override),
          sizeof(((struct ca_config *)0)->uart_device_override), NULL, 0U, 0, 159, NULL},
 #endif
+#if APCAM_HAVE_OPTICAL_FLOW
+        {"optical_flow", "enabled", Kind::Bool, offsetof(struct ca_config, optical_flow.enabled),
+         sizeof(((struct ca_config *)0)->optical_flow.enabled), NULL, 0U, 0, 0, "FLOW_ENABLE"},
+        {"optical_flow", "max_tilt_deg", Kind::Uint, offsetof(struct ca_config, optical_flow.max_tilt_deg),
+         sizeof(((struct ca_config *)0)->optical_flow.max_tilt_deg), NULL, 0U, 1, 90, "FLOW_MAX_TILT"},
+        {"optical_flow", "gimbal_check", Kind::Bool, offsetof(struct ca_config, optical_flow.gimbal_check),
+         sizeof(((struct ca_config *)0)->optical_flow.gimbal_check), NULL, 0U, 0, 0, "FLOW_GMB_CHECK"},
+#endif
 #if APCAM_HAVE_THERMAL || APCAM_HAVE_RAW_THERMAL
         {"thermal", "stream_fps", Kind::Uint, offsetof(struct ca_config, raw_stream_fps),
          sizeof(((struct ca_config *)0)->raw_stream_fps), NULL, 0U, 1, 25, "RAW_STREAM_FPS"},
