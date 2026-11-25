@@ -57,14 +57,16 @@ which is not implemented yet.
 On the Pi (Raspberry Pi OS Bookworm or later):
 
 ```sh
-sudo apt install build-essential git python3 libcamera-dev libjpeg-dev pkg-config
+sudo apt install build-essential git python3 python3-jinja2 python3-jsonschema cmake libcamera-dev libjpeg-dev pkg-config
 git submodule update --init --recursive
 make dependencies
 make rpi_libcam_caddx
 ```
 
 The binaries are `camera_app/build/rpi_libcam_caddx/camera-app` and
-`web/rpi_libcam_caddx-web`.
+`web/rpi_libcam_caddx-web`. The build also compiles the Mbed TLS submodule
+(`modules/mbedtls`) that [cloud upload](#cloud-upload) uses, which is why it needs
+`cmake` and the two Python modules.
 
 ## Install
 
@@ -75,6 +77,7 @@ sudo install -D -m 644 -t /usr/local/share/ap_cameragimbal/webroot web/webroot/*
 sudo install -D -m 644 packaging/rpi_libcam_caddx/camera.ini /etc/ap_cameragimbal/camera.ini
 sudo install -m 644 packaging/rpi_libcam_caddx/ap-cameragimbal.service \
     packaging/rpi_libcam_caddx/ap-cameragimbal-web.service /etc/systemd/system/
+sudo install -D -m 644 packaging/ca-certificates/cloud-roots.pem /usr/local/share/ap_cameragimbal/ca-certificates.pem
 sudo systemctl daemon-reload
 sudo systemctl enable --now ap-cameragimbal ap-cameragimbal-web
 journalctl -u ap-cameragimbal -f
@@ -83,7 +86,8 @@ journalctl -u ap-cameragimbal -f
 Only one process can use the camera, so leave Rpanion-server's video
 streaming stopped.
 
-To update, `git pull`, rebuild, repeat the first three install commands and run
+To update, `git pull`, rebuild, repeat the first three install commands and the
+CA certificates one, and run
 `sudo systemctl restart ap-cameragimbal ap-cameragimbal-web`. Installing
 `camera.ini` again replaces any settings changed from the GCS or web page.
 
@@ -176,6 +180,64 @@ protocol v2).
 - `CAMERA_APP_RPI_ENCODER`: V4L2 H.264 encoder device (default `/dev/video11`).
 - `CAMERA_APP_UART`: gimbal link, a serial device, `udp://IPv4:PORT` or `tcp://IPv4:PORT`; used
   when `--uart` and the Gimbal link setting are not given.
+- `CAMERA_APP_UPLOAD_CA_FILE`, `CAMERA_APP_RCLONE_CONFIG`: the PEM bundle of CA certificates
+  the cloud service must chain to (default
+  `/usr/local/share/ap_cameragimbal/ca-certificates.pem`) and the file holding the
+  Google credentials (default `/etc/ap_cameragimbal/rclone.conf`, in rclone's
+  format, which is why it has that name). If you change
+  `CAMERA_APP_RCLONE_CONFIG`, set it in both the camera and the web service
+  units: the web page saves the credentials to that file and the camera reads it.
+
+## Cloud upload
+
+The camera app can copy photos and recordings to your own Google Drive or Dropbox
+(choose the cloud service on the web Parameters page, Cloud Upload tab). It talks
+to the service directly (TLS, with the certificates in
+`/usr/local/share/ap_cameragimbal/ca-certificates.pem`), so nothing else needs
+installing on the camera. It is off by default. You provide your own
+credentials, so none of ours are involved; setting them up takes about ten
+minutes, once. It waits until the camera's clock is set, since certificates have
+dates.
+
+Uploads run while the camera is recording but not while the vehicle is
+**armed**, and stop at once when it is armed, so they never compete with
+the flight (an **Upload now** that was started while disarmed is the exception: it carries on until it is done). The file being recorded is left until the recording ends, and so is
+any file changed in the last few seconds. They also wait 30 s after the camera app starts, in
+case the autopilot has not connected yet (so restarting it in flight does not
+start an upload). With no flight controller connected the vehicle counts
+as disarmed, so a camera on the bench uploads; once a flight controller has
+been seen, a heartbeat lost for 5 s counts as armed. Photos go to
+`<folder>/photos` and recordings to `<folder>/recordings`, keeping any
+sub-folders. Files that are uploaded and checked are remembered (by name, size and
+modification time) in `upload-cache-<service>.txt` beside the credentials, so later
+checks send only new or changed files and use no network when there are none; changing
+the service or folder starts afresh. The camera also sends the GCS three short INFO
+messages naming the service: `Upload to Dropbox started (N files)`, `Upload to Dropbox complete` and
+`Upload to Dropbox failed` (or Google Drive); files being written (`*.part`, `*.tmp`) are skipped. Large files go
+in 4 MiB pieces and carry on from where they stopped after a lost connection. A
+failed upload is retried every minute. The camera app looks for new files every
+`scan_minutes`, shortly after a recording ends and when the vehicle disarms. **Upload now** on the web page
+starts a scan at once, even while armed or recording. The upload runs at
+the lowest CPU and disk priority.
+
+### Setting up the credentials
+
+**Follow the step-by-step guide: [docs/cloud-upload-setup.md](../../docs/cloud-upload-setup.md).**
+It covers creating the Google or Dropbox app, getting the token with `rclone
+authorize`, entering it on the Cloud Upload tab, and the mistakes people most often
+make. The files are stored in `/etc/ap_cameragimbal/rclone.conf`, readable
+only by root, and are never shown again. The token Google gives for the Drive scope
+covers all the files in that Google account's Drive, so use an account just for the
+camera if that matters. Revoke access at <https://myaccount.google.com/permissions>
+(Google) or <https://www.dropbox.com/account/connected_apps> (Dropbox).
+
+`after_upload` chooses what happens to a file once it is uploaded and checked:
+`keep` it, `delete` it, or `delete_when_low`: a check that starts with free space
+below `low_space_percent` deletes every file it uploads (not just enough to get
+back above the limit), and other checks keep them. A file is deleted
+only after the service reports the same size and checksum as the local file (MD5 for Google Drive, content hash
+for Dropbox). `bandwidth_kib_s` limits the speed in
+KiB/s.
 
 ## Defaults when upgrading
 
