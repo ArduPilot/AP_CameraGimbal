@@ -16,6 +16,7 @@ public:
     int close() { return set(false); }
     bool active() const { return enabled.load(); }
     const char *path() const { return active()?paths[0].c_str():nullptr; }
+    const char *path_at(unsigned index) const; // 0 and 1 the videos, 2 the raw thermal file
     void frame(unsigned,const EncodedFrame&,uint64_t,bool,float);
 private:
     int stop_locked();
@@ -27,5 +28,6 @@ private:
     ca_mp4 *writers[2]{};
     bool waiting[2]{true,true};
     ca_thermal_stream *raw=nullptr;
+    mutable char raw_path[4096]{};
 };
 }

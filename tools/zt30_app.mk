@@ -21,6 +21,14 @@ ZT30_APP_SRC += src/streaming/raw_thermal_server.cpp src/backends/zt30/photo_own
 endif
 ZT30_APP_CPPFLAGS := $(CPPFLAGS) $(ZT30_APP_MODE) -D_FILE_OFFSET_BITS=64 \
  -I$(RTSP_ROOT) -I$(RTSP_ROOT)/net -I$(RTSP_ROOT)/xop -I$(RTSP_ROOT)/3rdpart
+# Cloud upload is in the development build, which is the one that ships; the RAM qualification build stays as it was.
+ifeq ($(ZT30_DEV_BUILD),1)
+ZT30_APP_SRC += $(UPLOAD_SOURCES)
+ZT30_APP_CPPFLAGS += -DAPCAM_ENABLE_UPLOAD
+$(ZT30_APP_DIR)/c/src/upload/%.o: ZT30_APP_CPPFLAGS += -isystem $(UPLOAD_MBEDTLS)/include
+$(patsubst %.cpp,$(ZT30_APP_DIR)/c/%.o,$(UPLOAD_SOURCES)): $(UPLOAD_MBEDTLS)/stamp
+$(ZT30_APP_DIR)/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
+endif
 # Enumerate the pinned source tree, which exists before the private copy is
 # prepared. Looking in build/xop here silently drops every object on first make.
 ZT30_APP_XOP := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%, \
@@ -38,9 +46,9 @@ $(ZT30_APP_DIR)/c/src/streaming/thermal_stream.o: ZT30_APP_CPPFLAGS += -DCA_THER
 $(ZT30_APP_DIR)/c/src/streaming/thermal_stream.o: $(ZT30_THERMAL_LIBS)
 endif
 OBJECTS := $(ZT30_APP_OBJECTS)
-$(TARGET): $(OBJECTS) $(ZT30_THERMAL_LIBS) Makefile ../tools/zt30_app.mk
+$(TARGET): $(OBJECTS) $(ZT30_THERMAL_LIBS) Makefile ../tools/zt30_app.mk $(if $(filter 1,$(ZT30_DEV_BUILD)),$(UPLOAD_MBEDTLS)/stamp)
 	mkdir -p $(@D)
-	$(CXX) $(APP_CXXFLAGS) -o $@ $(OBJECTS) $(ZT30_THERMAL_LIBS) $(call thermal_extra_libs,armv7) -lpthread -ldl -lm
+	$(CXX) $(APP_CXXFLAGS) -o $@ $(OBJECTS) $(if $(filter 1,$(ZT30_DEV_BUILD)),$(UPLOAD_MBEDTLS_LIBS)) $(ZT30_THERMAL_LIBS) $(call thermal_extra_libs,armv7) -lpthread -ldl -lm
 	python3 ../tools/check_zt30_elf.py $@ --readelf $(CROSS_COMPILE)readelf
 $(ZT30_APP_DIR)/c/%.o: %.cpp Makefile ../tools/zt30_app.mk | generated
 	mkdir -p $(@D)

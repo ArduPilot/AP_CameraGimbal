@@ -12,6 +12,7 @@ public:
         if (!strcmp(s, "general") || !strcmp(s, "logging") || !strcmp(s, "capture") ||
             !strcmp(s, "image") || !strcmp(s,"survey")) return true;
         if(!strcmp(s,"overlay"))return true;
+        if(!strcmp(s,"upload"))return true; /* the section exists only in builds with cloud upload */
         if (!strcmp(s,"stream.main") || !strcmp(s,"recording")) return true;
         if (!strcmp(s,"stream.sub")) return true;
         if (!strcmp(s,"mavlink") || !strcmp(s,"network") || !strcmp(s,"support_proxy")) return true;

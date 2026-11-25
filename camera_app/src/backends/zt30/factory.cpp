@@ -359,6 +359,7 @@ public:
     }
     bool recording() const override { return context->recordings.active(); }
     const char *recording_path() const override { return context->recordings.path(); }
+    const char *recording_path_at(unsigned index) const override { return context->recordings.path_at(index); }
     bool photo_available() const override {
         // Both scopes include thermal; do not advertise working photos when
         // the required live source has failed or has never produced a frame.

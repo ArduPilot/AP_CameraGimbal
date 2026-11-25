@@ -2618,6 +2618,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     bool restart=false;
     for(size_t i=0;i<APC_Config::count();i++) {
         const auto &f=APC_Config::fields()[i];
+        if(!strcmp(f.section,"upload"))continue; /* applied live by upload_configure() from server->parameters */
         if(memcmp((const char*)&desired+f.offset,(const char*)&server->settings+f.offset,f.size))restart=true;
     }
     config_status(server,hash,restart?"restart":"applied",restart?

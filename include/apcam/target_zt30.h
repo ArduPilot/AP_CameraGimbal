@@ -179,6 +179,16 @@
 #endif
 #endif
 
+/* Cloud upload, in the firmware builds only (they define APCAM_ENABLE_UPLOAD). The application bundle has a fixed
+ * list of files, so the CA certificates are built into camera-app instead of installed; the credentials and the
+ * remembered-files list go beside camera.ini in /customer/camera-app. */
+#ifdef APCAM_ENABLE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_EMBED_CA 1
+#define APCAM_UPLOAD_CA_FILE ""
+#define APCAM_RCLONE_CONFIG "/customer/camera-app/rclone.conf"
+#endif
+
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
 #ifdef ZT30_WEB_NATIVE
