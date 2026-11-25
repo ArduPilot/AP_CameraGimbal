@@ -44,6 +44,8 @@ for target, filename, size in [('a8', 'SIYI_4K_MINI_UpgradeSD.bin', 0x600000),
         if target == 'a8':
             assert (customer / 'bin/cardv').read_bytes() == (ROOT / 'packaging/a8/app_init.sh').read_bytes()
             assert not (app / 'camera.ini').exists()  # Defaults must not overwrite saved settings.
+            # The certificates cloud upload trusts come with the application.
+            assert (app / 'ca-certificates.pem').read_bytes() == (ROOT / 'packaging/ca-certificates/cloud-roots.pem').read_bytes()
         else:
             assert (customer / 'zr10-uuid').read_bytes() == (app / 'zr10-uuid').read_bytes()
             assert (customer / 'sycamera').read_bytes() == (ROOT / 'packaging/zr10/boot.sh').read_bytes()

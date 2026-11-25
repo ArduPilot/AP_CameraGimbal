@@ -12,7 +12,7 @@ endif
 # themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
 # which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
 UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
-UPLOAD_BACKENDS :=
+UPLOAD_BACKENDS := a8
 UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
 UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
 UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls
@@ -97,6 +97,10 @@ CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
 # On a 32-bit Raspberry Pi OS off_t is 32 bits unless told otherwise, and a recording over 2 GiB cannot be examined.
+CFLAGS += -D_FILE_OFFSET_BITS=64
+endif
+ifeq ($(CAMERA_BACKEND),a8)
+# The A8's glibc has a 32-bit off_t unless told otherwise, and a recording over 2 GiB cannot be examined.
 CFLAGS += -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),z1mini)

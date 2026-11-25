@@ -96,7 +96,7 @@ mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
 a8-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
+	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -DAPCAM_ENABLE_UPLOAD -o $@ $< -lm
 
 $(A8_HOST_CHECK): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
