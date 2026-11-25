@@ -158,7 +158,7 @@ static bool settings_usable(const struct ca_upload_settings *s, char *reason, si
     if (!s->enable) { set_text(reason, size, "Disabled"); return false; }
     if (!s->config_path[0]) { set_text(reason, size, "No credentials file set"); return false; }
     if (!s->folder[0]) { set_text(reason, size, "Enter a folder name"); return false; }
-    if (!s->ca_file[0] || access(s->ca_file, R_OK) != 0) {
+    if (!s->ca_pem && (!s->ca_file[0] || access(s->ca_file, R_OK) != 0)) {
         snprintf(reason, size, "CA certificates not found at %.64s", s->ca_file);
         return false;
     }
@@ -474,6 +474,7 @@ static void run_job(struct ca_uploader *u)
     target.credentials_section = s.credentials_section[0] ? s.credentials_section : target.service;
     target.root_folder = s.folder;
     target.ca_file = s.ca_file;
+    target.ca_pem = s.ca_pem;
     target.bandwidth_kib_s = s.bandwidth_kib_s;
     target.stop = &u->stop;
 #ifdef CAMERA_APP_UPLOAD_TEST_HOOKS
@@ -668,6 +669,7 @@ static bool start_job(struct ca_uploader *u, uint64_t now)
     memcpy(u->job.settings.credentials_section, u->scan_dest.credentials_section, sizeof(u->job.settings.credentials_section));
     memcpy(u->job.settings.folder, u->scan_dest.folder, sizeof(u->job.settings.folder));
     memcpy(u->job.settings.cache_path, u->scan_dest.cache_path, sizeof(u->job.settings.cache_path));
+    u->job.settings.ca_pem = u->scan_dest.ca_pem;
     memcpy(u->job.settings.ca_file, u->scan_dest.ca_file, sizeof(u->job.settings.ca_file));
     u->job.kind = kind;
     u->job.plan = u->job_index == 0;

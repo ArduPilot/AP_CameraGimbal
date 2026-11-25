@@ -39,6 +39,7 @@ struct ca_upload_settings {
     char config_path[256];  /* credentials file, in rclone's format */
     char credentials_section[32]; /* if set, config_path must have a [section] by this name or nothing is run */
     char ca_file[256];      /* PEM bundle of the roots the service's certificate must chain to */
+    const char *ca_pem;     /* or those roots built into the program, as NUL-terminated PEM text (static); wins over ca_file */
     char folder[160];       /* the folder in the cloud account that holds photos/ and recordings/ */
     char cache_path[256];   /* where it remembers what is already uploaded; blank to check everything every time */
     char capture_root[256]; /* photos, sent to <remote>/photos */

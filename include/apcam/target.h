@@ -157,6 +157,10 @@
 #ifndef APCAM_HAVE_UPLOAD
 #define APCAM_HAVE_UPLOAD 0
 #endif
+/* 1 when the CA certificates are built into camera-app (no file to install; see tools/embed_ca.py). */
+#ifndef APCAM_UPLOAD_EMBED_CA
+#define APCAM_UPLOAD_EMBED_CA 0
+#endif
 #ifndef APCAM_UPLOAD_CA_FILE
 #define APCAM_UPLOAD_CA_FILE ""
 #endif

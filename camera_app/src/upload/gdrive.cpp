@@ -115,6 +115,7 @@ private:
                             char *error, size_t error_size);
 
     char _ca_file[256] = "", _root[256] = "";
+    const char *_ca_pem = NULL;
     char _client_id[256] = "", _client_secret[256] = "", _refresh_token[512] = "", _access_token[2048] = "";
     char _api_host[128] = API_HOST, _auth_host[128] = AUTH_HOST, _server_name[128] = "";
     unsigned _api_port = 443, _auth_port = 443, _bandwidth = 0;
@@ -130,12 +131,13 @@ private:
 
 bool APC_GDriveBackend::init(const ca_upload_target *t, char *error, size_t error_size)
 {
-    if (!t->credentials_path || !t->credentials_section || !t->ca_file || !t->root_folder || !t->root_folder[0] ||
-        strlen(t->ca_file) >= sizeof(_ca_file) || strlen(t->root_folder) >= sizeof(_root)) {
+    if (!t->credentials_path || !t->credentials_section || !(t->ca_file || t->ca_pem) || !t->root_folder || !t->root_folder[0] ||
+        (t->ca_file && strlen(t->ca_file) >= sizeof(_ca_file)) || strlen(t->root_folder) >= sizeof(_root)) {
         set_error(error, error_size, "bad upload settings");
         return false;
     }
-    snprintf(_ca_file, sizeof(_ca_file), "%s", t->ca_file);
+    snprintf(_ca_file, sizeof(_ca_file), "%s", t->ca_file ? t->ca_file : "");
+    _ca_pem = t->ca_pem;
     snprintf(_root, sizeof(_root), "%s", t->root_folder);
     _stop = t->stop;
     _bandwidth = t->bandwidth_kib_s;
@@ -172,6 +174,7 @@ bool APC_GDriveBackend::refresh_access_token(char *error, size_t error_size)
 {
     ca_https_options options = {};
     options.ca_file = _ca_file;
+    options.ca_pem = _ca_pem;
     options.server_name = _server_name[0] ? _server_name : NULL;
     options.stop = _stop;
     ca_https *auth = ca_https_connect(_auth_host, _auth_port, &options, error, error_size);
@@ -252,6 +255,7 @@ int APC_GDriveBackend::call(const char *method, const char *path, const char *he
         if (!_api) {
             ca_https_options options = {};
             options.ca_file = _ca_file;
+            options.ca_pem = _ca_pem;
             options.server_name = _server_name[0] ? _server_name : NULL;
             options.bandwidth_kib_s = _bandwidth;
             options.stop = _stop;
@@ -475,6 +479,7 @@ ca_put_result APC_GDriveBackend::send_file(const char *parent, const char *exist
             if (!_api) {
                 ca_https_options options = {};
                 options.ca_file = _ca_file;
+                options.ca_pem = _ca_pem;
                 options.server_name = _server_name[0] ? _server_name : NULL;
                 options.bandwidth_kib_s = _bandwidth;
                 options.stop = _stop;
@@ -535,6 +540,7 @@ ca_put_result APC_GDriveBackend::send_file(const char *parent, const char *exist
             if (!_api) {
                 ca_https_options options = {};
                 options.ca_file = _ca_file;
+                options.ca_pem = _ca_pem;
                 options.server_name = _server_name[0] ? _server_name : NULL;
                 options.bandwidth_kib_s = _bandwidth;
                 options.stop = _stop;

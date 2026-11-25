@@ -314,6 +314,10 @@ generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
  build/xop_rtp_connection.cpp build/binlog_version.h
 
 
+# Cameras with no place to install a CA file have the certificates built into camera-app (see embed_ca.py).
+build/upload_ca_bundle.h: ../packaging/ca-certificates/cloud-roots.pem ../tools/embed_ca.py
+	$(PYTHON) ../tools/embed_ca.py $< $@
+
 ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 include ../tools/zt30_app.mk
 else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)

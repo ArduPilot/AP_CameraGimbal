@@ -149,6 +149,7 @@ private:
     int metadata(const std::string &path, ca_https_response &response, char *error, size_t error_size);
 
     char _ca_file[256] = "", _root[256] = "";
+    const char *_ca_pem = NULL;
     /* Dropbox access tokens are about 1.3 KB, so these are generous. */
     char _key[128] = "", _secret[128] = "", _refresh_token[512] = "", _access_token[2560] = "";
     char _api_host[128] = API_HOST, _content_host[128] = CONTENT_HOST, _server_name[128] = "";
@@ -163,12 +164,13 @@ private:
 
 bool APC_DropboxBackend::init(const ca_upload_target *t, char *error, size_t error_size)
 {
-    if (!t->credentials_path || !t->credentials_section || !t->ca_file || strlen(t->ca_file) >= sizeof(_ca_file) ||
+    if (!t->credentials_path || !t->credentials_section || !(t->ca_file || t->ca_pem) || (t->ca_file && strlen(t->ca_file) >= sizeof(_ca_file)) ||
         (t->root_folder && strlen(t->root_folder) >= sizeof(_root))) {
         set_error(error, error_size, "bad upload settings");
         return false;
     }
-    snprintf(_ca_file, sizeof(_ca_file), "%s", t->ca_file);
+    snprintf(_ca_file, sizeof(_ca_file), "%s", t->ca_file ? t->ca_file : "");
+    _ca_pem = t->ca_pem;
     /* The root folder is below the app's folder: no leading or trailing slash. */
     const char *root = t->root_folder ? t->root_folder : "";
     while (*root == '/') root++;
@@ -211,6 +213,7 @@ bool APC_DropboxBackend::refresh_access_token(char *error, size_t error_size)
     if (!_api) {
         ca_https_options options = {};
         options.ca_file = _ca_file;
+        options.ca_pem = _ca_pem;
         options.server_name = _server_name[0] ? _server_name : NULL;
         options.stop = _stop;
         _api = ca_https_connect(_api_host, _api_port, &options, error, error_size);
@@ -304,6 +307,7 @@ int APC_DropboxBackend::call(Host host, const char *path, const char *headers, c
         if (!c) {
             ca_https_options options = {};
             options.ca_file = _ca_file;
+            options.ca_pem = _ca_pem;
             options.server_name = _server_name[0] ? _server_name : NULL;
             options.bandwidth_kib_s = host == CONTENT ? _bandwidth : 0;
             options.stop = _stop;

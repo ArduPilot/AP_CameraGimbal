@@ -47,6 +47,7 @@ static std::atomic<unsigned> g_bandwidth(0);
 static std::mutex g_lock;
 static std::vector<std::string> g_puts; /* "remote_dir|name" */
 static std::string g_root, g_ca, g_service, g_section;
+static const char *g_ca_pem = NULL;
 
 static std::vector<std::string> puts_sorted()
 {
@@ -153,6 +154,7 @@ static APC_UploadBackend *make_fake(const struct ca_upload_target *target, char 
         g_root = target->root_folder;
         g_ca = target->ca_file;
         g_service = target->service;
+        g_ca_pem = target->ca_pem;
         g_section = target->credentials_section;
     }
     return new Fake(target->stop);
@@ -550,6 +552,26 @@ static void remembers_per_account(void)
     assert(events() == "S3,C,S3,C"); /* another account: everything is sent to it */
     ca_uploader_destroy(u);
     unlink(s.cache_path);
+}
+
+/* Cameras that build the CA certificates into the program have no CA file: the text is passed on instead. */
+static void built_in_certificates(void)
+{
+    static const char roots[] = "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n";
+    struct ca_upload_settings s = good_settings();
+    s.ca_file[0] = '\0';
+    s.ca_pem = roots;
+    struct ca_uploader *u = start(s, MODE_OK);
+    ca_uploader_periodic(u, 1000, false);
+    wait_for(u, CA_UPLOAD_WAITING, 1000);
+    assert(g_ca_pem == roots && g_creates == 2 && ca_uploader_status(u)->last_error[0] == '\0');
+    ca_uploader_destroy(u);
+    /* No file and no built-in text: the reason says so. */
+    s.ca_pem = NULL;
+    u = start(s, MODE_OK);
+    ca_uploader_periodic(u, 1000, false);
+    assert(ca_uploader_status(u)->state == CA_UPLOAD_DISABLED && has(ca_uploader_status(u)->reason, "CA certificates"));
+    ca_uploader_destroy(u);
 }
 
 /* "Upload now": the next scan starts without waiting for the interval. */
@@ -1271,6 +1293,7 @@ int main(void)
     unusable_settings();
     full_scan();
     chooses_the_service();
+    built_in_certificates();
     announces_work();
     remembers_uploaded_files();
     delete_after_keep();

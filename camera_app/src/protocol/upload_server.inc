@@ -6,6 +6,9 @@
 #if APCAM_HAVE_UPLOAD
 #include "apcam/network.h"
 #include "camera_app/uploader.h"
+#if APCAM_UPLOAD_EMBED_CA
+#include "upload_ca_bundle.h" /* upload_embedded_ca, made by tools/embed_ca.py */
+#endif
 
 static_assert((int)CA_UPLOAD_WHAT_PHOTOS == (int)CA_UPLOAD_PHOTOS && (int)CA_UPLOAD_WHAT_RECORDINGS == (int)CA_UPLOAD_RECORDINGS &&
               (int)CA_UPLOAD_AFTER_KEEP == (int)CA_UPLOAD_KEEP && (int)CA_UPLOAD_AFTER_DELETE == (int)CA_UPLOAD_DELETE &&
@@ -103,6 +106,9 @@ static void upload_configure(struct ca_mavlink_server *server)
     upload_copy(settings.config_path, sizeof(settings.config_path), server->rclone_config);
     const char *service = config->upload_service == CA_UPLOAD_SERVICE_DROPBOX ? APCAM_UPLOAD_DROPBOX_NAME : APCAM_UPLOAD_REMOTE_NAME;
     upload_copy(settings.ca_file, sizeof(settings.ca_file), server->upload_ca_file);
+#if APCAM_UPLOAD_EMBED_CA
+    settings.ca_pem = upload_embedded_ca; /* built in: no file to install */
+#endif
     /* What is already uploaded is remembered beside the credentials, one file per service. */
     const char *slash = strrchr(server->rclone_config, '/');
     if (slash != NULL) {

@@ -249,8 +249,10 @@ static int establish(ca_https *c, char *error, size_t error_size)
 struct ca_https *ca_https_connect(const char *host, unsigned port, const struct ca_https_options *options,
                                   char *error, size_t error_size)
 {
-    if (!host || !host[0] || !port || port > 65535 || !options || !options->ca_file || !options->ca_file[0] ||
-        strlen(host) >= sizeof(((ca_https *)0)->host) || strlen(options->ca_file) >= sizeof(((ca_https *)0)->ca_file) ||
+    if (!host || !host[0] || !port || port > 65535 || !options ||
+        !((options->ca_file && options->ca_file[0]) || (options->ca_pem && options->ca_pem[0])) ||
+        strlen(host) >= sizeof(((ca_https *)0)->host) ||
+        (options->ca_file && strlen(options->ca_file) >= sizeof(((ca_https *)0)->ca_file)) ||
         (options->server_name && strlen(options->server_name) >= sizeof(((ca_https *)0)->server_name))) {
         set_error(error, error_size, "bad connection settings");
         return NULL;
@@ -266,7 +268,7 @@ struct ca_https *ca_https_connect(const char *host, unsigned port, const struct 
     }
     snprintf(c->host, sizeof(c->host), "%s", host);
     snprintf(c->server_name, sizeof(c->server_name), "%s", options->server_name && options->server_name[0] ? options->server_name : host);
-    snprintf(c->ca_file, sizeof(c->ca_file), "%s", options->ca_file);
+    snprintf(c->ca_file, sizeof(c->ca_file), "%s", options->ca_file ? options->ca_file : "");
     c->port = port;
     c->timeout_ms = options->timeout_ms ? options->timeout_ms : DEFAULT_TIMEOUT_MS;
     c->bandwidth_kib_s = options->bandwidth_kib_s;
@@ -276,9 +278,12 @@ struct ca_https *ca_https_connect(const char *host, unsigned port, const struct 
     mbedtls_ssl_config_init(&c->conf);
     mbedtls_x509_crt_init(&c->ca);
 
-    int r = mbedtls_x509_crt_parse_file(&c->ca, c->ca_file);
+    int r = options->ca_pem && options->ca_pem[0]
+        ? mbedtls_x509_crt_parse(&c->ca, (const unsigned char *)options->ca_pem, strlen(options->ca_pem) + 1)
+        : mbedtls_x509_crt_parse_file(&c->ca, c->ca_file);
     if (r < 0 || c->ca.raw.p == NULL) {
-        set_error(error, error_size, "cannot read the CA file %s", c->ca_file);
+        set_error(error, error_size, options->ca_pem && options->ca_pem[0] ? "cannot read the built-in CA certificates"
+                                                                           : "cannot read the CA file %s", c->ca_file);
         ca_https_close(c);
         return NULL;
     }

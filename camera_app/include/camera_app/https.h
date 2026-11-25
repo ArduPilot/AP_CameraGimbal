@@ -15,7 +15,8 @@
 struct ca_https;
 
 struct ca_https_options {
-    const char *ca_file;                 /* PEM bundle; required */
+    const char *ca_file;                 /* PEM bundle file; required unless ca_pem is given */
+    const char *ca_pem;                  /* or the same roots as NUL-terminated PEM text (built into the program) */
     const char *server_name;             /* name checked against the certificate; default: the host */
     unsigned timeout_ms;                 /* longest wait with no progress; default 30000 */
     unsigned bandwidth_kib_s;            /* limit on sent data, KiB/s; 0 = unlimited */

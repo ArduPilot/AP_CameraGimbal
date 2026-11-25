@@ -3,6 +3,7 @@
 #include "camera_app/https.h"
 
 #include <fcntl.h>
+#include <string>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +60,33 @@ int main(int argc, char **argv)
     CHECK(ca_https_connect("localhost", port, &wrong, error, sizeof(error)) == NULL);
     CHECK(ca_https_connect("localhost", 1, &options, error, sizeof(error)) == NULL); /* nothing listens */
 
+    /* the same roots given as text, as the cameras that build them into the program do, and the wrong ones refused */
+    auto read_text = [](const char *path) {
+        std::string text;
+        FILE *f = fopen(path, "rb");
+        char chunk[4096];
+        size_t n;
+        while (f && (n = fread(chunk, 1, sizeof(chunk), f)) > 0) text.append(chunk, n);
+        if (f) fclose(f);
+        return text;
+    };
+    const std::string pem = read_text(ca), other_pem = read_text(other_ca);
+    ca_https_options text_options = options;
+    text_options.ca_file = NULL;
+    text_options.ca_pem = pem.c_str();
+    ca_https *from_text = ca_https_connect("localhost", port, &text_options, error, sizeof(error));
+    CHECK(from_text != NULL);
+    if (from_text) {
+        char reply[64];
+        ca_https_response rt;
+        CHECK(get(from_text, "/json", rt, reply, sizeof(reply), error, sizeof(error)) == CA_HTTPS_OK && rt.status == 200);
+        ca_https_close(from_text);
+    }
+    text_options.ca_pem = other_pem.c_str();
+    CHECK(ca_https_connect("localhost", port, &text_options, error, sizeof(error)) == NULL && strstr(error, "certificate") != NULL);
+    text_options.ca_pem = "not a certificate\n";
+    CHECK(ca_https_connect("localhost", port, &text_options, error, sizeof(error)) == NULL);
+
     ca_https *c = ca_https_connect("localhost", port, &options, error, sizeof(error));
     if (!c) { fprintf(stderr, "FAIL connect: %s\n", error); return 1; }
 
@@ -68,7 +96,7 @@ int main(int argc, char **argv)
     CHECK(get(c, "/chunked", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK);
     CHECK(r.status == 200 && !strcmp(body, "hello world"));
     CHECK(get(c, "/count", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK);
-    CHECK(!strcmp(body, "1")); /* one TLS connection so far */
+    CHECK(!strcmp(body, "2")); /* two TLS connections so far: the one made from PEM text, and this one */
 
     /* statuses and headers */
     CHECK(get(c, "/nobody", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK);
@@ -124,7 +152,7 @@ int main(int argc, char **argv)
     CHECK(get(c, "/json", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK && r.status == 200);
     CHECK(get(c, "/eof", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK && !strcmp(body, "until close"));
     CHECK(get(c, "/count", r, body, sizeof(body), error, sizeof(error)) == CA_HTTPS_OK);
-    CHECK(!strcmp(body, "4")); /* the first, then new ones after close, silentclose and eof */
+    CHECK(!strcmp(body, "5")); /* those two, then new ones after close, silentclose and eof */
 
     /* the bandwidth limit applies to sent data */
     ca_https_set_bandwidth(c, 16);

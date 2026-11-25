@@ -24,6 +24,7 @@ struct ca_upload_target {
     const char *credentials_section;  /* its section, for example "gdrive" */
     const char *root_folder;          /* folders below the service's root, "/" separated; created if missing */
     const char *ca_file;              /* PEM bundle of trusted roots */
+    const char *ca_pem;               /* or the same as NUL-terminated PEM text; used instead of the file when set */
     unsigned bandwidth_kib_s;         /* 0 = unlimited */
     const std::atomic<bool> *stop;
     /* Tests point these at a local server; blank means the real service. */
