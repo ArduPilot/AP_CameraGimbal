@@ -413,7 +413,7 @@ static std::string credentials_fingerprint(const char *path, const char *section
     const char *parts[3] = {id, "\n", token};
     for (const char *p : parts)
         for (; *p; p++) hash = (hash ^ (unsigned char)*p) * 1099511628211ULL;
-    explicit_bzero(token, sizeof(token));
+    secure_zero(token, sizeof(token));
     char hex[20];
     snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)hash);
     return hex;

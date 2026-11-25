@@ -178,7 +178,7 @@ clean:
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
 zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
+	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -DAPCAM_ENABLE_UPLOAD -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
 
 .PHONY: zr10-test
 zr10-test: $(VERSION_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) build/zr10_upgrade.h

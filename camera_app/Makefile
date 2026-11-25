@@ -12,7 +12,7 @@ endif
 # themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
 # which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
 UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
-UPLOAD_BACKENDS := a8 z1mini
+UPLOAD_BACKENDS := a8 z1mini zr10
 UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
 UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
 UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls

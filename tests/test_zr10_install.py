@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='zr10-install-') as work:
             (source / script.name).write_text(text)
         for name in ('camera-app', 'zr10-web', 'zr10-uuid'):
             (source / name).write_text('#!/bin/sh\nexit 0\n')
-        for name in ('camera.ini.default', 'web.pass.default', 'VERSION', 'README.md',
+        for name in ('camera.ini.default', 'web.pass.default', 'ca-certificates.pem', 'VERSION', 'README.md',
                      'COPYING.txt', 'THIRD_PARTY.md', 'OpenIPC-LICENSE.txt'):
             (source / name).write_text('fixture\n')
         (source / 'webroot').mkdir()

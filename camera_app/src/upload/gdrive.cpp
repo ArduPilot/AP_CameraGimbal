@@ -87,9 +87,9 @@ public:
     ~APC_GDriveBackend() override
     {
         ca_https_close(_api);
-        explicit_bzero(_client_secret, sizeof(_client_secret));
-        explicit_bzero(_refresh_token, sizeof(_refresh_token));
-        explicit_bzero(_access_token, sizeof(_access_token));
+        secure_zero(_client_secret, sizeof(_client_secret));
+        secure_zero(_refresh_token, sizeof(_refresh_token));
+        secure_zero(_access_token, sizeof(_access_token));
     }
     bool init(const ca_upload_target *target, char *error, size_t error_size);
     ca_put_result put(const char *remote_dir, const char *name, const char *local_path,
@@ -152,11 +152,11 @@ bool APC_GDriveBackend::init(const ca_upload_target *t, char *error, size_t erro
         !config_value(t->credentials_path, t->credentials_section, "client_secret", _client_secret, sizeof(_client_secret)) ||
         !config_value(t->credentials_path, t->credentials_section, "token", token, sizeof(token)) ||
         !json_string(token, "refresh_token", _refresh_token, sizeof(_refresh_token)) || !_refresh_token[0]) {
-        explicit_bzero(token, sizeof(token));
+        secure_zero(token, sizeof(token));
         set_error(error, error_size, "No Google Drive credentials saved");
         return false;
     }
-    explicit_bzero(token, sizeof(token));
+    secure_zero(token, sizeof(token));
     return true;
 }
 
@@ -207,7 +207,7 @@ bool APC_GDriveBackend::refresh_access_token(char *error, size_t error_size)
     r.body_capacity = sizeof(_scratch);
     const int rc = ca_https_request(auth, &q, &r, error, error_size);
     ca_https_close(auth);
-    explicit_bzero(form, sizeof(form));
+    secure_zero(form, sizeof(form));
     if (rc != CA_HTTPS_OK) return false;
     double expires = 3600;
     if (r.status != 200 || !json_string(_scratch, "access_token", _access_token, sizeof(_access_token))) {
@@ -280,7 +280,7 @@ int APC_GDriveBackend::call(const char *method, const char *path, const char *he
         response.body = _body;
         response.body_capacity = sizeof(_body);
         const int rc = ca_https_request(_api, &q, &response, error, error_size);
-        explicit_bzero(head, sizeof(head));
+        secure_zero(head, sizeof(head));
         if (rc == CA_HTTPS_ERR_STOPPED) return rc;
         if (rc != CA_HTTPS_OK) {
             ca_https_close(_api);

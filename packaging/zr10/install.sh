@@ -20,7 +20,7 @@ fi
 }
 mkdir -p "$dest/config"
 if [ "$src" != "$dest" ]; then
-    for file in camera-app zr10-web zr10-uuid demo.sh service.sh boot.sh install.sh uninstall.sh camera.ini.default web.pass.default VERSION SDK_SHA256SUMS README.md COPYING.txt THIRD_PARTY.md OpenIPC-LICENSE.txt; do
+    for file in camera-app zr10-web zr10-uuid demo.sh service.sh boot.sh install.sh uninstall.sh camera.ini.default web.pass.default ca-certificates.pem VERSION SDK_SHA256SUMS README.md COPYING.txt THIRD_PARTY.md OpenIPC-LICENSE.txt; do
         cp "$src/$file" "$dest/$file.new"
         mv "$dest/$file.new" "$dest/$file"
     done

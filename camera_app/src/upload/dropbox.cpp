@@ -120,9 +120,9 @@ public:
     {
         ca_https_close(_api);
         ca_https_close(_content);
-        explicit_bzero(_secret, sizeof(_secret));
-        explicit_bzero(_refresh_token, sizeof(_refresh_token));
-        explicit_bzero(_access_token, sizeof(_access_token));
+        secure_zero(_secret, sizeof(_secret));
+        secure_zero(_refresh_token, sizeof(_refresh_token));
+        secure_zero(_access_token, sizeof(_access_token));
     }
     bool init(const ca_upload_target *target, char *error, size_t error_size);
     ca_put_result put(const char *remote_dir, const char *name, const char *local_path,
@@ -191,11 +191,11 @@ bool APC_DropboxBackend::init(const ca_upload_target *t, char *error, size_t err
         !config_value(t->credentials_path, t->credentials_section, "client_secret", _secret, sizeof(_secret)) ||
         !config_value(t->credentials_path, t->credentials_section, "token", token, sizeof(token)) ||
         !json_string(token, "refresh_token", _refresh_token, sizeof(_refresh_token)) || !_refresh_token[0]) {
-        explicit_bzero(token, sizeof(token));
+        secure_zero(token, sizeof(token));
         set_error(error, error_size, "No Dropbox credentials saved");
         return false;
     }
-    explicit_bzero(token, sizeof(token));
+    secure_zero(token, sizeof(token));
     return true;
 }
 
@@ -235,7 +235,7 @@ bool APC_DropboxBackend::refresh_access_token(char *error, size_t error_size)
     add("client_id", _key);
     add("client_secret", _secret);
     if (!built || used + 1 >= sizeof(form)) {
-        explicit_bzero(form, sizeof(form));
+        secure_zero(form, sizeof(form));
         set_error(error, error_size, "credentials too long");
         return false;
     }
@@ -250,7 +250,7 @@ bool APC_DropboxBackend::refresh_access_token(char *error, size_t error_size)
     r.body = _scratch;
     r.body_capacity = sizeof(_scratch);
     const int rc = ca_https_request(_api, &q, &r, error, error_size);
-    explicit_bzero(form, sizeof(form));
+    secure_zero(form, sizeof(form));
     if (rc != CA_HTTPS_OK) {
         ca_https_close(_api);
         _api = NULL;
@@ -260,7 +260,7 @@ bool APC_DropboxBackend::refresh_access_token(char *error, size_t error_size)
     /* A token that does not fit would be cut short, and Dropbox would then refuse it. */
     if (r.status == 200 && (r.truncated || (!json_string(_scratch, "access_token", _access_token, sizeof(_access_token)) &&
                                             strstr(_scratch, "\"access_token\"") != NULL))) {
-        explicit_bzero(_access_token, sizeof(_access_token));
+        secure_zero(_access_token, sizeof(_access_token));
         set_error(error, error_size, "Dropbox sent an access token that is too long to use");
         return false;
     }
@@ -336,7 +336,7 @@ int APC_DropboxBackend::call(Host host, const char *path, const char *headers, c
         response.body = _body;
         response.body_capacity = sizeof(_body);
         const int rc = ca_https_request(c, &q, &response, error, error_size);
-        explicit_bzero(&head[0], head.size()); /* it holds the access token */
+        secure_zero(&head[0], head.size()); /* it holds the access token */
         if (rc == CA_HTTPS_ERR_STOPPED) return rc;
         if (rc == CA_HTTPS_ERR_FILE) return rc;
         if (rc != CA_HTTPS_OK) {

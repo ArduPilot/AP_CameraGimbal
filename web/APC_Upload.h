@@ -9,6 +9,14 @@
  * file in rclone's format, which only the camera software can read. */
 #define UPLOAD_REMOTE_NAME APCAM_UPLOAD_REMOTE_NAME
 
+/* explicit_bzero is not in every C library the cameras use (uClibc lacks it); volatile stores are not
+ * optimised away, which a plain memset can be. */
+static void upload_zero(void *memory, size_t length)
+{
+    volatile unsigned char *p = static_cast<volatile unsigned char *>(memory);
+    while (length--) *p++ = 0;
+}
+
 static const char *upload_rclone_config_path(void)
 {
     const char *path = getenv("CAMERA_APP_RCLONE_CONFIG");
@@ -346,7 +354,7 @@ static bool upload_replace_section_locked(const char *path, const char *name, co
     }
     if (section != NULL) out.append(section);
     if (!out.valid()) {
-        explicit_bzero(old, strlen(old));
+        upload_zero(old, strlen(old));
         free(old);
         snprintf(error, error_size, T(S_UPLOAD_CRED_FAILED), strerror(ENOMEM));
         return false;
@@ -367,8 +375,8 @@ static bool upload_replace_section_locked(const char *path, const char *name, co
         snprintf(error, error_size, T(S_UPLOAD_CRED_FAILED), strerror(ENAMETOOLONG));
     }
     /* The copies hold the old and the new secret and token. */
-    explicit_bzero(old, strlen(old));
-    explicit_bzero((void *)out.data(), out.size());
+    upload_zero(old, strlen(old));
+    upload_zero((void *)out.data(), out.size());
     free(old);
     return ok;
 }
@@ -436,10 +444,10 @@ static bool upload_credentials_update(const APC_HTTPRequest *request, bool *remo
         snprintf(section, sizeof(section), "[%s]\ntype = %s\nclient_id = %s\n"
                  "client_secret = %s\ntoken = %s\n\n", service->section, service->type, id, secret, token);
         ok = upload_replace_section(upload_rclone_config_path(), service->section, section, error, error_size);
-        explicit_bzero(section, sizeof(section));
+        upload_zero(section, sizeof(section));
     }
-    if (secret != NULL) explicit_bzero(secret, secret_length);
-    if (token != NULL) explicit_bzero(token, token_length);
+    if (secret != NULL) upload_zero(secret, secret_length);
+    if (token != NULL) upload_zero(token, token_length);
     free(action);
     free(service_name);
     free(id);
