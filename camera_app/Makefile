@@ -12,7 +12,7 @@ endif
 # themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
 # which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
 UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
-UPLOAD_BACKENDS := a8 z1mini zr10
+UPLOAD_BACKENDS := a8 z1mini zr10 mt11
 UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
 UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
 UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls
@@ -255,7 +255,7 @@ SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
 ifeq ($(CAMERA_BACKEND),mt11)
 MT11_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/mt11-xop/%.o,\
     $(filter-out $(RTSP_ROOT)/net/BufferWriter.cpp $(RTSP_ROOT)/net/SocketUtil.cpp,$(XOP_HOST_SOURCES)))
-OBJECTS += $(MT11_XOP_OBJECTS)
+OBJECTS += $(MT11_XOP_OBJECTS) $(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES:.cpp=.o))
 endif
 # Our adapter includes vendor headers before compiler-generated .d files exist.
 build/rtsp_xop.o build/$(CAMERA_BACKEND)/rtsp_xop.o $(SITL_OBJDIR)/rtsp_xop.o: | $(XOP_PREPARE_STAMP)
@@ -325,6 +325,16 @@ ifeq ($(CAMERA_BACKEND),z1mini)
 build/z1mini/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
 endif
 
+ifneq ($(UPLOAD_ANY),)
+# The MT11 builds its objects beside the sources; the other cameras build theirs under build/<camera>/c.
+UPLOAD_OBJPREFIX := $(if $(filter mt11,$(CAMERA_BACKEND)),,build/$(CAMERA_BACKEND)/c/)
+$(UPLOAD_OBJPREFIX)src/upload/%.o: CPPFLAGS += -isystem $(UPLOAD_MBEDTLS)/include
+# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are rebuilt.
+$(patsubst %,$(UPLOAD_OBJPREFIX)%.o,$(basename $(UPLOAD_SOURCES))): $(UPLOAD_MBEDTLS)/stamp
+$(UPLOAD_MBEDTLS)/stamp: FORCE
+	$(MAKE) mbedtls CAMERA_BACKEND=$(CAMERA_BACKEND)
+endif
+
 ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 include ../tools/zt30_app.mk
 else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
@@ -344,14 +354,6 @@ $(TARGET): Makefile $(OBJECTS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS)/stamp)
 		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS)) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS_LIBS))
 
 # The upload code includes Mbed TLS, which is built first (make mbedtls).
-ifneq ($(UPLOAD_ANY),)
-build/$(CAMERA_BACKEND)/c/src/upload/%.o: CPPFLAGS += -isystem $(UPLOAD_MBEDTLS)/include
-# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are rebuilt.
-$(patsubst %,build/$(CAMERA_BACKEND)/c/%.o,$(basename $(UPLOAD_SOURCES))): $(UPLOAD_MBEDTLS)/stamp
-$(UPLOAD_MBEDTLS)/stamp: FORCE
-	$(MAKE) mbedtls CAMERA_BACKEND=$(CAMERA_BACKEND)
-endif
-
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 # Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS += -std=gnu++20
@@ -393,16 +395,16 @@ build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o: build/xop_rtp_connection.cpp
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 else
-$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS)
+$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS)/stamp)
 	$(call progress,Linking $@)
-	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
+	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS_LIBS)) \
 		-Wl,--start-group $(MEDIA_LIBS) -Wl,--end-group \
 		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm -ldl
 endif
 
 %.o: %.cpp
 	$(call progress,Compiling $(notdir $<))
-	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD) $(APP_CXXFLAGS) -c -o $@ $<
 
 $(MAVLINK_XML) $(MAVGEN):
 	@echo "error: $@ is missing; run 'git submodule update --init --recursive'" >&2

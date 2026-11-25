@@ -160,6 +160,8 @@ install -m 0755 "$dropbear_start" "$overlay/dropbear/start-dropbear.sh"
 install -m 0755 "$app_init" "$overlay/app_init.sh"
 install -m 0755 "$app_selection" "$overlay/app_selection.sh"
 install -m 0644 "$camera_ini" "$overlay/camera.ini.default"
+# the certificates cloud upload trusts (camera.ini [upload])
+install -m 0644 "$script_dir/../packaging/ca-certificates/cloud-roots.pem" "$overlay/ca-certificates.pem"
 umask 077
 printf '%s\n' "$web_password" >"$overlay/web.pass.default"
 
@@ -167,7 +169,7 @@ printf '%s\n' "$web_password" >"$overlay/web.pass.default"
 # not contain siyi_camera_app_tmp: product_upgrade's final mv then fails
 # harmlessly and leaves the already-installed vendor application intact.
 tar --owner=0 --group=0 -czf "$system/app.tar.gz" -C "$overlay" \
-    app_init.sh app_selection.sh bin dropbear webroot camera.ini.default web.pass.default
+    app_init.sh app_selection.sh bin dropbear webroot camera.ini.default ca-certificates.pem web.pass.default
 tar -tzf "$system/app.tar.gz" | grep -qx 'camera.ini.default' || {
     echo "Application overlay is missing camera.ini.default" >&2
     exit 1

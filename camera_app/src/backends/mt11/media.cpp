@@ -89,6 +89,7 @@ struct APC_Media_MT11_State {
     struct ca_live_video_server *live_video;
     struct ca_mp4 *mp4[2];
     char recording_path[2][PATH_MAX];
+    char raw_recording_path[PATH_MAX]; /* the raw thermal file, while one is open */
     unsigned thermal_rtsp_stream;
     struct ca_mt11_thermal *thermal;
     struct ca_raw_thermal *raw_thermal;
@@ -143,6 +144,7 @@ public:
     }
     bool recording() const override;
     const char * recording_path() const override;
+    const char * recording_path_at(unsigned index) const override;
     int set_zoom(float zoom) override;
     float zoom() const override;
     int set_lens_zoom(enum ca_media_lens lens, float zoom) override;
@@ -903,6 +905,14 @@ bool APC_Media_MT11::recording() const
 {
     const auto *media = _state;
     return media != NULL && atomic_load(&media->recording);
+}
+
+const char * APC_Media_MT11::recording_path_at(unsigned index) const
+{
+    auto *media = _state;
+    if (media == NULL || index > 2U) return NULL;
+    if (index == 2U) return ca_thermal_stream_record_path(media->thermal_stream, media->raw_recording_path, sizeof(media->raw_recording_path)) ? media->raw_recording_path : NULL;
+    return media->recording_path[index][0] ? media->recording_path[index] : NULL;
 }
 
 const char * APC_Media_MT11::recording_path() const

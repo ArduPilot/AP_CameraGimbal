@@ -90,7 +90,7 @@ all: mt11-web
 
 mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
+	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DAPCAM_ENABLE_UPLOAD $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
