@@ -1160,3 +1160,15 @@ build/tests/test_stream_layout: tests/test_stream_layout.cpp src/protocol/mavlin
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $< -lpthread -lm
 
 test: stream-layout-test
+
+# Mbed TLS (the modules/mbedtls submodule) for the cloud uploader, built for
+# this target's compiler into build/<target>/mbedtls, and for the host
+# (tests, SITL) into build/host/mbedtls.
+MBEDTLS_DIR := build/$(CAMERA_BACKEND)/mbedtls
+.PHONY: mbedtls mbedtls-host
+mbedtls:
+	$(call progress,Building Mbed TLS for $(CAMERA_BACKEND))
+	../tools/build_mbedtls.sh $(MBEDTLS_DIR) '$(CROSS_COMPILE)'
+mbedtls-host:
+	$(call progress,Building Mbed TLS for the host)
+	../tools/build_mbedtls.sh build/host/mbedtls ''
