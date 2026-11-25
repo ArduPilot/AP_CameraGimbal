@@ -12,7 +12,7 @@ endif
 # themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
 # which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
 UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
-UPLOAD_BACKENDS := a8
+UPLOAD_BACKENDS := a8 z1mini
 UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
 UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
 UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls
@@ -321,6 +321,9 @@ generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
 # Cameras with no place to install a CA file have the certificates built into camera-app (see embed_ca.py).
 build/upload_ca_bundle.h: ../packaging/ca-certificates/cloud-roots.pem ../tools/embed_ca.py
 	$(PYTHON) ../tools/embed_ca.py $< $@
+ifeq ($(CAMERA_BACKEND),z1mini)
+build/z1mini/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
+endif
 
 ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 include ../tools/zt30_app.mk

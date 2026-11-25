@@ -220,7 +220,7 @@ Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
 z1mini-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(Z1MINI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
-	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
+	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -DAPCAM_ENABLE_UPLOAD -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
 
 ifeq ($(CAMERA_BACKEND),zr10)
 $(SITL_TARGET) $(SITL_BIN_ROOT)/mt11-web-portable $(HOST_TEST): build/zr10_upgrade.h zr10_firmware.h
