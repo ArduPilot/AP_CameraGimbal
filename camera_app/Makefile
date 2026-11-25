@@ -8,14 +8,22 @@ ifeq ($(filter $(CAMERA_BACKEND),$(SUPPORTED_BACKENDS)),)
 $(error Unsupported CAMERA_BACKEND '$(CAMERA_BACKEND)'; supported backends: $(SUPPORTED_BACKENDS))
 endif
 
+# Cloud upload (see docs/cloud-upload-setup.md). The Raspberry Pi always has it. The other cameras list
+# themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
+# which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
+UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
+UPLOAD_BACKENDS :=
+UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
+UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
+UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls
+UPLOAD_MBEDTLS_LIBS := $(UPLOAD_MBEDTLS)/lib/libmbedtls.a $(UPLOAD_MBEDTLS)/lib/libmbedx509.a $(UPLOAD_MBEDTLS)/lib/libtfpsacrypto.a
+
 ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
 # Raspberry Pi: native build on Raspberry Pi OS, linked against the system
 # libcamera. Cross builds supply CROSS_COMPILE and LIBCAMERA_* flags.
 CROSS_COMPILE ?=
 LDFLAGS ?=
 TARGET := build/rpi_libcam_caddx/camera-app
-UPLOAD_MBEDTLS := build/rpi_libcam_caddx/mbedtls
-UPLOAD_MBEDTLS_LIBS := $(UPLOAD_MBEDTLS)/lib/libmbedtls.a $(UPLOAD_MBEDTLS)/lib/libmbedx509.a $(UPLOAD_MBEDTLS)/lib/libtfpsacrypto.a
 PKG_CONFIG ?= pkg-config
 LIBCAMERA_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcamera)
 LIBCAMERA_LIBS ?= $(shell $(PKG_CONFIG) --libs libcamera)
@@ -175,7 +183,7 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp $(MISB_SOURCES) \
 	$(CONTROL_DIR)/control.cpp \
-	$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp)
+	$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(UPLOAD_SOURCES))
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
@@ -314,23 +322,24 @@ A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
 ARM_APP_OBJECTS := $(patsubst %.cpp,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURCES) \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
-	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
+	$(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES)) $(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
 OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
-$(TARGET): Makefile $(OBJECTS) $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(UPLOAD_MBEDTLS)/stamp)
+$(TARGET): Makefile $(OBJECTS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS)/stamp)
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
-		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS) $(UPLOAD_MBEDTLS_LIBS))
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS)) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS_LIBS))
 
 # The upload code includes Mbed TLS, which is built first (make mbedtls).
-build/rpi_libcam_caddx/c/src/upload/%.o: CPPFLAGS += -isystem build/rpi_libcam_caddx/mbedtls/include
-build/rpi_libcam_caddx/c/src/upload/uploader.o build/rpi_libcam_caddx/c/src/upload/https.o \
-	build/rpi_libcam_caddx/c/src/upload/gdrive.o build/rpi_libcam_caddx/c/src/upload/dropbox.o \
-	build/rpi_libcam_caddx/c/src/upload/backend.o: | build/rpi_libcam_caddx/mbedtls/stamp
-build/rpi_libcam_caddx/mbedtls/stamp: FORCE
-	$(MAKE) mbedtls CAMERA_BACKEND=rpi_libcam_caddx
+ifneq ($(UPLOAD_ANY),)
+build/$(CAMERA_BACKEND)/c/src/upload/%.o: CPPFLAGS += -isystem $(UPLOAD_MBEDTLS)/include
+# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are rebuilt.
+$(patsubst %,build/$(CAMERA_BACKEND)/c/%.o,$(basename $(UPLOAD_SOURCES))): $(UPLOAD_MBEDTLS)/stamp
+$(UPLOAD_MBEDTLS)/stamp: FORCE
+	$(MAKE) mbedtls CAMERA_BACKEND=$(CAMERA_BACKEND)
+endif
 
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 # Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
@@ -339,7 +348,7 @@ build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS +
 build/$(CAMERA_BACKEND)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
-	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
 		-Wno-error=sign-compare -Wno-error=unused-variable \
 		-Wno-error=implicit-fallthrough -ffunction-sections -fdata-sections \
 		-c $< -o $@
