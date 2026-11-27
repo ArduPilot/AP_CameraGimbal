@@ -122,6 +122,11 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 /* Pi OS has no /mnt media card; the service may override these. */
 #define APCAM_LOG_ROOT "/var/lib/ap_cameragimbal/logs"
+/* Uploads go straight to the cloud service, with the user's own credentials. */
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_CA_FILE "/usr/local/share/ap_cameragimbal/ca-certificates.pem"
+/* Kept with the other settings, not in MEDIA_ROOT, which the Files page lists with download and delete links. */
+#define APCAM_RCLONE_CONFIG "/etc/ap_cameragimbal/rclone.conf"
 
 /* Platform paths are consumed only by the web service. systemd supervises
  * both services: the web stops camera-app and systemd starts a fresh one. */

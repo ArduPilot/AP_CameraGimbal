@@ -132,13 +132,14 @@ jobs:
         run: make -C camera_app system-stats-test
       - name: Test Raspberry Pi image controls, CADDX gimbal and JPEG stills, and build against libcamera 0.2
         run: |
-          make -C camera_app rpi_libcam_caddx-test tests/camera-app-rpi-host
+          make -C camera_app rpi_libcam_caddx-test uploader-test rpi-upload-test tests/camera-app-rpi-host
           python3 camera_app/tests/test_rpi_rate_tracking.py camera_app/tests/camera-app-rpi-host
+          make -C web rpi-web-test
           sudo apt-get install -y libcamera-dev libjpeg-dev pkg-config
           make -C camera_app rpi_jpeg-test
           make -j8 rpi_libcam_caddx
       - name: Test the native cloud uploader's HTTPS client and Google Drive backend
-        run: make -C camera_app uploader-test https-test gdrive-test dropbox-test
+        run: make -C camera_app https-test gdrive-test dropbox-test
       - name: Test MAVLink control BIN logging and sender identities
         run: make -C camera_app mavlink-binlog-test
       - name: Test SIYI and XFRobot packet BIN logging on all camera targets

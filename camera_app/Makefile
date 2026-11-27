@@ -14,6 +14,8 @@ ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
 CROSS_COMPILE ?=
 LDFLAGS ?=
 TARGET := build/rpi_libcam_caddx/camera-app
+UPLOAD_MBEDTLS := build/rpi_libcam_caddx/mbedtls
+UPLOAD_MBEDTLS_LIBS := $(UPLOAD_MBEDTLS)/lib/libmbedtls.a $(UPLOAD_MBEDTLS)/lib/libmbedx509.a $(UPLOAD_MBEDTLS)/lib/libtfpsacrypto.a
 PKG_CONFIG ?= pkg-config
 LIBCAMERA_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcamera)
 LIBCAMERA_LIBS ?= $(shell $(PKG_CONFIG) --libs libcamera)
@@ -84,6 +86,10 @@ APP_CXXFLAGS = $(filter-out -std=%,$(CFLAGS)) $(CXXFLAGS)
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Werror -std=c11
 ifeq ($(CAMERA_BACKEND),zr10)
 CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
+endif
+ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
+# On a 32-bit Raspberry Pi OS off_t is 32 bits unless told otherwise, and a recording over 2 GiB cannot be examined.
+CFLAGS += -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -D_FILE_OFFSET_BITS=64
@@ -168,7 +174,8 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp $(MISB_SOURCES) \
-	$(CONTROL_DIR)/control.cpp
+	$(CONTROL_DIR)/control.cpp \
+	$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp)
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
@@ -207,11 +214,20 @@ A8_HOST_SOURCES := $(filter-out src/backends/mt11/control.cpp \
 # RPi target with stub media, for host tests of its MAVLink behaviour.
 RPI_HOST_TARGET := tests/camera-app-rpi-host
 RPI_HOST_SOURCES := $(filter-out $(CONTROL_DIR)/control.cpp src/protocol/unigcs.cpp,$(COMMON_SOURCES)) \
-	src/backends/caddx/control.cpp src/media/stub.cpp
+	src/backends/caddx/control.cpp src/media/stub.cpp src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
 SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sitl)
 SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
 SITL_OBJDIR ?= build/$(SITL_VARIANT)
 SITL_EXTRA_CPPFLAGS ?=
+# The Raspberry Pi simulator includes the upload code, which needs Mbed TLS built for the host.
+SITL_UPLOAD_LIBS :=
+SITL_UPLOAD_OBJECTS :=
+ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
+SITL_EXTRA_CPPFLAGS += -isystem build/host/mbedtls/include
+SITL_UPLOAD_LIBS := build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a
+SITL_UPLOAD_OBJECTS := $(patsubst %,$(SITL_OBJDIR)/c/src/upload/%.o,uploader https gdrive dropbox backend)
+$(SITL_UPLOAD_OBJECTS): | build/host/mbedtls/stamp
+endif
 SITL_SOURCES := $(COMMON_SOURCES) src/media/stub.cpp src/media/sitl_terrain.cpp \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp
 SITL_APP_OBJECTS := $(patsubst %.cpp,$(SITL_OBJDIR)/c/%.o,$(SITL_SOURCES))
@@ -301,12 +317,20 @@ ARM_APP_OBJECTS := $(patsubst %.cpp,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURC
 	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
 OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
-$(TARGET): Makefile $(OBJECTS)
+$(TARGET): Makefile $(OBJECTS) $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(UPLOAD_MBEDTLS)/stamp)
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
-		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS))
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS) $(UPLOAD_MBEDTLS_LIBS))
+
+# The upload code includes Mbed TLS, which is built first (make mbedtls).
+build/rpi_libcam_caddx/c/src/upload/%.o: CPPFLAGS += -isystem build/rpi_libcam_caddx/mbedtls/include
+build/rpi_libcam_caddx/c/src/upload/uploader.o build/rpi_libcam_caddx/c/src/upload/https.o \
+	build/rpi_libcam_caddx/c/src/upload/gdrive.o build/rpi_libcam_caddx/c/src/upload/dropbox.o \
+	build/rpi_libcam_caddx/c/src/upload/backend.o: | build/rpi_libcam_caddx/mbedtls/stamp
+build/rpi_libcam_caddx/mbedtls/stamp: FORCE
+	$(MAKE) mbedtls CAMERA_BACKEND=rpi_libcam_caddx
 
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 # Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
@@ -472,9 +496,10 @@ $(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src
 		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
 
 $(RPI_HOST_TARGET): CAMERA_BACKEND=rpi_libcam_caddx
-$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS)
+$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS) build/host/mbedtls/stamp
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
+	$(HOST_CXX) $(CPPFLAGS) -DCAMERA_APP_UPLOAD_TEST_HOOKS -isystem build/host/mbedtls/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) \
+		build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a -lm -lpthread
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
@@ -645,7 +670,7 @@ sitl: $(SITL_TARGET)
 $(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
-	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
+	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(SITL_UPLOAD_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 
 $(SITL_OBJDIR)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
@@ -1171,6 +1196,11 @@ tests/test_uploader: tests/test_uploader.cpp src/upload/uploader.cpp src/upload/
 uploader-test: tests/test_uploader
 	./tests/test_uploader
 test: uploader-test
+
+.PHONY: rpi-upload-test
+rpi-upload-test: $(RPI_HOST_TARGET)
+	python3 tests/test_rpi_upload.py ./$(RPI_HOST_TARGET)
+test: rpi-upload-test
 
 # Mbed TLS (the modules/mbedtls submodule) for the cloud uploader, built for
 # this target's compiler into build/<target>/mbedtls, and for the host
