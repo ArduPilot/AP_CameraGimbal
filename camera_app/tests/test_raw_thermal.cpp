@@ -41,6 +41,11 @@ int main(void)
     strcpy(first, ca_raw_thermal_path(capture));
     assert(strstr(first, "/2023-11-14/2023-11-14_22-13-20_123_I.bin") != NULL);
     assert(stat(first, &status) == 0 && status.st_size == (off_t)sizeof(data));
+    {   /* written under a .part name and renamed: no unfinished file is left under the final name or beside it */
+        char part[sizeof(first) + 8];
+        snprintf(part, sizeof(part), "%s.part", first);
+        assert(access(part, F_OK) != 0);
+    }
     assert(status.st_mtim.tv_sec == captured_at.tv_sec);
     assert(status.st_mtim.tv_nsec == captured_at.tv_nsec);
     fd = open(first, O_RDONLY | O_CLOEXEC);

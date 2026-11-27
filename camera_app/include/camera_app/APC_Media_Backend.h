@@ -22,6 +22,8 @@ public:
     virtual int set_recording(bool active) = 0;
     virtual bool recording() const = 0;
     virtual const char * recording_path() const = 0;
+    // Every file being recorded to (a camera that records the thermal view separately has a second); NULL past the last.
+    virtual const char * recording_path_at(unsigned index) const { return index == 0 ? recording_path() : NULL; }
     virtual int set_zoom(float zoom) = 0;
     virtual float zoom() const = 0;
     virtual int set_lens_zoom(enum ca_media_lens lens, float zoom) { if (lens != CA_MEDIA_LENS_WIDE) { errno = EINVAL; return -1; } return set_zoom(zoom); }

@@ -264,13 +264,16 @@ bool ca_survey_json(const ca_survey_result &r, char *out, unsigned size)
 
 bool ca_survey_write_metadata(const ca_survey_result &r)
 {
-    char path[600],data[2048];
+    char path[600],part[608],data[2048];
     if(!ca_survey_json(r,data,sizeof(data))) return false;
     snprintf(path,sizeof(path),"%s.json",r.path);
-    FILE *f=fopen(path,"w");
+    /* Written as .part and renamed, so a scan of the folder (the cloud uploader's) never sees it half written. */
+    snprintf(part,sizeof(part),"%s.part",path);
+    FILE *f=fopen(part,"w");
     if(!f) return false;
     bool ok=fprintf(f,"%s\n",data)>0;
     if(fclose(f)) ok=false;
-    if(!ok) unlink(path);
+    if(ok && rename(part,path)!=0) ok=false;
+    if(!ok) unlink(part);
     return ok;
 }

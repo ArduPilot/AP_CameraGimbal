@@ -1161,6 +1161,17 @@ build/tests/test_stream_layout: tests/test_stream_layout.cpp src/protocol/mavlin
 
 test: stream-layout-test
 
+# Cloud upload: the uploader and its tests.
+tests/test_uploader: tests/test_uploader.cpp src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp include/camera_app/uploader.h include/camera_app/upload_backend.h src/log.cpp build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem build/host/mbedtls/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: uploader-test
+uploader-test: tests/test_uploader
+	./tests/test_uploader
+test: uploader-test
+
 # Mbed TLS (the modules/mbedtls submodule) for the cloud uploader, built for
 # this target's compiler into build/<target>/mbedtls, and for the host
 # (tests, SITL) into build/host/mbedtls.
@@ -1172,3 +1183,43 @@ mbedtls:
 mbedtls-host:
 	$(call progress,Building Mbed TLS for the host)
 	../tools/build_mbedtls.sh build/host/mbedtls ''
+
+# The HTTPS client for the cloud uploader, against a loopback TLS server.
+HTTPS_TEST_MBEDTLS := build/host/mbedtls
+tests/test_https: tests/test_https.cpp src/upload/https.cpp include/camera_app/https.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+build/host/mbedtls/stamp: FORCE
+	$(MAKE) mbedtls-host
+
+.PHONY: https-test
+https-test: tests/test_https
+	python3 tests/test_https.py ./tests/test_https
+test: https-test
+
+# The Google Drive backend, against a fake Drive.
+tests/test_gdrive: tests/test_gdrive.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp src/upload/https.cpp include/camera_app/upload_backend.h include/camera_app/https.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: gdrive-test
+gdrive-test: tests/test_gdrive
+	python3 tests/test_gdrive.py ./tests/test_gdrive
+test: gdrive-test
+
+# The Dropbox backend, against a fake Dropbox.
+tests/test_dropbox: tests/test_dropbox.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp src/upload/https.cpp include/camera_app/upload_backend.h include/camera_app/https.h src/upload/upload_util.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: dropbox-test
+dropbox-test: tests/test_dropbox
+	python3 tests/test_dropbox.py ./tests/test_dropbox
+test: dropbox-test

@@ -151,4 +151,16 @@
 #ifndef APCAM_HAVE_THERMAL_VIDEO
 #define APCAM_HAVE_THERMAL_VIDEO APCAM_HAVE_THERMAL
 #endif
+/* Targets that can upload photos and recordings to a cloud service set this to
+ * 1, and the default locations of the credentials file (in rclone's format) and
+ * of the PEM bundle of CA certificates the service must chain to. */
+#ifndef APCAM_HAVE_UPLOAD
+#define APCAM_HAVE_UPLOAD 0
+#endif
+#ifndef APCAM_UPLOAD_CA_FILE
+#define APCAM_UPLOAD_CA_FILE ""
+#endif
+#ifndef APCAM_RCLONE_CONFIG
+#define APCAM_RCLONE_CONFIG ""
+#endif
 #endif

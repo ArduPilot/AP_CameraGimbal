@@ -18,6 +18,7 @@
 struct ca_raw_thermal {
     char root[PATH_MAX];
     char path[PATH_MAX];
+    char temporary[PATH_MAX + 8]; /* path + ".part": written here, then renamed, so it never looks finished early */
     unsigned count;
 };
 
@@ -85,7 +86,10 @@ static int make_path(struct ca_raw_thermal *capture, int *fd,
             errno = ENAMETOOLONG;
             return -1;
         }
-        *fd = open(capture->path,
+        struct stat existing;
+        if (lstat(capture->path, &existing) == 0) continue; /* the finished name is taken */
+        snprintf(capture->temporary, sizeof(capture->temporary), "%s.part", capture->path);
+        *fd = open(capture->temporary,
                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
         if (*fd >= 0) return 0;
         if (errno != EEXIST) return -1;
@@ -164,9 +168,12 @@ int ca_raw_thermal_write_at(struct ca_raw_thermal *capture,
         if (futimens(fd, times) < 0) result = -1;
     }
     if (close(fd) < 0 && result == 0) result = -1;
+    /* A file with its final name is complete: the uploader and anything else that scans the folder must
+     * not see a capture that is still being written. */
+    if (result == 0 && rename(capture->temporary, capture->path) < 0) result = -1;
     if (result < 0) {
         int saved_errno = errno;
-        (void)unlink(capture->path);
+        (void)unlink(capture->temporary);
         capture->path[0] = '\0';
         errno = saved_errno;
         return -1;

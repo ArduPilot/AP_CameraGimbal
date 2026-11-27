@@ -22,6 +22,7 @@ public:
     int set_recording(bool active);
     bool recording() const;
     const char * recording_path() const;
+    const char * recording_path_at(unsigned index) const;
     int set_zoom(float zoom);
     float zoom() const;
     int set_lens_zoom(enum ca_media_lens lens, float zoom);
