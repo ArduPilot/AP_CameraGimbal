@@ -231,17 +231,22 @@ SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sit
 SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
 SITL_OBJDIR ?= build/$(SITL_VARIANT)
 SITL_EXTRA_CPPFLAGS ?=
-# The Raspberry Pi simulator includes the upload code, which needs Mbed TLS built for the host.
+# The simulators include the upload code of the camera they simulate, which needs Mbed TLS built for the host.
+# A camera that has it in its firmware only when built with -DAPCAM_ENABLE_UPLOAD has that here too.
 SITL_UPLOAD_LIBS :=
 SITL_UPLOAD_OBJECTS :=
-ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
-SITL_EXTRA_CPPFLAGS += -isystem build/host/mbedtls/include
+ifneq ($(UPLOAD_ANY),)
+SITL_EXTRA_CPPFLAGS += -isystem build/host/mbedtls/include $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD)
 SITL_UPLOAD_LIBS := build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a
 SITL_UPLOAD_OBJECTS := $(patsubst %,$(SITL_OBJDIR)/c/src/upload/%.o,uploader https gdrive dropbox backend)
-$(SITL_UPLOAD_OBJECTS): | build/host/mbedtls/stamp
+# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are
+# rebuilt, and the simulator is linked again.
+$(SITL_UPLOAD_OBJECTS): build/host/mbedtls/stamp
+# Some cameras build the CA certificates in (see embed_ca.py); the simulator does too.
+$(SITL_OBJDIR)/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
 endif
 SITL_SOURCES := $(COMMON_SOURCES) src/media/stub.cpp src/media/sitl_terrain.cpp \
-	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp
+	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp $(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES))
 SITL_APP_OBJECTS := $(patsubst %.cpp,$(SITL_OBJDIR)/c/%.o,$(SITL_SOURCES))
 XOP_HOST_SOURCES := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%,\
 	$(filter-out $(XOP_ENUM_ROOT)/xop/RtspConnection.cpp $(XOP_ENUM_ROOT)/xop/RtpConnection.cpp,\
@@ -689,7 +694,7 @@ thermal-mavlink-test: $(HOST_TARGET) $(A8_HOST_TARGET)
 
 sitl: $(SITL_TARGET)
 
-$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
+$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(if $(SITL_UPLOAD_OBJECTS),build/host/mbedtls/stamp) Makefile
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(SITL_UPLOAD_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm

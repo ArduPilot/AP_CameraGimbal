@@ -119,8 +119,11 @@ def main():
     env['CAMERA_GIMBAL_SITL_WEBROOT'] = posix_path(bundle / 'webroot')
     paths = {'CAMERA_APP_CONFIG': 'app/camera.ini', 'CAMERA_APP_READY_PATH': 'run/camera-app.ready',
              'CAMERA_APP_LOG_ROOT': 'mnt/logs', 'CAMERA_APP_RECORD_STATE': 'run/recording.state', 'CAMERA_APP_RECORD_ROOT': 'mnt/DCIM/record',
-             'CAMERA_APP_CAPTURE_ROOT': 'mnt/DCIM/capture'}
+             'CAMERA_APP_CAPTURE_ROOT': 'mnt/DCIM/capture',
+             # Cloud upload: the credentials are kept with the other settings, and its trusted roots come with the package.
+             'CAMERA_APP_RCLONE_CONFIG': 'app/rclone.conf'}
     env.update({key: posix_path(root / value) for key, value in paths.items()})
+    env['CAMERA_APP_UPLOAD_CA_FILE'] = posix_path(bundle / 'configs' / 'ca-certificates.pem')
     env.update(CAMERA_APP_BACKEND=backend,
                CAMERA_APP_PORT=os.environ.get(prefix + 'CAMERA_PORT', str(int(TARGETS[backend]['vendor_port']))),
                CAMERA_APP_RTSP_PORT=os.environ.get(prefix + 'RTSP_PORT', '8554'),
