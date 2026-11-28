@@ -100,6 +100,7 @@ struct APC_Media_SITL_State {
     bool wait_keyframe[2];
     char *record_root;
     char recording_path[2][4096];
+    char raw_recording_path[4096]; /* the raw thermal file, while one is open */
     unsigned record_channels;
     unsigned rgb_record_source;
     unsigned video_width[CA_SITL_STREAMS], video_height[CA_SITL_STREAMS];
@@ -163,6 +164,7 @@ public:
     }
     bool recording() const override;
     const char * recording_path() const override;
+    const char * recording_path_at(unsigned index) const override;
     int set_zoom(float zoom) override;
     float zoom() const override;
     int set_lens_zoom(enum ca_media_lens lens, float zoom) override;
@@ -772,6 +774,19 @@ bool APC_Media_SITL::recording() const
     if (media->video_thread_started) return atomic_load(&media->sitl_recording);
 #endif
     return ca_recorder_active(&media->recorder);
+}
+
+const char * APC_Media_SITL::recording_path_at(unsigned index) const
+{
+#ifdef CAMERA_APP_SITL
+    auto *media = _state;
+    if (media->video_thread_started && index < 2U && media->recording_path[index][0]) return media->recording_path[index];
+    if (media->video_thread_started && index == 2U &&
+        ca_thermal_stream_record_path(media->thermal_stream, media->raw_recording_path, sizeof(media->raw_recording_path)))
+        return media->raw_recording_path;
+    if (index != 0U) return NULL;
+#endif
+    return index == 0U ? recording_path() : NULL;
 }
 
 const char * APC_Media_SITL::recording_path() const

@@ -27,6 +27,7 @@ int ca_mp4_write_h264(ca_mp4 *writer,const uint8_t *p,size_t n,uint64_t,bool,flo
     return fwrite(p,1,n,writer->file)==n?0:-1;
 }
 int ca_thermal_stream_recording(ca_thermal_stream*,bool active,const char*) { raw_active=active;return 0; }
+bool ca_thermal_stream_record_path(ca_thermal_stream*,char *path,size_t size) { if(path&&size)path[0]=0;return false; }
 int main(int argc,char **argv) {
     assert(argc==2);ca_zt30::Recording recorder;
     recorder.configure(argv[1],1920,1080,nullptr);

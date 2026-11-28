@@ -14,6 +14,8 @@ int ca_thermal_stream_open(ca_thermal_stream **result, unsigned rtsp_port, bool 
 int ca_thermal_stream_configure(ca_thermal_stream *, const ca_config *settings);
 // The video backend owns the session and supplies its existing recording path.
 int ca_thermal_stream_recording(ca_thermal_stream *, bool active, const char *video_path);
+// The raw recording's file while one is open (copied under its lock); false, and "", if none is.
+bool ca_thermal_stream_record_path(ca_thermal_stream *, char *path, size_t size);
 void ca_thermal_stream_publish(ca_thermal_stream *, const uint16_t *pixels,
                                const timespec *captured_at, uint8_t gain, bool rotated_180);
 // Sensor counts read as Kelvin x 64 by assumption (native ZT30), labelled

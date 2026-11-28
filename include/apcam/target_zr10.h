@@ -86,6 +86,16 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 
+/* Cloud upload, in the firmware builds only (they define APCAM_ENABLE_UPLOAD). The service links
+ * /tmp/zr10-config to the settings on the SD card and /tmp/zr10-app to the application there, so the
+ * credentials and the remembered-files list persist with the other settings, and the CA certificates come
+ * with the application. */
+#ifdef APCAM_ENABLE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_CA_FILE "/tmp/zr10-app/ca-certificates.pem"
+#define APCAM_RCLONE_CONFIG "/tmp/zr10-config/rclone.conf"
+#endif
+
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
 #define FIRMWARE_PREFIX "ZR10_FW_"

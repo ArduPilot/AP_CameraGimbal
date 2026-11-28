@@ -79,6 +79,13 @@
 #define APCAM_SIM_RATE_TIME_CONSTANT 0.12f
 #define APCAM_TRACKING_RATE_I 0.4f
 #define APCAM_LOG_ROOT "/mnt/mmc/logs"
+/* Cloud upload, in the firmware builds only (they define APCAM_ENABLE_UPLOAD): the credentials are kept with
+ * the other persistent settings, and the CA certificates it must trust come with the application. */
+#ifdef APCAM_ENABLE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_CA_FILE "/customer/camera-app/ca-certificates.pem"
+#define APCAM_RCLONE_CONFIG "/config/camera-app/rclone.conf"
+#endif
 #define APCAM_GIMBAL_FEEDBACK_UPRIGHT_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, -1}
 #define APCAM_GIMBAL_FEEDBACK_UPRIGHT_OFFSET {0, 0, 0}
 #define APCAM_GIMBAL_FEEDBACK_INVERTED_MATRIX {1, 0, 0, 0, -1, 0, 0, 0, 1}

@@ -319,6 +319,17 @@ static int open_recording(ca_thermal_stream *s)
     return 0;
 }
 
+bool ca_thermal_stream_record_path(ca_thermal_stream *s, char *path, size_t size)
+{
+    if (!path || !size) return false;
+    path[0] = '\0';
+    if (!s) return false;
+    std::lock_guard<std::mutex> guard(s->record_lock);
+    if (s->record_fd < 0 || s->record_path.size() >= size) return false;
+    memcpy(path, s->record_path.c_str(), s->record_path.size() + 1);
+    return true;
+}
+
 int ca_thermal_stream_recording(ca_thermal_stream *s, bool active, const char *video_path)
 {
     if (!s) return 0;
@@ -619,6 +630,7 @@ int ca_thermal_stream_open(ca_thermal_stream **s,unsigned,bool,const ca_config *
 void ca_thermal_stream_close(ca_thermal_stream *) {}
 int ca_thermal_stream_configure(ca_thermal_stream *,const ca_config *) { return 0; }
 int ca_thermal_stream_recording(ca_thermal_stream *,bool,const char *) { return 0; }
+bool ca_thermal_stream_record_path(ca_thermal_stream *,char *path,size_t size) { if (path && size) path[0]='\0'; return false; }
 int ca_thermal_stream_capture(ca_thermal_stream *,const char *,const ca_survey_request &,ca_survey_result &,const std::atomic<uint64_t> &) { errno=ENOTSUP; return -1; }
 void ca_thermal_stream_publish(ca_thermal_stream *,const uint16_t *,const timespec *,uint8_t,bool) {}
 void ca_thermal_stream_source_timeout(ca_thermal_stream *, unsigned) {}

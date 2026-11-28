@@ -204,6 +204,14 @@ struct ca_mavlink_server {
     int logged_saved[128], logged_applied[128];
     float logged_camera[128];
     struct ca_log_mode logged_mode;
+    uint64_t vehicle_heartbeat_ms; /* for uploads */
+#if APCAM_HAVE_UPLOAD
+    struct ca_uploader *uploader;
+    char upload_ca_file[256], rclone_config[256], record_root[256];
+    char upload_problem[96]; /* why uploads are off for good: a path too long to hand to the uploader */
+    char upload_status_path[4096], upload_status_text[512], upload_trigger_path[4100];
+    uint64_t upload_status_ms, upload_trigger_ms, upload_started_ms, upload_holdoff_ms, upload_tick_ms;
+#endif
 };
 
 static bool survey_running(const ca_mavlink_server *);
@@ -2401,6 +2409,18 @@ static void send_parameter(struct ca_mavlink_server *server, size_t index)
     broadcast_message(server, &message);
 }
 
+/* Used by the cloud upload messages, so it is unused in a build without upload. */
+[[maybe_unused]] static void send_status_text(struct ca_mavlink_server *server, uint8_t severity, const char *text)
+{
+    ca_binlog_message(text);
+    mavlink_message_t message;
+    mavlink_statustext_t status = {.severity = severity};
+    snprintf(status.text, sizeof(status.text), "%s", text);
+    (void)mavlink_msg_statustext_encode_status(server->system_id,
+        server->camera_component_id, &server->encode_status, &message, &status);
+    broadcast_message(server, &message);
+}
+
 static void parameter_status(struct ca_mavlink_server *server, const char *text)
 {
     ca_binlog_message(text);
@@ -2598,6 +2618,7 @@ static void reload_config(struct ca_mavlink_server *server, uint64_t now)
     bool restart=false;
     for(size_t i=0;i<APC_Config::count();i++) {
         const auto &f=APC_Config::fields()[i];
+        if(!strcmp(f.section,"upload"))continue; /* applied live by upload_configure() from server->parameters */
         if(memcmp((const char*)&desired+f.offset,(const char*)&server->settings+f.offset,f.size))restart=true;
     }
     config_status(server,hash,restart?"restart":"applied",restart?
@@ -3136,6 +3157,7 @@ static void process_message(struct ca_mavlink_server *server,
                       MAV_MODE_FLAG_SAFETY_ARMED) != 0U;
         server->have_vehicle_armed = true;
         server->vehicle_armed = armed;
+        server->vehicle_heartbeat_ms = monotonic_ms();
         server->flight_mode = mavlink_msg_heartbeat_get_custom_mode(message);
         update_binlog(server, false);
         mavlink_heartbeat_t heartbeat;
@@ -3387,6 +3409,8 @@ static uint8_t survey_capture_start(ca_mavlink_server *s,int32_t count,float int
     return MAV_RESULT_ACCEPTED;
 }
 
+#include "upload_server.inc"
+
 int ca_mavlink_server_open(struct ca_mavlink_server **result,
                            const struct ca_mavlink_server_config *config)
 {
@@ -3499,6 +3523,7 @@ int ca_mavlink_server_open(struct ca_mavlink_server **result,
         ca_log("SupportProxy MAVLink startup failed: %s", strerror(errno));
     ca_mavlink_parser_init(&server->udp_parser);
     ca_mavlink_parser_init(&server->mcu_parser);
+    if (!upload_open(server, config)) goto fail;
     *result = server;
     return 0;
 fail: {
@@ -3672,6 +3697,7 @@ void ca_mavlink_server_periodic(struct ca_mavlink_server *server)
             broadcast_message(server, &message);
         }
     }
+    upload_periodic(server, now);
 }
 
 void ca_mavlink_server_close(struct ca_mavlink_server *server)
@@ -3689,5 +3715,6 @@ void ca_mavlink_server_close(struct ca_mavlink_server *server)
     ca_camera_ftp_close(&server->ftp);
     ca_terrain_stop();
     delete server->survey;
+    upload_close(server);
     free(server);
 }

@@ -680,6 +680,17 @@ static const char *const UART_DEVICE_OVERRIDE_CHOICES[] = {
 static const struct option vpn_provider_options[] = {{"zerotier", S_OPT_ZEROTIER}};
 #endif
 
+#if APCAM_HAVE_UPLOAD
+static const struct option upload_service_options[] = {
+    {"gdrive", S_UPLOAD_SERVICE_GDRIVE}, {"dropbox", S_UPLOAD_SERVICE_DROPBOX},
+};
+static const struct option upload_what_options[] = {
+    {"photos", S_UPLOAD_PHOTOS}, {"recordings", S_UPLOAD_RECORDINGS}, {"both", S_UPLOAD_BOTH},
+};
+static const struct option upload_after_options[] = {
+    {"keep", S_UPLOAD_KEEP}, {"delete", S_UPLOAD_DELETE}, {"delete_when_low", S_UPLOAD_DELETE_LOW},
+};
+#endif
 static const struct parameter replacement_parameters[] = {
     {"timezone", "general", "timezone", S_P_TIMEZONE, S_H_TIMEZONE,
      PARAM_TIMEZONE, 1, 127, 0, NULL, 0},
@@ -859,15 +870,35 @@ static const struct parameter replacement_parameters[] = {
     {"survey_terrain_tol", "survey", "terrain_tol", S_SURV_TERRAIN_TOL, S_SURV_TERRAIN_TOL_HELP, PARAM_INTEGER, 1, 100, 1, NULL, 0},
     {"survey_min_speed", "survey", "min_speed", S_SURV_MIN_SPEED, S_SURV_MIN_SPEED_HELP, PARAM_INTEGER, 1, 30, 1, NULL, 0},
     {"survey_turn_deg", "survey", "turn_deg", S_SURV_TURN_DEG, S_SURV_TURN_DEG_HELP, PARAM_INTEGER, 5, 45, 1, NULL, 0},
+#if APCAM_HAVE_UPLOAD
+    {"upload_service", "upload", "service", S_P_UPLOAD_SERVICE, S_H_UPLOAD_SERVICE,
+     PARAM_ENUM, 0, 0, 0, upload_service_options, sizeof(upload_service_options)/sizeof(upload_service_options[0])},
+    {"upload_enable", "upload", "enable", S_P_UPLOAD_ENABLE, S_H_UPLOAD_ENABLE,
+     PARAM_ENUM, 0, 0, 0, replacement_boolean_options, 2},
+    {"upload_folder", "upload", "folder", S_P_UPLOAD_FOLDER, S_H_UPLOAD_FOLDER,
+     PARAM_TEXT, 0, APCAM_UPLOAD_FOLDER_SIZE - 1, 1, NULL, 0},
+    {"upload_what", "upload", "what", S_P_UPLOAD_WHAT, S_H_UPLOAD_WHAT,
+     PARAM_ENUM, 0, 0, 0, upload_what_options, sizeof(upload_what_options)/sizeof(upload_what_options[0])},
+    {"upload_after", "upload", "after_upload", S_P_UPLOAD_AFTER, S_H_UPLOAD_AFTER,
+     PARAM_ENUM, 0, 0, 0, upload_after_options, sizeof(upload_after_options)/sizeof(upload_after_options[0])},
+    {"upload_low_space", "upload", "low_space_percent", S_P_UPLOAD_LOW_SPACE, S_H_UPLOAD_LOW_SPACE,
+     PARAM_INTEGER, 1, 90, 1, NULL, 0},
+    {"upload_bandwidth", "upload", "bandwidth_kib_s", S_P_UPLOAD_BANDWIDTH, S_H_UPLOAD_BANDWIDTH,
+     PARAM_INTEGER, 0, 1000000, 1, NULL, 0},
+    {"upload_scan", "upload", "scan_minutes", S_P_UPLOAD_SCAN, S_H_UPLOAD_SCAN,
+     PARAM_INTEGER, 1, 1440, 1, NULL, 0},
+#endif
 };
 
-enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_COUNT };
+enum parameter_tab { TAB_SYSTEM, TAB_NETWORK, TAB_VIDEO, TAB_PROXY, TAB_SURVEY, TAB_UPLOAD, TAB_COUNT };
+#define TAB_SHOWN (APCAM_HAVE_UPLOAD ? TAB_COUNT : TAB_UPLOAD) /* the upload tab is last */
 static const struct {
     const char *name;
     enum string_id label;
 } parameter_tabs[TAB_COUNT] = {
     {"system", S_PARAMS_SYSTEM}, {"network", S_PARAMS_NETWORK},
     {"video", S_PARAMS_VIDEO}, {"supportproxy", S_PARAMS_PROXY}, {"survey", S_PARAMS_SURVEY},
+    {"upload", S_PARAMS_UPLOAD},
 };
 
 static enum parameter_tab parameter_tab(const struct parameter *p)
@@ -880,6 +911,7 @@ static enum parameter_tab parameter_tab(const struct parameter *p)
     if (!strcmp(p->section, "video") || !strcmp(p->section, "capture") || !strcmp(p->section, "recording") ||
         !strncmp(p->section, "stream.", 7) || !strcmp(p->section, "image") ||
         !strcmp(p->section, "thermal") || !strcmp(p->section, "overlay")) return TAB_VIDEO;
+    if (!strcmp(p->section, "upload")) return TAB_UPLOAD;
     return TAB_SYSTEM;
 }
 
@@ -931,6 +963,9 @@ static const char *replacement_defaults[] = {
     "",
 #endif
     "both", "rows", APCAM_HAVE_THERMAL ? "thermal" : "wide", "50", "50", "50", "0", "1", "100", "1200", "200", "100", "100", "3000", "500", "25", "5", "15",
+#if APCAM_HAVE_UPLOAD
+    "gdrive", "false", "", "both", "keep", "20", "0", "5",
+#endif
 };
 
 
@@ -2254,6 +2289,8 @@ static bool valid_text_parameter(const struct parameter *parameter,
         }
         return true;
     }
+    if (!strcmp(parameter->section, "upload"))
+        return apcam_upload_folder_valid(text);
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)text[i];
         if (iscntrl(c) || isspace(c)) return false;
@@ -4781,6 +4818,16 @@ static void append_parameter_field(APC_StringBuffer *page, const char *config,
     size_t submitted_length = 0;
     char *submitted_value = submitted != NULL
         ? form_value(submitted, parameter->form_name, &submitted_length) : NULL;
+#if APCAM_HAVE_UPLOAD
+    /* Saving or removing a cloud service's credentials keeps that service selected. */
+    if (submitted_value == NULL && submitted != NULL && !strcmp(parameter->form_name, "upload_service")) {
+        submitted_value = form_value(submitted, "service", &submitted_length);
+        if (submitted_value != NULL && strcmp(submitted_value, "gdrive") != 0 && strcmp(submitted_value, "dropbox") != 0) {
+            free(submitted_value);
+            submitted_value = NULL;
+        }
+    }
+#endif
     const char *display_value = submitted_value != NULL ? submitted_value : value;
     if (submitted_value != NULL) present = true;
 
@@ -5388,6 +5435,9 @@ static bool network_capture_status(char *message, size_t capacity, bool *failed)
     return available;
 }
 
+/* Cloud upload page and credentials. */
+#include "APC_Upload.h"
+
 static char *render_parameter_page(const char *message, bool message_is_error,
                                    const APC_HTTPRequest *submitted, size_t *page_len)
 {
@@ -5421,21 +5471,32 @@ static char *render_parameter_page(const char *message, bool message_is_error,
                      APCAM_THERMAL_STREAM_WIDTH, APCAM_THERMAL_STREAM_HEIGHT);
         page.append("</p>");
 #endif
+#if APCAM_HAVE_UPLOAD
+        append_upload_credentials_form(&page);
+#endif
         webroot.render(page, "parameters-form.html", {T(S_APP_PARAMETERS_NOTICE), csrf_token, T(S_PARAMS_CATEGORIES)});
-        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+        for (unsigned tab = 0; tab < TAB_SHOWN; tab++) {
             page.appendf("<button type=button role=tab id=tab-%s aria-controls=parameters-%s "
                              "aria-selected=false tabindex=-1>%s</button>",
                        parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
         }
         page.append("</div>");
-        for (unsigned tab = 0; tab < TAB_COUNT; tab++) {
+        for (unsigned tab = 0; tab < TAB_SHOWN; tab++) {
             page.appendf("<section class=\"card parameter-panel\" id=parameters-%s "
                              "aria-labelledby=tab-%s><h2>%s</h2><div class=fields>",
                        parameter_tabs[tab].name, parameter_tabs[tab].name, T(parameter_tabs[tab].label));
+#if APCAM_HAVE_UPLOAD
+            if (tab == TAB_UPLOAD) append_upload_panel_top(&page);
+#endif
             for (size_t i = 0; i < sizeof(replacement_parameters) / sizeof(replacement_parameters[0]); i++) {
                 const struct parameter *parameter = &replacement_parameters[i];
-                if (parameter_shown(parameter) && parameter_tab(parameter) == tab)
+                if (parameter_shown(parameter) && parameter_tab(parameter) == tab) {
                     append_parameter_field(&page, config, parameter, submitted);
+#if APCAM_HAVE_UPLOAD
+                    if (!strcmp(parameter->form_name, "upload_enable")) /* the row with the service and Enable comes first */
+                        append_upload_credentials(&page, upload_selected_service(config, submitted));
+#endif
+                }
             }
             page.append("</div>");
 #if !APCAM_HAVE_EXTERNAL_UART && APCAM_HAVE_SIYI
@@ -7635,7 +7696,8 @@ static void handle_request(int fd, const char *peer)
             send_asset(fd, language_script, "application/javascript; charset=utf-8");
         } else if (strcmp(request.method, "GET") == 0 &&
                    (strcmp(request.path, "/upgrade-status") == 0 || strcmp(request.path, "/upgrade-result") == 0 ||
-                    strcmp(request.path, "/network-capture-status") == 0 || strcmp(request.path, "/vpn-status") == 0)) {
+                    strcmp(request.path, "/network-capture-status") == 0 || strcmp(request.path, "/vpn-status") == 0 ||
+                    strcmp(request.path, "/upload-status") == 0)) {
             /* Reboot polling must reach its onload handler when the cookie
              * expires. A Basic challenge can instead block on a browser auth
              * dialog. No status/token is disclosed to this unauthenticated request. */
@@ -7692,6 +7754,14 @@ static void handle_request(int fd, const char *peer)
         send_network_capture_status(fd);
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/parameters") == 0) {
         send_parameter_page(fd, NULL, false, NULL);
+#if APCAM_HAVE_UPLOAD
+    } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/upload-status") == 0) {
+        send_upload_status(fd);
+    } else if (strcmp(request.method, "GET") == 0 &&
+               (strcmp(request.path, "/upload-credentials") == 0 || strcmp(request.path, "/upload-now") == 0)) {
+        /* The address left in the browser after saving credentials; a refresh must not be a 404. */
+        send_redirect(fd, "/parameters");
+#endif
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/mpegts.js") == 0) {
         send_asset(fd, "mpegts.js", "application/javascript; charset=utf-8");
     } else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/recording.js") == 0) {
@@ -8076,6 +8146,28 @@ static void handle_request(int fd, const char *peer)
                 send_redirect(fd, "/rebooting");
                 schedule_reboot();
             }
+#if APCAM_HAVE_UPLOAD
+        } else if (strcmp(request.path, "/upload-now") == 0) {
+            if (upload_request_now(error, sizeof(error))) {
+                log_message("cloud upload requested by %s", peer);
+                /* If it cannot start (the clock is not set), say why. */
+                char reason[128], message[256];
+                if (upload_waiting_reason(reason, sizeof(reason))) snprintf(message, sizeof(message), T(S_UPLOAD_NOW_WAITING), reason);
+                else snprintf(message, sizeof(message), "%s", T(S_UPLOAD_NOW_SENT));
+                send_parameter_page(fd, message, false, NULL);
+            } else {
+                send_parameter_page(fd, error, true, NULL);
+            }
+        } else if (strcmp(request.path, "/upload-credentials") == 0) {
+            bool removed = false;
+            if (upload_credentials_update(&request, &removed, error, sizeof(error))) {
+                log_message("cloud upload credentials %s by %s", removed ? "removed" : "saved", peer);
+                send_parameter_page(fd, T(removed ? S_UPLOAD_CRED_REMOVED : S_UPLOAD_CRED_SAVED), false, &request);
+            } else {
+                log_message("cloud upload credentials not saved for %s: %s", peer, error);
+                send_parameter_page(fd, error, true, &request);
+            }
+#endif
         } else {
             send_text_errorf(fd, 404, "Not Found", S_UNKNOWN_POST);
         }

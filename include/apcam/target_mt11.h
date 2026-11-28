@@ -123,6 +123,15 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 
+/* Cloud upload, in the firmware builds only (they define APCAM_ENABLE_UPLOAD): the credentials and the
+ * remembered-files list go beside camera.ini in the persistent /app, and the CA certificates come with the
+ * application there. */
+#ifdef APCAM_ENABLE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_CA_FILE "/app/ca-certificates.pem"
+#define APCAM_RCLONE_CONFIG "/app/rclone.conf"
+#endif
+
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
 #define FIRMWARE_PREFIX "MT11_FW_"

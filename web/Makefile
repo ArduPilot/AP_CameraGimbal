@@ -37,7 +37,7 @@ SITL_BIN_ROOT ?= $(abspath ../build/sitl)
 SITL_CAMERA_BINARY ?= camera-app
 SITL_WEB_BINARY ?= mt11-web
 SITL_EXTRA_DEFINES ?=
-SITL_DEFINES := -DWEBROOT_PATH='"$(CURDIR)/webroot"' -DMT11_WEB_TEST -DMT11_WEB_SITL \
+SITL_DEFINES := -DWEBROOT_PATH='"$(CURDIR)/webroot"' -DMT11_WEB_TEST -DMT11_WEB_SITL -DAPCAM_ENABLE_UPLOAD \
 	-DAPP_DIR='"$(SITL_ROOT)/app"' \
 	-DMEDIA_ROOT='"$(SITL_ROOT)/mnt"' \
 	-DGCU_ROOT='"$(SITL_ROOT)/gcu"' \
@@ -90,13 +90,13 @@ all: mt11-web
 
 mt11-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) $(LDFLAGS) -o $@ $< -lm
+	$(CXX) $(WEB_CXXFLAGS) $(APCAM_CPPFLAGS) -DAPCAM_ENABLE_UPLOAD $(LDFLAGS) -o $@ $< -lm
 
 # SIYI A8 mini build of the same source: ARMv7 hard-float, linked against
 # the camera's glibc, without the MT11-only vendor-app, thermal and SSH pages.
 a8-web: mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -o $@ $< -lm
+	$(A8_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_A8 -DAPCAM_ENABLE_UPLOAD -o $@ $< -lm
 
 $(A8_HOST_CHECK): mt11-web.cpp gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
@@ -168,6 +168,7 @@ test: zt30-parameters-test tests/test_zt30_process $(HOST_TEST) $(A8_HOST_CHECK)
 	python3 tests/test_a8_upgrade.py
 	python3 tests/test_rpi_parameters.py ./$(RPI_HOST_CHECK) '$(RPI_TEST_ROOT)'
 	node tests/test_video_uri.js webroot/parameters.js
+	node tests/test_upload_service_ui.js webroot/parameters.js
 	node tests/test_recording.js webroot/recording.js
 
 clean:
@@ -177,7 +178,7 @@ clean:
 ZR10_CROSS_COMPILE ?= $(abspath ../build/zr10-deps/armv7-eabihf--uclibc--stable-2018.11-1/bin/arm-linux-)
 zr10-web: build/zr10_upgrade.h zr10_firmware.h mt11-web.cpp ../camera_app/src/compat/zr10_uclibc.cpp $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
 	$(call progress,Linking $@)
-	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
+	$(ZR10_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-missing-field-initializers -DAPCAM_TARGET=APCAM_TARGET_ZR10 -DAPCAM_ENABLE_UPLOAD -D_FILE_OFFSET_BITS=64 -o $@ $(filter %.cpp,$^)
 
 .PHONY: zr10-test
 zr10-test: $(VERSION_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) build/zr10_upgrade.h
@@ -219,7 +220,7 @@ Z1MINI_CROSS_COMPILE ?= arm-none-linux-gnueabihf-
 Z1MINI_MAVLINK := ../camera_app/build/mavlink/all/include
 z1mini-web: mt11-web.cpp gcu_manifest.h z1mini_mavlink.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) $(Z1MINI_MAVLINK)/all/mavlink.h Makefile
 	$(call progress,Linking $@)
-	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
+	$(Z1MINI_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -Wno-unused-function -Wno-address-of-packed-member -DAPCAM_TARGET=APCAM_TARGET_Z1_MINI -DAPCAM_ENABLE_UPLOAD -D_FILE_OFFSET_BITS=64 -I$(Z1MINI_MAVLINK) -o $@ $< -lm
 
 ifeq ($(CAMERA_BACKEND),zr10)
 $(SITL_TARGET) $(SITL_BIN_ROOT)/mt11-web-portable $(HOST_TEST): build/zr10_upgrade.h zr10_firmware.h
@@ -242,4 +243,11 @@ zt30-dev-web: mt11-web.cpp zt30-dev-paths.h gcu_manifest.h $(VERSION_HEADER) $(I
 
 # AP-only persistent ZT30 layout; initial native app has one RGB stream.
 zt30-web: mt11-web.cpp ../camera_app/src/config.cpp zt30-paths.h zt30-process.h zt30-upgrade.h zt30-bundle-status.h gcu_manifest.h $(VERSION_HEADER) $(ICON_HEADER) $(WEBROOT_HEADER) $(VPN_HEADER) $(APCAM_HEADERS) $(wildcard APC_*.h) Makefile
-	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -I../include -o $@ $(filter %.cpp,$^) -lm
+	$(ZT30_CROSS_COMPILE)g++ $(CXX_RUNTIME_FLAGS) $(WEB_CXXFLAGS) -DAPCAM_TARGET=APCAM_TARGET_ZT30 -DCAMERA_APP_ZT30_DEV -DZT30_WEB_NATIVE -DAPCAM_ENABLE_UPLOAD -I../include -o $@ $(filter %.cpp,$^) -lm
+
+# The Raspberry Pi parameters page (including cloud upload) and its page rules.
+.PHONY: rpi-web-test
+rpi-web-test: $(RPI_HOST_CHECK)
+	python3 tests/test_rpi_parameters.py ./$(RPI_HOST_CHECK) '$(RPI_TEST_ROOT)'
+	node tests/test_video_uri.js webroot/parameters.js
+	node tests/test_upload_service_ui.js webroot/parameters.js

@@ -52,6 +52,11 @@ int Recording::set(bool active) {
     waiting[0]=waiting[1]=true;enabled.store(true);
     ca_log("ZT30 recording started: %s",paths[0].c_str());return 0;
 }
+const char *Recording::path_at(unsigned index) const {
+    if(!active())return nullptr;
+    if(index<2)return paths[index].empty()?nullptr:paths[index].c_str();
+    return index==2 && ca_thermal_stream_record_path(raw,raw_path,sizeof(raw_path))?raw_path:nullptr;
+}
 int Recording::stop_locked() {
     enabled.store(false);int result=0;
     if(ca_thermal_stream_recording(raw,false,paths[0].c_str()))result=-1;

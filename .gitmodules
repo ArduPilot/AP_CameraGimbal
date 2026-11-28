@@ -1,3 +1,6 @@
 [submodule "modules/mavlink"]
 	path = modules/mavlink
 	url = https://github.com/ArduPilot/mavlink.git
+[submodule "modules/mbedtls"]
+	path = modules/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git

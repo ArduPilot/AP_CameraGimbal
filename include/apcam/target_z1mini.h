@@ -94,6 +94,16 @@
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_MATRIX {1, 0, 0, 0, 1, 0, 0, 0, 1}
 #define APCAM_GIMBAL_RATE_COMMAND_INVERTED_OFFSET {0, 0, 0}
 
+/* Cloud upload, in the firmware builds only (they define APCAM_ENABLE_UPLOAD): the credentials and the
+ * remembered-files list go with the other settings in /opt/ap_cameragimbal. The web updater only accepts the
+ * files it knows, so the CA certificates are built into camera-app instead of installed. */
+#ifdef APCAM_ENABLE_UPLOAD
+#define APCAM_HAVE_UPLOAD 1
+#define APCAM_UPLOAD_EMBED_CA 1
+#define APCAM_UPLOAD_CA_FILE ""
+#define APCAM_RCLONE_CONFIG "/opt/ap_cameragimbal/rclone.conf"
+#endif
+
 /* Platform paths are consumed only by the web service. */
 #ifdef APCAM_WEB_BUILD
 #define FIRMWARE_PREFIX "Z1Mini_AP_"

@@ -26,6 +26,8 @@ def main():
                             ('zr10', 'sitl/zr10.ini'), ('zt30', 'packaging/zt30/camera.ini'),
                             ('z1mini', 'packaging/z1mini/camera.ini')):
         shutil.copy2(ROOT / source, PAYLOAD / 'configs' / (backend + '.ini'))
+    # The roots that cloud upload trusts (the simulators take them from a file, as the cameras that install one do).
+    shutil.copy2(ROOT / 'packaging/ca-certificates/cloud-roots.pem', PAYLOAD / 'configs/ca-certificates.pem')
     for name, filter_ in [('rgb.h264', 'testsrc2=size=1920x1080:rate=20'),
                            ('thermal.h264', 'testsrc2=size=1280x720:rate=20')]:
         subprocess.run([str(ffmpeg), '-hide_banner', '-loglevel', 'error', '-y',

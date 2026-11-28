@@ -134,3 +134,8 @@ and ABI checks in `packaging/vpn`. Build scripts pin the upstream source
 archives and installed binary hashes. License texts, component notices and
 exact source/build pointers ship in `web/webroot/licenses/vpn` with both camera
 packages and ZT30 application bundles; see its `SOURCES.txt`.
+
+The native cloud uploader's TLS comes from **Mbed TLS 4.3.0** (Apache-2.0 OR GPL-2.0-or-later),
+the `modules/mbedtls` git submodule from <https://github.com/Mbed-TLS/mbedtls>,
+pinned to the `mbedtls-4.3.0` release (`eafb4a72592addfd5ba1326caad2f3e9adef49ad`).
+Its `tf-psa-crypto` submodule (1.3.0) supplies the cryptography.

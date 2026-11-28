@@ -188,6 +188,13 @@ while [ ! -f "$gimbal_ready" ]; do
 done
 IFS=: read -r gimbal_host gimbal_port <"$gimbal_ready"
 
+# Cloud upload from the simulator: the credentials saved on the web page go in the runtime
+# directory, and the certificates the services must chain to are this computer's own.
+upload_ca_file=
+for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [ -r "$candidate" ]; then upload_ca_file=$candidate; break; fi
+done
+
 CAMERA_APP_BACKEND="$backend" \
 CAMERA_APP_UART="udp://$gimbal_host:$gimbal_port" \
 CAMERA_APP_PORT="$camera_port" \
@@ -201,6 +208,8 @@ CAMERA_APP_CAPTURE_ROOT="$runtime/mnt/DCIM/capture" \
 CAMERA_APP_SITL_VIDEO1="$video1" \
 CAMERA_APP_SITL_VIDEO2="$video2" \
 CAMERA_APP_SITL_PHOTO="$build/photo.jpg" \
+CAMERA_APP_RCLONE_CONFIG="$runtime/app/rclone.conf" \
+CAMERA_APP_UPLOAD_CA_FILE="$upload_ca_file" \
     "$build/camera-app" $camera_backend_args >"$runtime/run/camera_app.log" 2>&1 9>&- &
 camera_pid=$!
 
@@ -231,6 +240,8 @@ CAMERA_APP_CAPTURE_ROOT="$runtime/mnt/DCIM/capture" \
 CAMERA_APP_SITL_VIDEO1="$video1" \
 CAMERA_APP_SITL_VIDEO2="$video2" \
 CAMERA_APP_SITL_PHOTO="$build/photo.jpg" \
+CAMERA_APP_RCLONE_CONFIG="$runtime/app/rclone.conf" \
+CAMERA_APP_UPLOAD_CA_FILE="$upload_ca_file" \
 MT11_WEB_CAMERA_PORT="$camera_port" \
 MT11_WEB_LIVE_PORT="$((rtsp_port + 1))" \
     "$build/$web_binary" -p "$web_port" >"$runtime/run/web.log" 2>&1 9>&- &

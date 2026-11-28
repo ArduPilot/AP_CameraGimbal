@@ -71,6 +71,8 @@ install -m 0644 "$platform/network_config.ini" "$tree/network_config.ini"
 # ours
 install -m 0755 "$app_init" "$tree/bin/cardv"
 install -m 0644 "$camera_ini" "$tree/camera-app/camera.ini.default"
+# the certificates cloud upload trusts (camera.ini [upload])
+install -m 0644 "$root/packaging/ca-certificates/cloud-roots.pem" "$tree/camera-app/ca-certificates.pem"
 printf '%s\n' "$version" >"$tree/camera-app/VERSION"
 # seeded to /config/camera-app/web.pass on first boot
 (umask 077 && printf '%s\n' "$web_password" >"$tree/camera-app/web.pass.default")

@@ -52,6 +52,8 @@ int ca_media_open(struct ca_media **media, const struct ca_media_config *config)
 int ca_media_set_recording(struct ca_media *media, bool active);
 bool ca_media_recording(const struct ca_media *media);
 const char *ca_media_recording_path(const struct ca_media *media);
+/* The files being recorded to: index 0 is the same as above, and NULL follows the last. */
+const char *ca_media_recording_path_at(const struct ca_media *media, unsigned index);
 int ca_media_set_zoom(struct ca_media *media, float zoom);
 float ca_media_zoom(const struct ca_media *media);
 /* Lens-relative zoom, independent of vendor hybrid lens selection. */

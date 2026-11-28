@@ -454,6 +454,8 @@ bool APC_Media::recording() const
 { return _backend && _backend->recording(); }
 const char * APC_Media::recording_path() const
 { return _backend ? _backend->recording_path() : NULL; }
+const char * APC_Media::recording_path_at(unsigned index) const
+{ return _backend ? _backend->recording_path_at(index) : NULL; }
 int APC_Media::set_zoom(float zoom)
 {
     REQUIRE_IMPL;
@@ -674,6 +676,10 @@ bool ca_media_recording(const struct ca_media *media)
 const char * ca_media_recording_path(const struct ca_media *media)
 {
     return media ? media->recording_path() : (nullptr);
+}
+const char * ca_media_recording_path_at(const struct ca_media *media, unsigned index)
+{
+    return media ? media->recording_path_at(index) : (nullptr);
 }
 int ca_media_set_zoom(struct ca_media *media, float zoom)
 {

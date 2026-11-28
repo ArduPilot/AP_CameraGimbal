@@ -8,6 +8,16 @@ ifeq ($(filter $(CAMERA_BACKEND),$(SUPPORTED_BACKENDS)),)
 $(error Unsupported CAMERA_BACKEND '$(CAMERA_BACKEND)'; supported backends: $(SUPPORTED_BACKENDS))
 endif
 
+# Cloud upload (see docs/cloud-upload-setup.md). The Raspberry Pi always has it. The other cameras list
+# themselves here as their firmware gets it: their firmware objects are built with -DAPCAM_ENABLE_UPLOAD,
+# which their target header turns into APCAM_HAVE_UPLOAD, so simulators and host tests are not affected.
+UPLOAD_SOURCES := src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
+UPLOAD_BACKENDS := a8 z1mini zr10 mt11 zt30
+UPLOAD_FIRMWARE := $(filter $(CAMERA_BACKEND),$(UPLOAD_BACKENDS))
+UPLOAD_ANY := $(or $(UPLOAD_FIRMWARE),$(filter rpi_libcam_caddx,$(CAMERA_BACKEND)))
+UPLOAD_MBEDTLS := build/$(CAMERA_BACKEND)/mbedtls
+UPLOAD_MBEDTLS_LIBS := $(UPLOAD_MBEDTLS)/lib/libmbedtls.a $(UPLOAD_MBEDTLS)/lib/libmbedx509.a $(UPLOAD_MBEDTLS)/lib/libtfpsacrypto.a
+
 ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
 # Raspberry Pi: native build on Raspberry Pi OS, linked against the system
 # libcamera. Cross builds supply CROSS_COMPILE and LIBCAMERA_* flags.
@@ -84,6 +94,14 @@ APP_CXXFLAGS = $(filter-out -std=%,$(CFLAGS)) $(CXXFLAGS)
 CFLAGS ?= -O2 -pipe -Wall -Wextra -Werror -std=c11
 ifeq ($(CAMERA_BACKEND),zr10)
 CFLAGS += -Wno-missing-field-initializers -D_FILE_OFFSET_BITS=64
+endif
+ifeq ($(CAMERA_BACKEND),rpi_libcam_caddx)
+# On a 32-bit Raspberry Pi OS off_t is 32 bits unless told otherwise, and a recording over 2 GiB cannot be examined.
+CFLAGS += -D_FILE_OFFSET_BITS=64
+endif
+ifeq ($(CAMERA_BACKEND),a8)
+# The A8's glibc has a 32-bit off_t unless told otherwise, and a recording over 2 GiB cannot be examined.
+CFLAGS += -D_FILE_OFFSET_BITS=64
 endif
 ifeq ($(CAMERA_BACKEND),z1mini)
 CFLAGS += -D_FILE_OFFSET_BITS=64
@@ -168,7 +186,8 @@ COMMON_SOURCES := $(if $(filter z1mini,$(CAMERA_BACKEND)),src/protocol/xfrobot_s
 	src/recording/still.cpp \
 	src/recording/metadata.cpp \
 	src/recording/video_metadata.cpp $(MISB_SOURCES) \
-	$(CONTROL_DIR)/control.cpp
+	$(CONTROL_DIR)/control.cpp \
+	$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(UPLOAD_SOURCES))
 OBJECTS := $(COMMON_SOURCES:.cpp=.o) build/mt11_media.o build/mt11_overlay.o build/mt11_pipeline.o \
 	build/mt11_e5739.o build/mt11_thermal.o build/mt11_isp.o \
 	build/raw_thermal_server.o \
@@ -207,13 +226,27 @@ A8_HOST_SOURCES := $(filter-out src/backends/mt11/control.cpp \
 # RPi target with stub media, for host tests of its MAVLink behaviour.
 RPI_HOST_TARGET := tests/camera-app-rpi-host
 RPI_HOST_SOURCES := $(filter-out $(CONTROL_DIR)/control.cpp src/protocol/unigcs.cpp,$(COMMON_SOURCES)) \
-	src/backends/caddx/control.cpp src/media/stub.cpp
+	src/backends/caddx/control.cpp src/media/stub.cpp src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp
 SITL_VARIANT := $(if $(filter mt11,$(CAMERA_BACKEND)),sitl,$(CAMERA_BACKEND)-sitl)
 SITL_TARGET ?= ../build/$(SITL_VARIANT)/camera-app
 SITL_OBJDIR ?= build/$(SITL_VARIANT)
 SITL_EXTRA_CPPFLAGS ?=
+# The simulators include the upload code of the camera they simulate, which needs Mbed TLS built for the host.
+# A camera that has it in its firmware only when built with -DAPCAM_ENABLE_UPLOAD has that here too.
+SITL_UPLOAD_LIBS :=
+SITL_UPLOAD_OBJECTS :=
+ifneq ($(UPLOAD_ANY),)
+SITL_EXTRA_CPPFLAGS += -isystem build/host/mbedtls/include $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD)
+SITL_UPLOAD_LIBS := build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a
+SITL_UPLOAD_OBJECTS := $(patsubst %,$(SITL_OBJDIR)/c/src/upload/%.o,uploader https gdrive dropbox backend)
+# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are
+# rebuilt, and the simulator is linked again.
+$(SITL_UPLOAD_OBJECTS): build/host/mbedtls/stamp
+# Some cameras build the CA certificates in (see embed_ca.py); the simulator does too.
+$(SITL_OBJDIR)/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
+endif
 SITL_SOURCES := $(COMMON_SOURCES) src/media/stub.cpp src/media/sitl_terrain.cpp \
-	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp
+	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp $(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES))
 SITL_APP_OBJECTS := $(patsubst %.cpp,$(SITL_OBJDIR)/c/%.o,$(SITL_SOURCES))
 XOP_HOST_SOURCES := $(patsubst $(XOP_ENUM_ROOT)/%,$(RTSP_ROOT)/%,\
 	$(filter-out $(XOP_ENUM_ROOT)/xop/RtspConnection.cpp $(XOP_ENUM_ROOT)/xop/RtpConnection.cpp,\
@@ -227,7 +260,7 @@ SITL_RTSP_OBJECTS := $(SITL_OBJDIR)/rtsp_xop.o $(XOP_HOST_OBJECTS)
 ifeq ($(CAMERA_BACKEND),mt11)
 MT11_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/mt11-xop/%.o,\
     $(filter-out $(RTSP_ROOT)/net/BufferWriter.cpp $(RTSP_ROOT)/net/SocketUtil.cpp,$(XOP_HOST_SOURCES)))
-OBJECTS += $(MT11_XOP_OBJECTS)
+OBJECTS += $(MT11_XOP_OBJECTS) $(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES:.cpp=.o))
 endif
 # Our adapter includes vendor headers before compiler-generated .d files exist.
 build/rtsp_xop.o build/$(CAMERA_BACKEND)/rtsp_xop.o $(SITL_OBJDIR)/rtsp_xop.o: | $(XOP_PREPARE_STAMP)
@@ -290,6 +323,23 @@ generated: $(MAVLINK_HEADER) $(MINIMP4_HEADER) build/xop_rtsp_connection.cpp \
  build/xop_rtp_connection.cpp build/binlog_version.h
 
 
+# Cameras with no place to install a CA file have the certificates built into camera-app (see embed_ca.py).
+build/upload_ca_bundle.h: ../packaging/ca-certificates/cloud-roots.pem ../tools/embed_ca.py
+	$(PYTHON) ../tools/embed_ca.py $< $@
+ifeq ($(CAMERA_BACKEND),z1mini)
+build/z1mini/c/src/protocol/mavlink_server.o: | build/upload_ca_bundle.h
+endif
+
+ifneq ($(UPLOAD_ANY),)
+# The MT11 builds its objects beside the sources; the other cameras build theirs under build/<camera>/c.
+UPLOAD_OBJPREFIX := $(if $(filter mt11,$(CAMERA_BACKEND)),,build/$(CAMERA_BACKEND)/c/)
+$(UPLOAD_OBJPREFIX)src/upload/%.o: CPPFLAGS += -isystem $(UPLOAD_MBEDTLS)/include
+# A normal prerequisite: when Mbed TLS changes the objects that include its headers (they hold its structures) are rebuilt.
+$(patsubst %,$(UPLOAD_OBJPREFIX)%.o,$(basename $(UPLOAD_SOURCES))): $(UPLOAD_MBEDTLS)/stamp
+$(UPLOAD_MBEDTLS)/stamp: FORCE
+	$(MAKE) mbedtls CAMERA_BACKEND=$(CAMERA_BACKEND)
+endif
+
 ifeq ($(CAMERA_BACKEND):$(filter 1,$(ZT30_RAM_BUILD) $(ZT30_DEV_BUILD)),zt30:1)
 include ../tools/zt30_app.mk
 else ifneq ($(filter $(CAMERA_BACKEND),a8 zr10 z1mini rpi_libcam_caddx),)
@@ -298,16 +348,17 @@ A8_XOP_OBJECTS := $(patsubst $(RTSP_ROOT)/%.cpp,build/$(CAMERA_BACKEND)/xop/%.o,
 	build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o
 ARM_APP_OBJECTS := $(patsubst %.cpp,build/$(CAMERA_BACKEND)/c/%.o,$(COMMON_SOURCES) \
 	src/streaming/live_video_server.cpp src/recording/mp4_minimp4.cpp \
-	$(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
+	$(if $(UPLOAD_FIRMWARE),$(UPLOAD_SOURCES)) $(BACKEND_DIR)/media.cpp $(BACKEND_DIR)/pipeline.cpp $(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(BACKEND_DIR)/jpeg.cpp) $(if $(filter a8 zr10,$(CAMERA_BACKEND)),src/backends/siyi/overlay.cpp) $(if $(filter a8,$(CAMERA_BACKEND)),$(BACKEND_DIR)/isp.cpp) $(if $(filter zr10,$(CAMERA_BACKEND)),src/compat/zr10_uclibc.cpp) $(if $(filter z1mini,$(CAMERA_BACKEND)),$(BACKEND_DIR)/glibc_compat.cpp $(BACKEND_DIR)/native.cpp))
 OBJECTS := $(ARM_APP_OBJECTS) build/$(CAMERA_BACKEND)/rtsp_xop.o $(A8_XOP_OBJECTS)
 
-$(TARGET): Makefile $(OBJECTS)
+$(TARGET): Makefile $(OBJECTS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS)/stamp)
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
 	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--gc-sections \
 		-Wl,--no-as-needed -lpthread -lm -ldl $(TARGET_LINK_FLAGS) $(if $(filter a8 zr10 z1mini,$(CAMERA_BACKEND)),-static-libstdc++ -static-libgcc) \
-		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS))
+		$(if $(filter rpi_libcam_caddx,$(CAMERA_BACKEND)),$(LIBCAMERA_LIBS) $(LIBJPEG_LIBS)) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS_LIBS))
 
+# The upload code includes Mbed TLS, which is built first (make mbedtls).
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: CPPFLAGS += $(LIBCAMERA_CFLAGS)
 # Current libcamera headers use std::span, which needs C++20; the rest stays C++17.
 build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS += -std=gnu++20
@@ -315,7 +366,7 @@ build/rpi_libcam_caddx/c/src/backends/rpi_libcam/pipeline.o: override CXXFLAGS +
 build/$(CAMERA_BACKEND)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
-	$(CXX) $(DEPFLAGS) $(CPPFLAGS) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD) -Ibuild $(APP_CXXFLAGS) -Wno-unused-function \
 		-Wno-error=sign-compare -Wno-error=unused-variable \
 		-Wno-error=implicit-fallthrough -ffunction-sections -fdata-sections \
 		-c $< -o $@
@@ -349,16 +400,16 @@ build/$(CAMERA_BACKEND)/xop/xop/RtpConnection.o: build/xop_rtp_connection.cpp
 		-O2 -pipe -Wall -Wextra -Werror -Wno-error=unused-parameter \
 		-Wno-error=missing-field-initializers -std=c++11 -c $< -o $@
 else
-$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS)
+$(TARGET): Makefile $(OBJECTS) $(XOP_COMPAT_LIB) $(THERMAL_TARGET_LIBS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS)/stamp)
 	$(call progress,Linking $@)
-	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
+	$(CXX) $(APP_CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(if $(UPLOAD_ANY),$(UPLOAD_MBEDTLS_LIBS)) \
 		-Wl,--start-group $(MEDIA_LIBS) -Wl,--end-group \
 		-Wl,--gc-sections $(THERMAL_TARGET_LIBS) $(THERMAL_TARGET_EXTRA_LIBS) -lpthread -lm -ldl
 endif
 
 %.o: %.cpp
 	$(call progress,Compiling $(notdir $<))
-	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(APP_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(DEPFLAGS) $(CPPFLAGS) $(if $(UPLOAD_FIRMWARE),-DAPCAM_ENABLE_UPLOAD) $(APP_CXXFLAGS) -c -o $@ $<
 
 $(MAVLINK_XML) $(MAVGEN):
 	@echo "error: $@ is missing; run 'git submodule update --init --recursive'" >&2
@@ -472,9 +523,10 @@ $(A8_HOST_TARGET): build/binlog_version.h $(A8_HOST_SOURCES) $(MAVLINK_DEPS) src
 		-o $@ $(filter-out src/backends/siyi/control.cpp,$(filter %.cpp %.o,$^)) -lm -lpthread
 
 $(RPI_HOST_TARGET): CAMERA_BACKEND=rpi_libcam_caddx
-$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS)
+$(RPI_HOST_TARGET): build/binlog_version.h $(RPI_HOST_SOURCES) $(MAVLINK_DEPS) build/host/mbedtls/stamp
 	$(call progress,Linking $@)
-	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) -lm -lpthread
+	$(HOST_CXX) $(CPPFLAGS) -DCAMERA_APP_UPLOAD_TEST_HOOKS -isystem build/host/mbedtls/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp %.o,$^) \
+		build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a -lm -lpthread
 
 build/mt11_overlay.o: src/backends/mt11/overlay.cpp
 	mkdir -p build
@@ -642,10 +694,10 @@ thermal-mavlink-test: $(HOST_TARGET) $(A8_HOST_TARGET)
 
 sitl: $(SITL_TARGET)
 
-$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) Makefile
+$(SITL_TARGET): $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(if $(SITL_UPLOAD_OBJECTS),build/host/mbedtls/stamp) Makefile
 	mkdir -p $(dir $@)
 	$(call progress,Linking $@)
-	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
+	$(HOST_CXX) -o $@ $(SITL_APP_OBJECTS) $(SITL_RTSP_OBJECTS) $(THERMAL_HOST_LIBS) $(SITL_UPLOAD_LIBS) $(THERMAL_HOST_EXTRA_LIBS) -lpthread -lm
 
 $(SITL_OBJDIR)/c/%.o: %.cpp
 	mkdir -p $(dir $@)
@@ -1160,3 +1212,71 @@ build/tests/test_stream_layout: tests/test_stream_layout.cpp src/protocol/mavlin
 	$(HOST_CXX) $(CPPFLAGS) $(APP_CXXFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $< -lpthread -lm
 
 test: stream-layout-test
+
+# Cloud upload: the uploader and its tests.
+tests/test_uploader: tests/test_uploader.cpp src/upload/uploader.cpp src/upload/https.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp include/camera_app/uploader.h include/camera_app/upload_backend.h src/log.cpp build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem build/host/mbedtls/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		build/host/mbedtls/lib/libmbedtls.a build/host/mbedtls/lib/libmbedx509.a build/host/mbedtls/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: uploader-test
+uploader-test: tests/test_uploader
+	./tests/test_uploader
+test: uploader-test
+
+.PHONY: rpi-upload-test
+rpi-upload-test: $(RPI_HOST_TARGET)
+	python3 tests/test_rpi_upload.py ./$(RPI_HOST_TARGET)
+test: rpi-upload-test
+
+# Mbed TLS (the modules/mbedtls submodule) for the cloud uploader, built for
+# this target's compiler into build/<target>/mbedtls, and for the host
+# (tests, SITL) into build/host/mbedtls.
+MBEDTLS_DIR := build/$(CAMERA_BACKEND)/mbedtls
+.PHONY: mbedtls mbedtls-host
+mbedtls:
+	$(call progress,Building Mbed TLS for $(CAMERA_BACKEND))
+	../tools/build_mbedtls.sh $(MBEDTLS_DIR) '$(CROSS_COMPILE)'
+mbedtls-host:
+	$(call progress,Building Mbed TLS for the host)
+	../tools/build_mbedtls.sh build/host/mbedtls ''
+
+# The HTTPS client for the cloud uploader, against a loopback TLS server.
+HTTPS_TEST_MBEDTLS := build/host/mbedtls
+tests/test_https: tests/test_https.cpp src/upload/https.cpp include/camera_app/https.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+build/host/mbedtls/stamp: FORCE
+	$(MAKE) mbedtls-host
+
+.PHONY: https-test
+https-test: tests/test_https
+	python3 tests/test_https.py ./tests/test_https
+test: https-test
+
+# The Google Drive backend, against a fake Drive.
+tests/test_gdrive: tests/test_gdrive.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp src/upload/https.cpp include/camera_app/upload_backend.h include/camera_app/https.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: gdrive-test
+gdrive-test: tests/test_gdrive
+	python3 tests/test_gdrive.py ./tests/test_gdrive
+test: gdrive-test
+
+# The Dropbox backend, against a fake Dropbox.
+tests/test_dropbox: tests/test_dropbox.cpp src/upload/gdrive.cpp src/upload/dropbox.cpp src/upload/backend.cpp src/upload/https.cpp include/camera_app/upload_backend.h include/camera_app/https.h src/upload/upload_util.h build/host/mbedtls/stamp
+	$(call progress,Linking $@)
+	$(HOST_CXX) -Iinclude -isystem $(HTTPS_TEST_MBEDTLS)/include $(APP_CXXFLAGS) -o $@ $(filter %.cpp,$^) \
+		$(HTTPS_TEST_MBEDTLS)/lib/libmbedtls.a $(HTTPS_TEST_MBEDTLS)/lib/libmbedx509.a \
+		$(HTTPS_TEST_MBEDTLS)/lib/libtfpsacrypto.a -lpthread
+
+.PHONY: dropbox-test
+dropbox-test: tests/test_dropbox
+	python3 tests/test_dropbox.py ./tests/test_dropbox
+test: dropbox-test
